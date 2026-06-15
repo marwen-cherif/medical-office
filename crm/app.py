@@ -1,0 +1,2937 @@
+"""Interface Flet du mini-CRM Cabinet Dr Aslem Gouiaa.
+
+Lancement : python -m crm  (ou crm_app.py). Le script CLI historique reste
+inchange et fonctionnel de son cote.
+"""
+
+from __future__ import annotations
+
+import calendar
+import json
+import math
+import sqlite3
+import sys
+import threading
+import time
+from datetime import date, datetime
+from pathlib import Path
+from typing import Callable
+
+import flet as ft
+from flet import canvas as cv
+
+from src.doc_filler import extract_placeholders
+
+from . import backup, generator, repo, templates
+from .db import SchemaTooNewError, connect
+from .repo import Document, Job, Paiement, Patient, TemplateField
+
+# --- Palette (inspiree de perio-dentalclinic.com : marine + turquoise) --------
+NAVY = "#10357F"        # bleu marine : accent principal (boutons, texte, icones)
+TEAL = "#62EBE2"        # turquoise du cabinet : surbrillances, avatars, voiles
+TEAL_DARK = "#0C8B82"   # turquoise lisible pour texte/icones sur fond clair
+BG = "#F2F5FA"          # fond froid clair detachant les cartes blanches
+SURFACE = "#FFFFFF"
+TEXT = "#191919"        # quasi noir du site (titres, corps)
+MUTED = "#55585A"       # gris fonce lisible (WCAG AA)
+BORDER = "#DCE3EC"      # bordure froide visible
+GREEN = "#1E7E45"       # vert fonce (encaisse / envoye)
+RED = "#B5271B"         # rouge fonce (erreurs)
+AMBER = "#B45309"       # ambre fonce (succes partiel d'un job)
+
+
+_STATUT_LABELS = {
+    "brouillon": ("Brouillon", TEAL_DARK),
+    "genere": ("Généré", MUTED),
+    "en_attente_envoi": ("En attente d'envoi", NAVY),
+    "envoye": ("Envoyé", GREEN),
+    "erreur": ("Erreur génération", RED),
+    "erreur_envoi": ("Erreur envoi", RED),
+}
+
+# Statuts cibles du traitement par lot selon l'action choisie.
+_BATCH_STATUTS = {
+    "generation": ["brouillon"],
+    "envoi": ["en_attente_envoi", "erreur_envoi"],
+}
+
+# Couleurs des statuts de job / lignes de job.
+_JOB_STATUT_LABELS = {
+    "en_cours": ("En cours", NAVY),
+    "termine": ("Terminé", GREEN),
+    "termine_partiel": ("Succès partiel", AMBER),
+    "erreur": ("Erreur", RED),
+    "interrompu": ("Interrompu", AMBER),
+}
+_JOB_ITEM_LABELS = {
+    "ok": ("OK", GREEN),
+    "skip": ("Ignoré", MUTED),
+    "erreur": ("Erreur", RED),
+}
+
+# Modes d'encaissement d'un paiement (cle stockee -> libelle affiche).
+_MODE_LABELS = {
+    "especes": "Espèces",
+    "cheque": "Chèque",
+    "virement": "Virement",
+}
+
+# Formats acceptes en saisie manuelle d'une date (le 1er sert aussi a l'affichage).
+_DATE_FORMATS_FR = ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d")
+
+
+def _iso_to_fr(iso: str) -> str:
+    """Date ISO (AAAA-MM-JJ) -> affichage FR (JJ/MM/AAAA). Tolere une valeur vide."""
+    if not iso:
+        return ""
+    try:
+        return date.fromisoformat(iso[:10]).strftime("%d/%m/%Y")
+    except ValueError:
+        return iso
+
+
+def _fr_to_iso(value: str) -> tuple[str | None, bool]:
+    """Saisie libre -> (date ISO ou None, valide?).
+
+    Retourne (None, True) pour une saisie vide (champ facultatif), (iso, True)
+    pour une date reconnue, (None, False) pour une saisie non vide invalide.
+    """
+    value = (value or "").strip()
+    if not value:
+        return None, True
+    for fmt in _DATE_FORMATS_FR:
+        try:
+            return datetime.strptime(value, fmt).date().isoformat(), True
+        except ValueError:
+            continue
+    return None, False
+
+
+def _mask_date_fr(raw: str) -> str:
+    """Formate une saisie au format JJ/MM/AAAA au fil de la frappe.
+
+    Ne garde que les chiffres (max 8) et insere les '/' aux bons endroits :
+    « 10101990 » -> « 10/10/1990 », « 1010 » -> « 10/10 ». Les caracteres non
+    numeriques sont ignores, ce qui rend la saisie tolerante (le '/' tape a la
+    main est reconstruit, les lettres sont rejetees).
+    """
+    digits = "".join(c for c in (raw or "") if c.isdigit())[:8]
+    parts = [digits[:2], digits[2:4], digits[4:8]]
+    return "/".join(p for p in parts if p)
+
+
+def _iter_controls(ctrl):
+    """Parcourt recursivement l'arbre d'un controle (content / controls / actions)."""
+    if ctrl is None:
+        return
+    yield ctrl
+    content = getattr(ctrl, "content", None)
+    if isinstance(content, ft.Control):
+        yield from _iter_controls(content)
+    for child in (getattr(ctrl, "controls", None) or []):
+        yield from _iter_controls(child)
+    for child in (getattr(ctrl, "actions", None) or []):
+        yield from _iter_controls(child)
+
+
+def _select_all_on_focus(field: ft.TextField) -> None:
+    """Au focus, selectionne tout le texte du champ pour faciliter la re-saisie.
+
+    Pratique quand un champ a une valeur initiale (ex. montant « 0 ») : taper
+    remplace directement la valeur au lieu de l'allonger. Compose avec un
+    `on_focus` deja defini, le cas echeant.
+    """
+    prev = field.on_focus
+
+    def _on_focus(e):
+        val = field.value or ""
+        if val:
+            field.selection = ft.TextSelection(base_offset=0, extent_offset=len(val))
+            field.update()
+        if prev:
+            prev(e)
+
+    field.on_focus = _on_focus
+
+
+def _date_iso(field: ft.TextField) -> str:
+    """ISO (AAAA-MM-JJ) depuis un champ date editable FR ; '' si vide ou invalide.
+
+    Pratique pour les filtres periode, ou une saisie partielle/erronee se ramene
+    a « aucune borne » sans bloquer la requete.
+    """
+    iso, _ = _fr_to_iso(field.value)
+    return iso or ""
+
+PAGE_SIZE = 12  # nombre de lignes affichees par page dans les listes
+MAIL_POLL_SECONDS = 600  # auto-refresh du suivi Mailjet (ouvertures/clics) : 10 min
+
+# Libelles FR du calendrier personnalise (semaine commencant le lundi).
+_MOIS_FR = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet",
+            "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+_JOURS_FR = ["Lu", "Ma", "Me", "Je", "Ve", "Sa", "Di"]
+
+# --- Registre des raccourcis clavier (source unique : pilote a la fois le
+# dispatch clavier dans _on_key ET le texte des infobulles, pour que la
+# legende affichee ne diverge jamais du comportement reel). -------------------
+SC_NAV = {0: "Ctrl+1", 1: "Ctrl+2", 2: "Ctrl+3", 3: "Ctrl+4", 4: "Ctrl+5"}
+SC_NEW = "Ctrl+N"          # « Nouveau » contextuel selon la vue
+SC_SEARCH = "Ctrl+F"       # focus du champ de recherche
+SC_PREV = "Ctrl+←"         # page precedente
+SC_NEXT = "Ctrl+→"         # page suivante
+SC_CLOSE = "Échap"         # fermer un dialogue / revenir au detail
+SC_SUBMIT = "Ctrl+Entrée"  # valider un dialogue
+
+
+class CrmApp:
+    def __init__(self, page: ft.Page, conn: sqlite3.Connection):
+        self.page = page
+        self.conn = conn
+        self.current_patient: Patient | None = None
+        self._busy = False  # garde anti double-clic (generation/envoi)
+        self._job_running = False  # garde : un seul job par lot a la fois
+        self.current_view = "patients"     # vue active (pilote les raccourcis contextuels)
+        self.current_job_id: int | None = None  # job ouvert en vue detail
+        self._dialog_submit = None         # callback du bouton primaire du dialogue ouvert
+        # Pagination de la fiche patient (documents / paiements), reinitialisee
+        # a 0 quand on ouvre un autre patient.
+        self.detail_docs_page = 0
+        self.detail_paie_page = 0
+
+        # --- Recherche, filtres et pagination (etat persistant entre les rendus) ---
+        # Patients
+        self.search = self._search_field(
+            "Rechercher un patient…", lambda e: self._reset_and("patients"))
+        self.patients_filter = ft.Dropdown(
+            value="tous", width=190, border_radius=10, content_padding=10,
+            bgcolor=SURFACE, color=TEXT,
+            text_style=ft.TextStyle(color=TEXT),
+            border_color=BORDER, focused_border_color=NAVY,
+            on_select=lambda e: self._reset_and("patients"),
+            options=[
+                ft.dropdown.Option(key="tous", text="Tous les patients"),
+                ft.dropdown.Option(key="email", text="Avec email"),
+                ft.dropdown.Option(key="impayes", text="Avec impayés"),
+            ],
+        )
+        self.patients_page = 0
+        # Paiements
+        self.paie_search = self._search_field(
+            "Rechercher un patient…", lambda e: self._reset_and("paiements"))
+        self.paie_statut = ft.Dropdown(
+            value="en_attente", width=190, border_radius=10, content_padding=10,
+            bgcolor=SURFACE, color=TEXT,
+            text_style=ft.TextStyle(color=TEXT),
+            border_color=BORDER, focused_border_color=NAVY,
+            on_select=lambda e: self._reset_and("paiements"),
+            options=[
+                ft.dropdown.Option(key="en_attente", text="En attente"),
+                ft.dropdown.Option(key="encaisse", text="Encaissés"),
+                ft.dropdown.Option(key="tous", text="Tous"),
+            ],
+        )
+        # Filtre periode : pre-rempli sur le mois courant (du 1er au dernier jour).
+        _today = date.today()
+        _first = _today.replace(day=1)
+        _last = date(_today.year, _today.month,
+                     calendar.monthrange(_today.year, _today.month)[1])
+        _on_dates = lambda: self._reset_and("paiements")
+        self.paie_date_from_row, self.paie_date_from = self._date_field(
+            "Du", _first.isoformat(), on_change=_on_dates)
+        self.paie_date_to_row, self.paie_date_to = self._date_field(
+            "Au", _last.isoformat(), on_change=_on_dates)
+        self.paie_page = 0
+        # Parametrage : onglet actif du sous-menu (Modeles de documents / Emails).
+        self.param_tab = "templates"
+        # Modeles de documents
+        self.tpl_search = self._search_field(
+            "Rechercher un modèle…", lambda e: self._reset_and("templates"))
+        self.tpl_page = 0
+        # Modeles d'email
+        self.mail_search = self._search_field(
+            "Rechercher un modèle…", lambda e: self._reset_and("mail"))
+        self.mail_page = 0
+        # Travaux : onglet actif du sous-menu (Documents / liste des jobs).
+        self.travaux_tab = "documents"
+        # Sous-vue DOCUMENTS : liste des lignes de documents (jointes au patient).
+        self.doc_search = self._search_field(
+            "Rechercher un patient…", lambda e: self._reset_and("documents"))
+        self.doc_statut = ft.Dropdown(
+            value="tous", width=190, border_radius=10, content_padding=10,
+            bgcolor=SURFACE, color=TEXT, text_style=ft.TextStyle(color=TEXT),
+            border_color=BORDER, focused_border_color=NAVY,
+            on_select=lambda e: self._on_doc_statut_change(),
+            options=[
+                ft.dropdown.Option(key="tous", text="Tous les statuts"),
+                ft.dropdown.Option(key="brouillon", text="Brouillon"),
+                ft.dropdown.Option(key="genere", text="Généré"),
+                ft.dropdown.Option(key="en_attente_envoi", text="En attente d'envoi"),
+                ft.dropdown.Option(key="envoye", text="Envoyé"),
+                ft.dropdown.Option(key="erreur", text="Erreur génération"),
+                ft.dropdown.Option(key="erreur_envoi", text="Erreur envoi"),
+            ],
+        )
+        _docs_on = lambda: self._reset_and("documents")
+        self.doc_date_from_row, self.doc_date_from = self._date_field(
+            "Du", _first.isoformat(), on_change=_docs_on)
+        self.doc_date_to_row, self.doc_date_to = self._date_field(
+            "Au", _last.isoformat(), on_change=_docs_on)
+        self.doc_page = 0
+        self.doc_results = ft.Container()
+        self.doc_pager = ft.Container()
+        # Traitement par lot (page Documents) : ids de documents coches + barre
+        # d'action contextuelle (apparait selon le filtre de statut).
+        self.doc_selected: set[int] = set()
+        self.doc_batch_bar = ft.Container()
+        # Travaux (jobs) : periode pre-remplie sur le mois courant (limite le chargement).
+        self.jobs_page = 0
+        _jobs_on = lambda: self._reset_and("jobs")
+        self.jobs_date_from_row, self.jobs_date_from = self._date_field(
+            "Du", _first.isoformat(), on_change=_jobs_on)
+        self.jobs_date_to_row, self.jobs_date_to = self._date_field(
+            "Au", _last.isoformat(), on_change=_jobs_on)
+        # Tableau de bord : periode pre-remplie sur le mois courant.
+        _dash_on = lambda: self._refresh_dashboard()
+        self.dash_date_from_row, self.dash_date_from = self._date_field(
+            "Du", _first.isoformat(), on_change=_dash_on)
+        self.dash_date_to_row, self.dash_date_to = self._date_field(
+            "Au", _last.isoformat(), on_change=_dash_on)
+
+        # Conteneurs persistants des parties dynamiques (liste + pagination).
+        # On reconstruit le scaffold d'une vue une seule fois ; ensuite, lors
+        # d'une recherche, on ne met a jour QUE ces conteneurs pour ne pas
+        # re-parenter le champ de recherche (ce qui lui ferait perdre le focus).
+        self.patients_results = ft.Container()
+        self.patients_pager = ft.Container()
+        self.paie_summary = ft.Container()
+        self.paie_results = ft.Container()
+        self.paie_pager = ft.Container()
+        self.tpl_results = ft.Container()
+        self.tpl_pager = ft.Container()
+        self.mail_results = ft.Container()
+        self.mail_pager = ft.Container()
+        self.jobs_results = ft.Container()
+        self.jobs_pager = ft.Container()
+        self.job_detail_container = ft.Container()
+        self.dash_results = ft.Container()
+
+        self.body = ft.Container(expand=True, padding=24, bgcolor=BG)
+        self.page.on_keyboard_event = self._on_key
+        self._build_shell()
+        self.show_dashboard()
+        self._start_status_poller()  # suivi Mailjet (ouvertures/clics) en arriere-plan
+
+    # --- Coquille / navigation ------------------------------------------------
+    def _build_shell(self) -> None:
+        def dest(icon_o, icon_f, label):
+            return ft.NavigationRailDestination(
+                icon=ft.Icon(icon_o, color=MUTED),
+                selected_icon=ft.Icon(icon_f, color=NAVY),
+                label=label,
+            )
+
+        brand = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Container(
+                        content=ft.Image(src=_asset("logo_mark.png"), width=34, height=34,
+                                         fit=ft.BoxFit.CONTAIN),
+                        bgcolor=SURFACE, width=44, height=44, border_radius=12,
+                        border=ft.Border.all(1, BORDER),
+                        alignment=ft.Alignment.CENTER,
+                    ),
+                    ft.Text("Cabinet", size=12, weight=ft.FontWeight.BOLD, color=NAVY, text_align=ft.TextAlign.CENTER),
+                    ft.Text("Dr Aslem Gouiaa", size=10, color=MUTED, text_align=ft.TextAlign.CENTER),
+                    # Legende des raccourcis de navigation (le rail n'expose pas de
+                    # tooltip par destination) : tout le sommaire au survol de l'icone.
+                    ft.IconButton(
+                        ft.Icons.KEYBOARD, icon_color=MUTED, icon_size=18,
+                        tooltip=(
+                            "Raccourcis clavier\n"
+                            f"Tableau de bord {SC_NAV[0]} · Patients {SC_NAV[1]} · "
+                            f"Paiements {SC_NAV[2]} · Travaux {SC_NAV[3]} · "
+                            f"Paramétrage {SC_NAV[4]}\n"
+                            f"Nouveau {SC_NEW} · Rechercher {SC_SEARCH}\n"
+                            f"Page {SC_PREV}/{SC_NEXT} · Fermer {SC_CLOSE} · Valider {SC_SUBMIT}"
+                        ),
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=4,
+            ),
+            padding=ft.Padding.only(top=16, bottom=8),
+        )
+
+        self.rail = ft.NavigationRail(
+            selected_index=0,
+            label_type=ft.NavigationRailLabelType.ALL,
+            min_width=92,
+            bgcolor=SURFACE,
+            leading=brand,
+            indicator_color=ft.Colors.with_opacity(0.45, TEAL),
+            selected_label_text_style=ft.TextStyle(color=NAVY, weight=ft.FontWeight.BOLD, size=12),
+            unselected_label_text_style=ft.TextStyle(color=MUTED, size=12),
+            group_alignment=-0.9,
+            destinations=[
+                dest(ft.Icons.SPACE_DASHBOARD_OUTLINED, ft.Icons.SPACE_DASHBOARD, "Tableau"),
+                dest(ft.Icons.PEOPLE_OUTLINE, ft.Icons.PEOPLE, "Patients"),
+                dest(ft.Icons.PAYMENTS_OUTLINED, ft.Icons.PAYMENTS, "Paiements"),
+                dest(ft.Icons.WORK_OUTLINE, ft.Icons.WORK, "Travaux"),
+                dest(ft.Icons.SETTINGS_OUTLINED, ft.Icons.SETTINGS, "Paramétrage"),
+            ],
+            on_change=self._on_nav,
+        )
+        self.page.add(
+            ft.Row(
+                [self.rail, ft.VerticalDivider(width=1), self.body],
+                expand=True,
+                spacing=0,
+            )
+        )
+
+    def _on_nav(self, e: ft.ControlEvent) -> None:
+        idx = e.control.selected_index
+        if idx == 0:
+            self.show_dashboard()
+        elif idx == 1:
+            self.show_patients()
+        elif idx == 2:
+            self.show_paiements()
+        elif idx == 3:
+            self.show_travaux()
+        else:
+            self.show_parametrage()
+
+    # --- Helpers UI -----------------------------------------------------------
+    def _title(self, text: str, action: ft.Control | None = None) -> ft.Control:
+        row = [ft.Text(text, size=26, weight=ft.FontWeight.BOLD, color=TEXT)]
+        if action:
+            row.append(ft.Container(expand=True))
+            row.append(action)
+        return ft.Row(row, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def _card(self, content: ft.Control, padding: int = 16,
+              expand: bool = False) -> ft.Container:
+        return ft.Container(
+            content=content,
+            bgcolor=SURFACE,
+            border_radius=12,
+            padding=padding,
+            border=ft.Border.all(1, BORDER),
+            expand=expand,
+        )
+
+    def _btn(self, text, on_click, icon=None, primary=True, shortcut=None, busy=True):
+        """Bouton primaire/secondaire de l'app.
+
+        Par defaut (`busy=True`), le clic est emballe dans `_run_busy` : le bouton
+        se desactive et affiche un spinner pendant l'action, ce qui empeche le
+        double-clic et garantit que le premier clic est bien pris en compte.
+
+        On passe `busy=False` quand le spinner n'a pas lieu d'etre :
+        - boutons qui se contentent d'ouvrir un dialogue (action instantanee,
+          le vrai traitement est derriere le bouton primaire de la modale) ;
+        - boutons qui gerent deja eux-memes leur etat de chargement (generation,
+          envoi, synchro) — eviter un double emballage neutralise par `_busy`.
+        """
+        style = ft.ButtonStyle(
+            bgcolor=NAVY if primary else SURFACE,
+            color=SURFACE if primary else NAVY,
+            shape=ft.RoundedRectangleBorder(radius=10),
+            side=None if primary else ft.BorderSide(1, NAVY),
+            padding=ft.Padding.symmetric(vertical=14, horizontal=18),
+        )
+        # Infobulle = libelle + raccourci : c'est la « legende » accessible au survol.
+        tooltip = f"{text} ({shortcut})" if shortcut else None
+        btn = ft.ElevatedButton(text, icon=icon, style=style,
+                                elevation=0, tooltip=tooltip)
+        if busy and on_click is not None:
+            handler = on_click
+            btn.on_click = lambda e, b=btn: self._run_busy(b, None, lambda: handler(e))
+        else:
+            btn.on_click = on_click
+        return btn
+
+    def _toast(self, message: str, ok: bool = True) -> None:
+        self.page.show_dialog(
+            ft.SnackBar(
+                ft.Text(message, color=SURFACE),
+                bgcolor=GREEN if ok else RED,
+            )
+        )
+
+    def _show_dialog(self, dlg: ft.Control, submit=None) -> None:
+        """Ouvre un AlertDialog en memorisant l'action de son bouton primaire.
+
+        Si `submit` n'est pas fourni, on le deduit du bouton primaire du
+        dialogue (l'unique ElevatedButton construit par `_btn` dans `actions`)
+        et on enrichit son infobulle avec le raccourci Ctrl+Entree. Ainsi un
+        seul point centralise la validation clavier ET la legende, sans avoir
+        a annoter chaque dialogue. `submit` est rappele par Ctrl+Entree et
+        remis a None a la fermeture.
+
+        Validation au clavier (systematique pour tous les formulaires) :
+        - Entree depuis un champ texte simple ligne -> valide le formulaire
+          (cable ici via `on_submit`), pratique pour la saisie ;
+        - les champs multilignes gardent Entree pour le saut de ligne ;
+        - Ctrl+Entree (gere dans `_on_key`) reste le raccourci universel, y
+          compris depuis un champ multiligne, une liste deroulante ou un radio.
+        """
+        if submit is None and isinstance(dlg, ft.AlertDialog):
+            for action in dlg.actions or []:
+                if isinstance(action, ft.ElevatedButton):
+                    submit = action.on_click
+                    if not action.tooltip and getattr(action, "text", None):
+                        action.tooltip = f"{action.text} ({SC_SUBMIT})"
+                    break
+        self._dialog_submit = submit
+        # Saisie au clavier, systematique pour les champs simple ligne du
+        # formulaire (les multilignes sont laisses intacts : Entree = saut de
+        # ligne, et pas de select-all qui effacerait un texte qu'on complete) :
+        # - select-all au focus (re-saisie immediate de la valeur) ;
+        # - Entree valide le formulaire (Ctrl+Entree restant universel).
+        for c in _iter_controls(dlg):
+            if isinstance(c, ft.TextField) and not c.multiline:
+                _select_all_on_focus(c)
+                if submit is not None and c.on_submit is None:
+                    c.on_submit = submit
+        self.page.show_dialog(dlg)
+
+    def _close_dialog(self) -> None:
+        self._dialog_submit = None
+        self.page.pop_dialog()
+
+    # --- Raccourcis clavier ---------------------------------------------------
+    def _on_key(self, e: ft.KeyboardEvent) -> None:
+        """Dispatch clavier global (branche sur page.on_keyboard_event).
+
+        Les actions globales utilisent Ctrl pour ne jamais capturer la saisie
+        dans les champs texte (Flet route les evenements au niveau page quel
+        que soit le focus).
+        """
+        # Modificateur « commande » : Ctrl sous Windows/Linux, Cmd (meta) sous macOS.
+        cmd = e.ctrl or e.meta
+        # Normalise les libelles du pave numerique (« Numpad 1 » -> « 1 ») pour
+        # que les raccourcis chiffres fonctionnent aussi depuis le pave num.
+        key = e.key[len("Numpad "):] if e.key.startswith("Numpad ") else e.key
+
+        # 1) Un dialogue est ouvert : on lui reserve Echap / Ctrl+Entree.
+        if self._dialog_submit is not None:
+            if key == "Escape":
+                self._close_dialog()
+            elif key == "Enter" and cmd:
+                self._dialog_submit(None)
+            return
+
+        # 2) Portee globale.
+        if cmd and key in ("1", "2", "3", "4", "5"):
+            idx = int(key) - 1
+            self.rail.selected_index = idx
+            (self.show_dashboard, self.show_patients, self.show_paiements,
+             self.show_travaux, self.show_parametrage)[idx]()
+        elif cmd and key == "N":
+            self._new_for_current_view()
+        elif cmd and key == "F":
+            self._focus_search()
+        elif cmd and key in ("Arrow Left", "Arrow Right"):
+            self._page_step(-1 if key == "Arrow Left" else 1)
+        elif key == "Escape" and self.current_view == "patient_detail":
+            self.show_patients()
+        elif key == "Escape" and self.current_view == "job_detail":
+            self.show_jobs()
+
+    def _new_for_current_view(self) -> None:
+        """Action « Nouveau » selon la vue (Paiements : vue transverse, aucune)."""
+        if self.current_view == "patients":
+            self._patient_dialog()
+        elif self.current_view == "templates":
+            self._new_template_dialog()
+        elif self.current_view == "mail":
+            self._mail_template_dialog()
+
+    def _focus_search(self) -> None:
+        field = {
+            "patients": self.search,
+            "paiements": self.paie_search,
+            "documents": self.doc_search,
+            "templates": self.tpl_search,
+            "mail": self.mail_search,
+        }.get(self.current_view)
+        if field is not None:
+            field.focus()
+
+    def _page_step(self, delta: int) -> None:
+        """Page precedente/suivante de la vue active (bornee par _clamp_page)."""
+        if self.current_view == "patients":
+            self.patients_page += delta
+            self._refresh_patients()
+        elif self.current_view == "paiements":
+            self.paie_page += delta
+            self._refresh_paiements()
+        elif self.current_view == "templates":
+            self.tpl_page += delta
+            self._refresh_templates()
+        elif self.current_view == "mail":
+            self.mail_page += delta
+            self._refresh_mail_templates()
+        elif self.current_view == "documents":
+            self.doc_page += delta
+            self._refresh_documents()
+        elif self.current_view == "jobs":
+            self.jobs_page += delta
+            self._refresh_jobs()
+
+    def _set_body(self, *controls: ft.Control) -> None:
+        self.body.content = ft.Column(list(controls), spacing=18, scroll=ft.ScrollMode.AUTO, expand=True)
+        self.page.update()
+
+    def _search_field(self, hint: str, on_change) -> ft.TextField:
+        return ft.TextField(
+            hint_text=hint,
+            prefix_icon=ft.Icons.SEARCH,
+            on_change=on_change,
+            border_radius=10,
+            height=44,
+            content_padding=12,
+            expand=True,
+            bgcolor=SURFACE,
+            color=TEXT,
+            text_style=ft.TextStyle(color=TEXT),
+            hint_style=ft.TextStyle(color=MUTED),
+            border_color=BORDER,
+            focused_border_color=NAVY,
+        )
+
+    def _reset_and(self, view: str) -> None:
+        """Remet la pagination de `view` a la premiere page puis rafraichit la
+        liste UNIQUEMENT (sans reconstruire le scaffold), pour que le champ de
+        recherche conserve son focus pendant la saisie."""
+        if view == "patients":
+            self.patients_page = 0
+            self._refresh_patients()
+        elif view == "paiements":
+            self.paie_page = 0
+            self._refresh_paiements()
+        elif view == "templates":
+            self.tpl_page = 0
+            self._refresh_templates()
+        elif view == "mail":
+            self.mail_page = 0
+            self._refresh_mail_templates()
+        elif view == "documents":
+            self.doc_page = 0
+            self._refresh_documents()
+        elif view == "jobs":
+            self.jobs_page = 0
+            self._refresh_jobs()
+
+    def _clamp_page(self, page: int, total: int) -> int:
+        """Borne l'index de page dans [0, derniere page] selon le nb de resultats."""
+        pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+        return max(0, min(page, pages - 1))
+
+    def _pagination(self, page: int, total: int, on_page) -> ft.Control:
+        """Barre de pagination : « X–Y sur N » + boutons precedent/suivant."""
+        pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+        if total:
+            start = page * PAGE_SIZE + 1
+            end = min(total, (page + 1) * PAGE_SIZE)
+            label = f"{start}–{end} sur {total}"
+        else:
+            label = "0 résultat"
+        return ft.Row(
+            [
+                ft.Text(label, color=MUTED, size=12),
+                ft.Container(expand=True),
+                ft.IconButton(
+                    ft.Icons.CHEVRON_LEFT, icon_color=NAVY, tooltip=f"Précédent ({SC_PREV})",
+                    disabled=page <= 0, on_click=lambda e: on_page(page - 1)),
+                ft.Text(f"Page {page + 1} / {pages}", color=MUTED, size=12),
+                ft.IconButton(
+                    ft.Icons.CHEVRON_RIGHT, icon_color=NAVY, tooltip=f"Suivant ({SC_NEXT})",
+                    disabled=page >= pages - 1, on_click=lambda e: on_page(page + 1)),
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+    def _run_busy(self, button: ft.Control, status: ft.Text | None, work) -> None:
+        """Execute `work()` en bloquant les double-clics et en affichant un chargement.
+
+        Desactive le bouton + affiche un spinner, puis lance `work()` dans un
+        thread d'arriere-plan : sans cela, un travail bloquant (generation
+        Word/PDF, envoi email) figerait la fenetre et le spinner n'aurait jamais
+        le temps d'etre peint. Le bouton est reactive a la fin. En cas d'erreur,
+        le message est mis dans `status` (ou un toast).
+        """
+        if self._busy:
+            return
+        self._busy = True
+        button.disabled = True
+        original = getattr(button, "content", None)
+        button.content = ft.Row(
+            [ft.ProgressRing(width=16, height=16, stroke_width=2, color=SURFACE),
+             ft.Text("Veuillez patienter…", color=SURFACE)],
+            tight=True, spacing=8, alignment=ft.MainAxisAlignment.CENTER,
+        )
+        if status is not None:
+            status.value = ""
+        self.page.update()  # peint l'etat de chargement AVANT de lancer le travail
+
+        def runner() -> None:
+            try:
+                work()
+            except Exception as exc:  # noqa: BLE001
+                msg = f"Échec : {exc}"
+                if status is not None:
+                    status.value = msg
+                    status.color = RED
+                else:
+                    self._toast(msg, ok=False)
+            finally:
+                self._busy = False
+                button.disabled = False
+                button.content = original
+                self.page.update()
+
+        threading.Thread(target=runner, daemon=True).start()
+
+    def _date_field(self, label: str, initial: str = "",
+                    on_change: Callable[[], None] | None = None,
+                    editable: bool = True,
+                    ) -> tuple[ft.Control, ft.TextField]:
+        """Champ date + bouton ouvrant un calendrier FR.
+
+        Par defaut (`editable=True`) la saisie clavier est active et affichee au
+        format FR (JJ/MM/AAAA) avec un placeholder, le calendrier restant
+        disponible ; la valeur s'obtient via `_date_iso`/`_fr_to_iso`. Avec
+        `editable=False`, le champ est en lecture seule au format ISO (AAAA-MM-JJ).
+        Retourne (row, field). `on_change`, s'il est fourni, est appele apres la
+        selection d'une date (ou a chaque frappe en mode editable).
+        """
+        if editable:
+            field = ft.TextField(
+                label=label, value=_iso_to_fr(initial), hint_text="JJ/MM/AAAA",
+                expand=True, keyboard_type=ft.KeyboardType.NUMBER,
+            )
+
+            def _on_type(e, f=field, cb=on_change):
+                # Auto-formatage JJ/MM/AAAA : les '/' sont inseres pendant la frappe.
+                masked = _mask_date_fr(f.value)
+                if masked != f.value:
+                    f.value = masked
+                    f.update()
+                if cb:
+                    cb()
+
+            field.on_change = _on_type
+        else:
+            field = ft.TextField(label=label, value=initial, read_only=True, expand=True)
+
+        row = ft.Row(
+            [field, ft.IconButton(
+                ft.Icons.CALENDAR_MONTH, icon_color=NAVY,
+                on_click=lambda e: self._open_calendar(field, on_change, fr=editable))],
+            spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        return row, field
+
+    def _open_calendar(self, field: ft.TextField,
+                       on_change: Callable[[], None] | None = None,
+                       fr: bool = False) -> None:
+        """Calendrier mensuel FR (semaine du lundi au dimanche).
+
+        Le DatePicker Material natif ne valide qu'au clic sur OK ; ce calendrier
+        maison retient la date des le clic sur le jour, puis ferme la modale.
+        `fr=True` : le champ affiche/saisit au format JJ/MM/AAAA (sinon ISO).
+        """
+        if fr:
+            iso, _ = _fr_to_iso(field.value)
+        else:
+            iso = field.value or None
+        try:
+            selected = date.fromisoformat(iso) if iso else None
+        except ValueError:
+            selected = None
+        today = date.today()
+        cursor = selected or today
+        state = {"year": cursor.year, "month": cursor.month}
+
+        title = ft.Text(weight=ft.FontWeight.BOLD, size=16, color=NAVY)
+        grid = ft.Column(spacing=4, tight=True)
+
+        def pick(d: date) -> None:
+            field.value = _iso_to_fr(d.isoformat()) if fr else d.isoformat()
+            self._close_dialog()
+            self.page.update()
+            if on_change is not None:
+                on_change()
+
+        def render() -> None:
+            y, m = state["year"], state["month"]
+            title.value = f"{_MOIS_FR[m - 1]} {y}"
+            rows = [ft.Row(
+                [ft.Container(
+                    ft.Text(j, size=12, weight=ft.FontWeight.BOLD, color=MUTED,
+                            text_align=ft.TextAlign.CENTER),
+                    width=38, alignment=ft.Alignment.CENTER) for j in _JOURS_FR],
+                spacing=2)]
+            for week in calendar.Calendar(firstweekday=0).monthdayscalendar(y, m):
+                cells = []
+                for day in week:
+                    if day == 0:
+                        cells.append(ft.Container(width=38, height=38))
+                        continue
+                    d = date(y, m, day)
+                    is_sel = selected is not None and d == selected
+                    is_today = d == today
+                    cells.append(ft.Container(
+                        ft.Text(str(day), text_align=ft.TextAlign.CENTER,
+                                color=SURFACE if is_sel else TEXT,
+                                weight=ft.FontWeight.BOLD if (is_sel or is_today) else None),
+                        width=38, height=38, alignment=ft.Alignment.CENTER,
+                        border_radius=19, ink=True,
+                        bgcolor=NAVY if is_sel else (TEAL if is_today else None),
+                        on_click=lambda e, dd=d: pick(dd),
+                    ))
+                rows.append(ft.Row(cells, spacing=2))
+            grid.controls = rows
+
+        def shift(delta: int) -> None:
+            m = state["month"] - 1 + delta
+            state["year"] += m // 12
+            state["month"] = m % 12 + 1
+            render()
+            self.page.update()
+
+        render()
+        header = ft.Row([
+            ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_color=NAVY, on_click=lambda e: shift(-1)),
+            ft.Container(title, expand=True, alignment=ft.Alignment.CENTER),
+            ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_color=NAVY, on_click=lambda e: shift(1)),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        dlg = ft.AlertDialog(
+            content=ft.Container(
+                ft.Column([header, grid], tight=True, spacing=8), width=300),
+            actions=[ft.TextButton("Annuler", on_click=lambda e: self._close_dialog())],
+            bgcolor=SURFACE,
+        )
+        self._show_dialog(dlg)
+
+    # --- Vue TABLEAU DE BORD --------------------------------------------------
+    def show_dashboard(self) -> None:
+        self.current_view = "dashboard"
+        self.rail.selected_index = 0
+        self._set_body(
+            self._title("Tableau de bord"),
+            ft.Row([ft.Container(self.dash_date_from_row, width=190),
+                    ft.Container(self.dash_date_to_row, width=190)],
+                   spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            self.dash_results,
+        )
+        self._refresh_dashboard()
+
+    def _kpi(self, label: str, value, icon, color=NAVY) -> ft.Control:
+        return ft.Container(
+            content=ft.Column([
+                ft.Row([ft.Icon(icon, color=color, size=20),
+                        ft.Text(label, color=MUTED, size=12, expand=True)],
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Text(str(value), size=24, weight=ft.FontWeight.BOLD, color=TEXT),
+            ], spacing=8),
+            bgcolor=SURFACE, border_radius=12, padding=16,
+            border=ft.Border.all(1, BORDER),
+        )
+
+    def _camembert(self, encaisse: float, encours: float) -> ft.Control:
+        """Camembert « encaissé vs à recouvrer », dessiné via canvas (sans dépendance)."""
+        total = encaisse + encours
+        size = 170
+        if total <= 0:
+            shapes = [cv.Circle(size / 2, size / 2, size / 2,
+                                paint=ft.Paint(color=BORDER, style=ft.PaintingStyle.FILL))]
+        else:
+            start = -math.pi / 2  # demarre en haut (12 h)
+            sweep_enc = 2 * math.pi * (encaisse / total)
+            shapes = [
+                cv.Arc(0, 0, size, size, start, sweep_enc, use_center=True,
+                       paint=ft.Paint(color=GREEN, style=ft.PaintingStyle.FILL)),
+                cv.Arc(0, 0, size, size, start + sweep_enc, 2 * math.pi - sweep_enc,
+                       use_center=True,
+                       paint=ft.Paint(color=AMBER, style=ft.PaintingStyle.FILL)),
+                # trou central -> effet « donut » plus lisible
+                cv.Circle(size / 2, size / 2, size / 4,
+                          paint=ft.Paint(color=SURFACE, style=ft.PaintingStyle.FILL)),
+            ]
+        chart = cv.Canvas(shapes, width=size, height=size)
+
+        def legende(color, label, montant):
+            pct = (montant / total * 100) if total > 0 else 0
+            return ft.Row([
+                ft.Container(width=12, height=12, bgcolor=color, border_radius=3),
+                ft.Text(label, color=TEXT, size=13, expand=True),
+                ft.Text(f"{montant:.2f}  ({pct:.0f} %)", color=MUTED, size=12),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8)
+
+        details = ft.Column([
+            legende(GREEN, "Encaissé", encaisse),
+            legende(AMBER, "À recouvrer", encours),
+        ], spacing=10)
+        if total <= 0:
+            details.controls.append(
+                ft.Text("Aucun paiement sur la période.", color=MUTED, size=12))
+
+        return ft.Row(
+            [chart, ft.Container(details, expand=True,
+                                 padding=ft.Padding.only(left=20))],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+    def _refresh_dashboard(self) -> None:
+        df = _date_iso(self.dash_date_from)
+        dt = _date_iso(self.dash_date_to)
+
+        ca = repo.total_paiements(self.conn, statut="encaisse", date_from=df, date_to=dt)
+        encours = repo.total_paiements(self.conn, statut="en_attente", date_from=df, date_to=dt)
+        nb_enc = repo.count_paiements(self.conn, statut="encaisse", date_from=df, date_to=dt)
+
+        nb_doc = repo.count_documents(self.conn, None, df, dt)
+        nb_brouillon = repo.count_documents(self.conn, "brouillon", df, dt)
+        nb_envoye = repo.count_documents(self.conn, "envoye", df, dt)
+
+        nouveaux = repo.count_patients_new(self.conn, df, dt)
+        total_pat = repo.count_patients(self.conn)
+        impayes = repo.count_patients(self.conn, filtre="impayes")
+
+        # Bandeau de KPI : 9 tuiles, 3 par ligne, occupant toute la largeur
+        # (repli a 2 puis 1 par ligne sur fenetre etroite). Le `col` est pose
+        # directement sur la tuile : ResponsiveRow l'etire a la largeur de colonne.
+        def _kcol(tile):
+            tile.col = {"xs": 6, "md": 4, "lg": 4}
+            return tile
+
+        kpis = ft.ResponsiveRow([_kcol(t) for t in [
+            self._kpi("CA encaissé", f"{ca:.2f}", ft.Icons.PAYMENTS, GREEN),
+            self._kpi("Encours à recouvrer", f"{encours:.2f}", ft.Icons.SCHEDULE, NAVY),
+            self._kpi("Paiements encaissés", nb_enc, ft.Icons.RECEIPT_LONG, GREEN),
+            self._kpi("Documents créés", nb_doc, ft.Icons.DESCRIPTION, NAVY),
+            self._kpi("Brouillons en attente", nb_brouillon, ft.Icons.EDIT_NOTE, TEAL_DARK),
+            self._kpi("Envoyés", nb_envoye, ft.Icons.MARK_EMAIL_READ, GREEN),
+            self._kpi("Nouveaux (période)", nouveaux, ft.Icons.PERSON_ADD, NAVY),
+            self._kpi("Total patients", total_pat, ft.Icons.PEOPLE, NAVY),
+            self._kpi("Avec impayés", impayes, ft.Icons.WARNING_AMBER, AMBER),
+        ]], spacing=12, run_spacing=12)
+
+        camembert = self._card(self._camembert(ca, encours))
+
+        by_type = repo.documents_by_type(self.conn, df, dt)
+        if by_type:
+            type_rows = [ft.Row([
+                ft.Text(_humanize(t), color=TEXT, expand=True),
+                ft.Text(str(n), color=NAVY, weight=ft.FontWeight.BOLD),
+            ]) for t, n in by_type]
+        else:
+            type_rows = [ft.Text("Aucun document sur la période.", color=MUTED)]
+        repartition = self._card(ft.Column(type_rows, spacing=8))
+
+        audit = repo.list_audit(self.conn, limit=12, date_from=df, date_to=dt)
+        if audit:
+            audit_rows = [ft.Row([
+                ft.Text(ts, size=12, color=MUTED, width=150),
+                ft.Text(_humanize(action), color=TEXT, width=180),
+                ft.Text(detail, size=12, color=MUTED, expand=True),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER) for ts, action, detail in audit]
+        else:
+            audit_rows = [ft.Text("Aucune activité sur la période.", color=MUTED)]
+        activite = self._card(ft.Column(audit_rows, spacing=6))
+
+        # Grille responsive (sans titres de section, les cartes s'etirent pour
+        # remplir la page) : bandeau KPI, puis camembert + repartition cote a
+        # cote, puis l'activite recente en pleine largeur.
+        def _col(control, small, large):
+            control.col = {"xs": 12, "md": small, "lg": large}
+            return control
+
+        self.dash_results.content = ft.Column([
+            kpis,
+            ft.ResponsiveRow(
+                [_col(camembert, 12, 5), _col(repartition, 12, 7)],
+                spacing=20, run_spacing=20),
+            activite,
+        ], spacing=20)
+        self.page.update()
+
+    # --- Vue PATIENTS ---------------------------------------------------------
+    def show_patients(self) -> None:
+        self.current_view = "patients"
+        self.rail.selected_index = 1
+        self._set_body(
+            self._title(
+                "Patients",
+                self._btn("Nouveau patient", lambda e: self._patient_dialog(),
+                          icon=ft.Icons.ADD, shortcut=SC_NEW, busy=False),
+            ),
+            ft.Row([self.search, self.patients_filter], spacing=12,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            self.patients_results,
+            self.patients_pager,
+        )
+        self._refresh_patients()
+
+    # --- Traitement par lot (page Documents) ----------------------------------
+    def _doc_batch_action(self) -> tuple[str, str, str] | None:
+        """Action de lot deduite du filtre de statut courant, ou None.
+
+        Brouillon / Erreur generation -> generation ; En attente d'envoi /
+        Erreur envoi -> envoi. Les autres filtres (tous / genere / envoye)
+        n'exposent pas de traitement par lot.
+        """
+        s = self.doc_statut.value or "tous"
+        if s in ("brouillon", "erreur"):
+            return ("generation", "Générer les documents", ft.Icons.PLAY_ARROW)
+        if s in ("en_attente_envoi", "erreur_envoi"):
+            return ("envoi", "Envoyer les emails", ft.Icons.SEND)
+        return None
+
+    def _on_doc_statut_change(self) -> None:
+        # Changer de statut change l'action de lot : on repart d'une selection vide.
+        self.doc_selected.clear()
+        self._reset_and("documents")
+
+    def _doc_batch_count_label(self) -> str:
+        return f"{len(self.doc_selected)} document(s) sélectionné(s)"
+
+    def _doc_batch_bar_content(self, action: tuple[str, str, str]) -> ft.Control:
+        """Carte « Traitement par lot » de la page Documents : Tout sélectionner +
+        compteur + bouton d'action contextuel (Générer / Envoyer)."""
+        kind, label, icon = action
+        self.doc_select_all = ft.Checkbox(
+            label="Tout sélectionner", value=False, on_change=self._on_doc_select_all)
+        self.doc_batch_count_text = ft.Text(
+            self._doc_batch_count_label(), size=12, color=MUTED)
+        self.doc_launch_btn = self._btn(
+            label, lambda e, k=kind, l=label: self._on_doc_launch(k, l),
+            icon=icon, busy=False)
+        self.doc_launch_btn.disabled = self._job_running or not self.doc_selected
+        return self._card(ft.Column([
+            ft.Row([ft.Icon(ft.Icons.LAYERS, color=NAVY),
+                    ft.Text("Traitement par lot", weight=ft.FontWeight.BOLD, color=TEXT)],
+                   spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Row([self.doc_select_all, self.doc_batch_count_text,
+                    ft.Container(expand=True), self.doc_launch_btn],
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ], spacing=12))
+
+    def _update_doc_batch_bar(self) -> None:
+        """Met a jour le compteur et l'etat du bouton sans reconstruire la liste."""
+        if not hasattr(self, "doc_batch_count_text"):
+            return
+        self.doc_batch_count_text.value = self._doc_batch_count_label()
+        self.doc_launch_btn.disabled = self._job_running or not self.doc_selected
+
+    def _doc_toggle_select(self, document_id: int, value: bool) -> None:
+        if value:
+            self.doc_selected.add(document_id)
+        else:
+            self.doc_selected.discard(document_id)
+        self._update_doc_batch_bar()
+        self.page.update()
+
+    def _on_doc_select_all(self, e: ft.ControlEvent) -> None:
+        if e.control.value:
+            ids = repo.list_document_ids_filtered(
+                self.conn, self.doc_search.value or "",
+                self.doc_statut.value or "tous",
+                _date_iso(self.doc_date_from), _date_iso(self.doc_date_to))
+            self.doc_selected = set(ids)
+        else:
+            self.doc_selected.clear()
+        self._refresh_documents()
+
+    def _on_doc_launch(self, kind: str, label: str) -> None:
+        if self._job_running:
+            self._toast("Un job est déjà en cours.", ok=False); return
+        if not self.doc_selected:
+            self._toast("Sélectionnez au moins un document.", ok=False); return
+        ids = sorted(self.doc_selected)
+        if kind == "envoi":
+            self._doc_launch_envoi_dialog(ids)
+        else:
+            self._launch_job("generation", "documents", document_ids=ids)
+
+    def _doc_launch_envoi_dialog(self, document_ids: list[int]) -> None:
+        mtemplates = repo.list_mail_templates(self.conn)
+        if not mtemplates:
+            self._toast("Aucun modèle d'email. Ajoutez-en un dans l'onglet « Emails ».", ok=False)
+            self.show_mail_templates()
+            return
+        default = repo.get_default_mail_template(self.conn)
+        tpl_dd = ft.Dropdown(
+            label="Modèle d'email",
+            color=TEXT, text_style=ft.TextStyle(color=TEXT),
+            options=[ft.dropdown.Option(key=str(t.id), text=f"{t.name}  (#{t.mailjet_template_id})")
+                     for t in mtemplates],
+            value=str(default.id) if default else str(mtemplates[0].id),
+        )
+        by_id = {str(t.id): t for t in mtemplates}
+        status = ft.Text("", color=RED, size=12)
+        n = len(document_ids)
+
+        def on_launch(e):
+            chosen = by_id.get(tpl_dd.value)
+            if not chosen:
+                status.value = "Choisissez un modèle."; self.page.update(); return
+            self._close_dialog()
+            self._launch_job("envoi", "documents", document_ids=document_ids, params={
+                "mailjet_template_id": chosen.mailjet_template_id,
+                "mail_template_name": chosen.name,
+            })
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Envoyer les emails par lot"),
+            content=ft.Container(
+                ft.Column([
+                    ft.Text(f"{n} document(s) sélectionné(s).", color=MUTED, size=13),
+                    tpl_dd, status,
+                ], tight=True, spacing=12),
+                width=420,
+            ),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Lancer l'envoi", on_launch, icon=ft.Icons.SEND, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _launch_job(self, kind: str, doc_type: str, patient_ids: list[int] | None = None,
+                    params: dict | None = None, document_ids: list[int] | None = None) -> None:
+        """Crée un job et le déroule dans un thread d'arrière-plan (UI navigable).
+
+        Deux modes : par patients (lot normal, `patient_ids`) ou par documents précis
+        (`document_ids`, utilisé pour « Relancer les erreurs »).
+        """
+        if self._job_running:
+            self._toast("Un job est déjà en cours.", ok=False)
+            return
+        params = params or {}
+        statuts = _BATCH_STATUTS[kind]
+        # En mode documents (le seul utilise par l'UI desormais), la periode ne
+        # sert pas au filtrage : les ids de documents sont deja explicites.
+        date_from = date_to = ""
+        by_documents = document_ids is not None
+
+        config = None
+        mailjet_template_id = params.get("mailjet_template_id")
+        if kind == "envoi":
+            try:
+                from src.config import load_config
+                config = load_config()
+            except Exception as exc:  # noqa: BLE001
+                self._toast(f"config.ini invalide : {exc}", ok=False)
+                return
+
+        total = len(document_ids) if by_documents else len(patient_ids or [])
+        job_params = json.dumps({
+            "date_from": date_from, "date_to": date_to,
+            "mode": "documents" if by_documents else "patients", **params,
+        }, ensure_ascii=False)
+        job = repo.create_job(self.conn, kind, doc_type, total, job_params)
+        repo.log_audit(self.conn, f"job_{kind}",
+                       f"job #{job.id} {doc_type} — {total} élément(s)")
+
+        self._job_running = True
+        self.doc_selected.clear()
+        self.current_job_id = job.id
+        self.show_job_detail(job.id)  # suivre la progression
+
+        def run_one(jconn, d):
+            """Exécute le rendu ou l'envoi d'un document. Lève en cas d'échec."""
+            if kind == "generation":
+                generator.render_document(jconn, d)
+            else:
+                generator.send_document(jconn, d, config, template_id=mailjet_template_id)
+
+        def runner() -> None:
+            # Connexion propre au thread : SQLite gere la concurrence entre
+            # connexions (file lock + busy_timeout), contrairement au partage
+            # d'une meme connexion entre threads.
+            jconn = connect()
+            try:
+                if by_documents:
+                    for did in document_ids:
+                        # Chaque document est isole : une erreur n'arrete pas le job.
+                        try:
+                            d = repo.get_document(jconn, did)
+                            if d is None:
+                                repo.add_job_item(jconn, job.id, None, "skip",
+                                                  document_id=did, message="Document introuvable.")
+                            else:
+                                try:
+                                    run_one(jconn, d)
+                                    repo.add_job_item(jconn, job.id, d.patient_id, "ok",
+                                                      document_id=d.id)
+                                except Exception as exc:  # noqa: BLE001
+                                    repo.add_job_item(jconn, job.id, d.patient_id, "erreur",
+                                                      document_id=d.id, message=str(exc))
+                        except Exception as exc:  # noqa: BLE001
+                            try:
+                                repo.add_job_item(jconn, job.id, None, "erreur",
+                                                  document_id=did, message=str(exc))
+                            except Exception:  # noqa: BLE001
+                                pass
+                        self._on_job_progress(job.id, jconn)
+                else:
+                    for pid in (patient_ids or []):
+                        # Chaque patient est isole : une erreur (rendu, envoi, ou meme
+                        # acces DB) n'arrete jamais le job, elle est consignee comme
+                        # ligne 'erreur' et le job continue (succes partiel en fin).
+                        try:
+                            docs = repo.list_documents_for_batch(
+                                jconn, pid, doc_type, statuts, date_from, date_to)
+                            if not docs:
+                                repo.add_job_item(jconn, job.id, pid, "skip",
+                                                  message="Aucun document à traiter.")
+                            else:
+                                errs: list[str] = []
+                                last_id = None
+                                for d in docs:
+                                    last_id = d.id
+                                    try:
+                                        run_one(jconn, d)
+                                    except Exception as exc:  # noqa: BLE001
+                                        errs.append(str(exc))
+                                if errs:
+                                    repo.add_job_item(jconn, job.id, pid, "erreur",
+                                                      document_id=last_id, message="; ".join(errs))
+                                else:
+                                    msg = f"{len(docs)} document(s)" if len(docs) > 1 else None
+                                    repo.add_job_item(jconn, job.id, pid, "ok",
+                                                      document_id=last_id, message=msg)
+                        except Exception as exc:  # noqa: BLE001
+                            try:
+                                repo.add_job_item(jconn, job.id, pid, "erreur", message=str(exc))
+                            except Exception:  # noqa: BLE001
+                                pass
+                        self._on_job_progress(job.id, jconn)
+                # Statut final : partiel si au moins une erreur mais au moins un
+                # succes ; erreur si tout a echoue ; termine sinon.
+                final = repo.get_job(jconn, job.id)
+                if final and final.errors:
+                    statut = "termine_partiel" if final.ok else "erreur"
+                else:
+                    statut = "termine"
+                repo.finish_job(jconn, job.id, statut)
+            except Exception:  # noqa: BLE001
+                # Filet de securite ultime (ex. connexion DB perdue) : ne pas laisser
+                # le job bloque en 'en_cours'.
+                try:
+                    repo.finish_job(jconn, job.id, "erreur")
+                except Exception:  # noqa: BLE001
+                    pass
+            finally:
+                self._job_running = False
+                # Rebuild complet de la vue (en-tete inclus) pour afficher l'etat
+                # final : statut « Termine / Succes partiel / Erreur » et le bouton
+                # « Relancer les erreurs ». Marshalle sur la boucle UI (cf.
+                # _run_on_ui) et lit via self.conn — jconn est fermee juste apres
+                # et liee a ce thread.
+                def finalize() -> None:
+                    if self.current_view == "job_detail" and self.current_job_id == job.id:
+                        self.show_job_detail(job.id)
+                    elif self.current_view == "jobs":
+                        self._refresh_jobs()
+                self._run_on_ui(finalize)
+                jconn.close()
+
+        threading.Thread(target=runner, daemon=True).start()
+
+    def _run_on_ui(self, fn) -> None:
+        """Exécute `fn` sur la boucle d'événements Flet (thread UI).
+
+        Flet envoie les patches de contrôle de façon synchrone : appeler
+        `page.update()` depuis un thread d'arrière-plan n'est pas transmis au
+        client tant que la boucle ne tourne pas (d'où un suivi de job figé jusqu'à
+        ce qu'on change de page). On marshalle donc le rafraîchissement sur la
+        boucle, où le patch est réellement « flush ».
+        """
+        loop = getattr(self.page, "loop", None)
+        if loop is None:  # hors contexte Flet (tests) : exécution directe.
+            fn()
+            return
+        try:
+            loop.call_soon_threadsafe(fn)
+        except RuntimeError:
+            pass  # boucle arrêtée (fermeture de l'app) : rien à rafraîchir.
+
+    def _on_job_progress(self, job_id: int,
+                         conn: sqlite3.Connection | None = None) -> None:
+        """Rafraîchit la vue Travaux/détail depuis le thread du job.
+
+        Le rafraîchissement est marshallé sur la boucle UI (cf. `_run_on_ui`) et
+        lit via `self.conn` (connexion du thread UI) — `conn`, propre au thread du
+        job, n'est pas utilisable hors de ce thread.
+        """
+        def refresh() -> None:
+            try:
+                if self.current_view == "jobs":
+                    self._refresh_jobs()
+                elif self.current_view == "job_detail" and self.current_job_id == job_id:
+                    self._refresh_job_detail(job_id)
+            except Exception:  # noqa: BLE001
+                pass
+        self._run_on_ui(refresh)
+
+    def _refresh_patients(self) -> None:
+        search = self.search.value or ""
+        filtre = self.patients_filter.value or "tous"
+        total = repo.count_patients(self.conn, search, filtre)
+        self.patients_page = self._clamp_page(self.patients_page, total)
+        patients = repo.list_patients(
+            self.conn, search, filtre,
+            limit=PAGE_SIZE, offset=self.patients_page * PAGE_SIZE,
+        )
+        rows = [self._patient_row(p) for p in patients]
+        empty = ("Aucun patient ne correspond à votre recherche."
+                 if (search.strip() or filtre != "tous")
+                 else "Aucun patient. Cliquez sur « Nouveau patient ».")
+
+        liste = ft.Column(rows, spacing=8) if rows else ft.Text(empty, color=MUTED)
+
+        def on_page(idx):
+            self.patients_page = idx
+            self._refresh_patients()
+
+        self.patients_results.content = self._card(liste)
+        self.patients_pager.content = self._pagination(self.patients_page, total, on_page)
+        self.page.update()
+
+    def _patient_row(self, p: Patient) -> ft.Control:
+        sub = " · ".join(filter(None, [p.email, p.telephone])) or "—"
+        avatar = ft.CircleAvatar(
+            content=ft.Text(_initials(p), color=NAVY, weight=ft.FontWeight.BOLD),
+            bgcolor=TEAL, radius=18,
+        )
+        infos = ft.Column(
+            [ft.Text(p.display, weight=ft.FontWeight.W_600, color=TEXT),
+             ft.Text(sub, size=12, color=MUTED)],
+            spacing=2, expand=True,
+        )
+        return ft.Container(
+            content=ft.Row(
+                [avatar, infos, ft.Text(f"#{p.id}", color=MUTED, size=12),
+                 ft.Icon(ft.Icons.CHEVRON_RIGHT, color=MUTED)],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=10, border_radius=10, ink=True,
+            on_click=lambda e, pid=p.id: self.show_patient_detail(pid),
+        )
+
+    def show_patient_detail(self, patient_id: int,
+                            conn: sqlite3.Connection | None = None) -> None:
+        # `conn` : passe par l'auto-polling (thread) pour ne pas partager self.conn.
+        conn = conn or self.conn
+        p = repo.get_patient(conn, patient_id)
+        if not p:
+            return self.show_patients()
+        # Ouverture d'un AUTRE patient : on repart a la 1re page de chaque section.
+        if not self.current_patient or self.current_patient.id != patient_id:
+            self.detail_docs_page = 0
+            self.detail_paie_page = 0
+        self.current_view = "patient_detail"  # Echap revient a la liste des patients
+        self.current_patient = p
+
+        # Pagination cote SQL (LIMIT/OFFSET) : la fiche reste rapide meme avec
+        # un long historique de documents/paiements.
+        docs_total = repo.count_documents_for_patient(conn, patient_id)
+        paies_total = repo.count_paiements_for_patient(conn, patient_id)
+        self.detail_docs_page = self._clamp_page(self.detail_docs_page, docs_total)
+        self.detail_paie_page = self._clamp_page(self.detail_paie_page, paies_total)
+        docs = repo.list_documents(
+            conn, patient_id, limit=PAGE_SIZE, offset=self.detail_docs_page * PAGE_SIZE)
+        paies = repo.list_paiements(
+            conn, patient_id, limit=PAGE_SIZE, offset=self.detail_paie_page * PAGE_SIZE)
+        has_sent = repo.patient_has_sent_document(conn, patient_id)
+
+        header = ft.Row([
+            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: self.show_patients()),
+            ft.Text(p.display, size=24, weight=ft.FontWeight.BOLD, color=TEXT),
+            ft.Container(expand=True),
+            self._btn("Modifier", lambda e: self._patient_dialog(p), icon=ft.Icons.EDIT,
+                      primary=False, busy=False),
+            self._btn("Générer un document", lambda e: self._generate_dialog(p),
+                      icon=ft.Icons.NOTE_ADD, busy=False),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+        infos = self._card(ft.Column([
+            _kv("Email", p.email or "—"),
+            _kv("Téléphone", p.telephone or "—"),
+            _kv("Date de naissance", _iso_to_fr(p.date_naissance) or "—"),
+            _kv("Adresse", p.adresse or "—"),
+            _kv("Notes", p.notes or "—"),
+        ], spacing=6))
+
+        docs_col = ft.Column(
+            [self._doc_row(d) for d in docs] or [ft.Text("Aucun document.", color=MUTED)],
+            spacing=8,
+        )
+        paies_col = ft.Column(
+            [self._paie_row(pa) for pa in paies] or [ft.Text("Aucun paiement.", color=MUTED)],
+            spacing=8,
+        )
+
+        def on_docs_page(idx):
+            self.detail_docs_page = idx
+            self.show_patient_detail(patient_id)
+
+        def on_paies_page(idx):
+            self.detail_paie_page = idx
+            self.show_patient_detail(patient_id)
+
+        # Barre de pagination affichee seulement si l'historique depasse une page,
+        # pour garder la fiche epuree quand il y a peu d'elements.
+        docs_pager = (self._pagination(self.detail_docs_page, docs_total, on_docs_page)
+                      if docs_total > PAGE_SIZE else ft.Container())
+        paies_pager = (self._pagination(self.detail_paie_page, paies_total, on_paies_page)
+                       if paies_total > PAGE_SIZE else ft.Container())
+
+        docs_title = [ft.Text("Documents", size=18, weight=ft.FontWeight.BOLD, color=TEXT)]
+        if has_sent:
+            docs_title += [
+                ft.Container(expand=True),
+                self._btn("Rafraîchir les statuts",
+                          lambda e, pid=patient_id: self._refresh_patient_mail_statuses(e, pid),
+                          icon=ft.Icons.REFRESH, primary=False, busy=False),
+            ]
+        self._set_body(
+            header,
+            infos,
+            ft.Row(docs_title, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            self._card(docs_col),
+            docs_pager,
+            ft.Row([
+                ft.Text("Paiements", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
+                ft.Container(expand=True),
+                self._btn("Ajouter un paiement", lambda e: self._paiement_dialog(p),
+                          icon=ft.Icons.ADD, primary=False, busy=False),
+            ]),
+            self._card(paies_col),
+            paies_pager,
+        )
+
+    def _doc_row(self, d: Document) -> ft.Control:
+        label, color = _STATUT_LABELS.get(d.statut, (d.statut, MUTED))
+        actions = []
+        if d.statut in ("brouillon", "erreur"):
+            tip = "Générer le document" if d.statut == "brouillon" else "Réessayer la génération"
+            actions.append(ft.IconButton(
+                ft.Icons.PLAY_CIRCLE_OUTLINE, tooltip=tip, icon_color=NAVY,
+                on_click=lambda e, dd=d: self._render_draft(e, dd)))
+            if d.statut == "brouillon":
+                actions.append(ft.IconButton(
+                    ft.Icons.EDIT, tooltip="Modifier le brouillon", icon_color=NAVY,
+                    on_click=lambda e, dd=d: self._generate_dialog(self.current_patient, draft=dd)))
+            actions.append(ft.IconButton(
+                ft.Icons.DELETE_OUTLINE, tooltip="Supprimer", icon_color=RED,
+                on_click=lambda e, dd=d: self._delete_draft_dialog(dd)))
+        else:
+            actions.append(ft.IconButton(
+                ft.Icons.FOLDER_OPEN, tooltip="Ouvrir le fichier",
+                on_click=lambda e, dd=d: self._open_file(dd)))
+        if d.email and d.statut in ("en_attente_envoi", "erreur_envoi"):
+            actions.append(ft.IconButton(ft.Icons.SEND, tooltip="Envoyer par email", icon_color=NAVY,
+                                         on_click=lambda e, dd=d: self._send_dialog(dd)))
+        if d.statut == "envoye":
+            actions.append(ft.IconButton(
+                ft.Icons.REFRESH, tooltip="Rafraîchir le statut Mailjet", icon_color=NAVY,
+                on_click=lambda e, dd=d: self._refresh_mail_status(e, dd)))
+
+        if d.statut == "envoye":
+            sub = " · ".join(filter(None, [
+                d.date_envoi or "",
+                f"livraison : {d.mailjet_status}" if d.mailjet_status else "",
+                f"ouvert {d.mailjet_opened_at}" if d.mailjet_opened_at else "",
+                f"cliqué {d.mailjet_clicked_at}" if d.mailjet_clicked_at else "",
+            ]))
+        else:
+            sub = d.date_generation or ""
+        return ft.Row([
+            ft.Icon(ft.Icons.PICTURE_AS_PDF if d.output_format == "pdf" else ft.Icons.IMAGE, color=TEAL_DARK),
+            ft.Column([
+                ft.Text(_doc_label(d), weight=ft.FontWeight.W_600, color=TEXT),
+                ft.Text(sub, size=12, color=MUTED),
+            ], spacing=2, expand=True),
+            ft.Container(ft.Text(label, size=12, color=color),
+                         bgcolor=ft.Colors.with_opacity(0.12, color), padding=ft.Padding.symmetric(vertical=4, horizontal=10),
+                         border_radius=20),
+            *actions,
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def _render_draft(self, e: ft.ControlEvent, d: Document) -> None:
+        """Génère immédiatement un brouillon (rendu Word→PDF) depuis la fiche patient."""
+        def work():
+            generator.render_document(self.conn, d)
+            repo.log_audit(self.conn, "document_genere",
+                           f"#{d.id} {d.type} (patient #{d.patient_id})")
+            self._toast("Document généré.")
+            self._after_doc_change()
+
+        self._run_busy(e.control, None, work)
+
+    def _delete_draft_dialog(self, d: Document) -> None:
+        def on_delete(e):
+            try:
+                if d.file_path and Path(d.file_path).exists():
+                    Path(d.file_path).unlink()
+            except OSError:
+                pass  # fichier verrouille/absent : on supprime quand meme l'enregistrement
+            repo.delete_document(self.conn, d.id)
+            repo.log_audit(self.conn, "brouillon_supprime",
+                           f"#{d.id} {d.type} (patient #{d.patient_id})")
+            self._close_dialog()
+            self._toast("Brouillon supprimé.")
+            if self.current_patient:
+                self.show_patient_detail(self.current_patient.id)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Supprimer le brouillon"),
+            content=ft.Text(f"Supprimer définitivement ce brouillon « {_doc_label(d)} » ?"),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Supprimer", on_delete, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _refresh_mail_status(self, e: ft.ControlEvent, d: Document) -> None:
+        """Interroge Mailjet pour le statut de livraison d'un document envoyé."""
+        def work():
+            from src.config import load_config
+            config = load_config()
+            status = generator.refresh_mail_status(self.conn, d, config)
+            self._toast(f"Statut Mailjet : {status}")
+            if self.current_patient:
+                self.show_patient_detail(self.current_patient.id)
+
+        self._run_busy(e.control, None, work)
+
+    def _refresh_patient_mail_statuses(self, e: ft.ControlEvent, patient_id: int) -> None:
+        """Rafraîchit (à la demande) le suivi Mailjet de tous les docs envoyés du patient."""
+        def work():
+            from src.config import load_config
+            config = load_config()
+            n = 0
+            for d in repo.list_documents(self.conn, patient_id):
+                if d.statut == "envoye" and d.mailjet_message_id:
+                    try:
+                        generator.refresh_mail_status(self.conn, d, config)
+                        n += 1
+                    except Exception:  # noqa: BLE001
+                        pass
+            self._toast(f"{n} statut(s) rafraîchi(s).")
+            if self.current_patient:
+                self.show_patient_detail(self.current_patient.id)
+
+        self._run_busy(e.control, None, work)
+
+    # --- Auto-polling du suivi Mailjet (ouvertures / clics) -------------------
+    def _start_status_poller(self) -> None:
+        """Thread de fond : rafraîchit périodiquement le suivi Mailjet des envois récents.
+
+        Pas de vrai « push » possible (app locale sans serveur) : on interroge l'API
+        toutes les `MAIL_POLL_SECONDS`. Le bouton « Rafraîchir » force une mise à jour.
+        """
+        def loop() -> None:
+            while True:
+                time.sleep(MAIL_POLL_SECONDS)
+                try:
+                    self._poll_mail_statuses()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        threading.Thread(target=loop, daemon=True).start()
+
+    def _poll_mail_statuses(self) -> None:
+        """Un cycle d'auto-polling : connexion propre au thread (jamais self.conn)."""
+        try:
+            from src.config import load_config
+            config = load_config()
+        except Exception:  # noqa: BLE001
+            return  # config Mailjet absente/invalide : rien à faire
+        pconn = connect()
+        try:
+            changed = False
+            for d in repo.list_pollable_documents(pconn, limit=200):
+                before = (d.mailjet_status, d.mailjet_opened_at, d.mailjet_clicked_at)
+                try:
+                    generator.refresh_mail_status(pconn, d, config)
+                except Exception:  # noqa: BLE001
+                    continue
+                if (d.mailjet_status, d.mailjet_opened_at, d.mailjet_clicked_at) != before:
+                    changed = True
+            # Reflète les changements si l'utilisateur regarde justement la fiche.
+            if changed and self.current_view == "patient_detail" and self.current_patient:
+                self.show_patient_detail(self.current_patient.id, pconn)
+        finally:
+            pconn.close()
+
+    def _paie_row(self, pa: Paiement) -> ft.Control:
+        encaisse = pa.statut == "encaisse"
+        chip_color = GREEN if encaisse else NAVY
+        chip = ft.Container(
+            ft.Text("Encaissé" if encaisse else "En attente", size=12, color=chip_color),
+            bgcolor=ft.Colors.with_opacity(0.12, chip_color),
+            padding=ft.Padding.symmetric(vertical=4, horizontal=10), border_radius=20,
+        )
+        right = []
+        if not encaisse:
+            right.append(ft.IconButton(ft.Icons.CHECK_CIRCLE, tooltip="Marquer encaissé",
+                         icon_color=GREEN, on_click=lambda e, pp=pa: self._encaisser(pp)))
+            right.append(ft.IconButton(ft.Icons.CANCEL, tooltip="Annuler le paiement",
+                         icon_color=RED, on_click=lambda e, pp=pa: self._annuler_paiement(pp)))
+        if encaisse:
+            mode_txt = _MODE_LABELS.get(pa.mode, "mode non précisé")
+            sub = f"Réglé par {mode_txt}"
+            if pa.date_encaissement:
+                sub += f" le {_iso_to_fr(pa.date_encaissement)}"
+        else:
+            sub = f"Échéance : {_iso_to_fr(pa.date_echeance) or '—'}"
+        return ft.Row([
+            ft.Text(f"{pa.montant:.2f}", weight=ft.FontWeight.W_600, color=TEXT),
+            ft.Column([
+                ft.Text(pa.notes or "Paiement", color=TEXT),
+                ft.Text(sub, size=12, color=MUTED),
+            ], spacing=2, expand=True),
+            chip, *right,
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    # --- Vue PAIEMENTS --------------------------------------------------------
+    def show_paiements(self) -> None:
+        self.current_view = "paiements"
+        self.rail.selected_index = 2
+        self._set_body(
+            self._title("Paiements"),
+            ft.Row([self.paie_search, self.paie_statut,
+                    ft.Container(self.paie_date_from_row, width=190),
+                    ft.Container(self.paie_date_to_row, width=190)],
+                   spacing=12,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            self.paie_summary,
+            self.paie_results,
+            self.paie_pager,
+        )
+        self._refresh_paiements()
+
+    def _refresh_paiements(self) -> None:
+        search = self.paie_search.value or ""
+        statut = self.paie_statut.value or "en_attente"
+        date_from = _date_iso(self.paie_date_from)
+        date_to = _date_iso(self.paie_date_to)
+        count = repo.count_paiements(self.conn, search, statut, date_from, date_to)
+        somme = repo.total_paiements(self.conn, search, statut, date_from, date_to)
+        self.paie_page = self._clamp_page(self.paie_page, count)
+        items = repo.list_paiements_filtered(
+            self.conn, search, statut,
+            limit=PAGE_SIZE, offset=self.paie_page * PAGE_SIZE,
+            date_from=date_from, date_to=date_to,
+        )
+        rows = []
+        for pa, pt in items:
+            encaisse = pa.statut == "encaisse"
+            chip_color = GREEN if encaisse else NAVY
+            chip = ft.Container(
+                ft.Text("Encaissé" if encaisse else "En attente", size=12, color=chip_color),
+                bgcolor=ft.Colors.with_opacity(0.12, chip_color),
+                padding=ft.Padding.symmetric(vertical=4, horizontal=10), border_radius=20,
+            )
+            actions = [
+                ft.TextButton("Ouvrir la fiche",
+                              on_click=lambda e, pid=pt.id: self.show_patient_detail(pid)),
+            ]
+            if not encaisse:
+                actions.append(ft.IconButton(
+                    ft.Icons.CHECK_CIRCLE, tooltip="Marquer encaissé", icon_color=GREEN,
+                    on_click=lambda e, pp=pa: self._encaisser(pp, back_to_paiements=True)))
+                actions.append(ft.IconButton(
+                    ft.Icons.CANCEL, tooltip="Annuler le paiement", icon_color=RED,
+                    on_click=lambda e, pp=pa: self._annuler_paiement(pp, back_to_paiements=True)))
+            if encaisse:
+                date_info = f"Encaissé le {_iso_to_fr(pa.date_encaissement) or '—'}"
+                date_info += f" · {_MODE_LABELS.get(pa.mode, 'mode non précisé')}"
+            else:
+                date_info = f"Échéance : {_iso_to_fr(pa.date_echeance) or '—'}"
+            rows.append(ft.Row([
+                ft.Text(f"{pa.montant:.2f}", weight=ft.FontWeight.W_600, color=TEXT, width=90),
+                ft.Column([
+                    ft.Text(pt.display, weight=ft.FontWeight.W_600, color=TEXT),
+                    ft.Text(date_info, size=12, color=MUTED),
+                ], spacing=2, expand=True),
+                chip, *actions,
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+        if rows:
+            liste = ft.Column(rows, spacing=8)
+        elif search.strip():
+            liste = ft.Text("Aucun paiement ne correspond à votre recherche.", color=MUTED)
+        elif date_from.strip() or date_to.strip():
+            liste = ft.Text("Aucun paiement sur la période sélectionnée.", color=MUTED)
+        else:
+            liste = ft.Text("Aucun paiement.", color=MUTED)
+
+        total_label = {
+            "en_attente": "Total en attente d'encaissement",
+            "encaisse": "Total encaissé",
+            "tous": "Total (tous statuts)",
+        }.get(statut, "Total")
+
+        def on_page(idx):
+            self.paie_page = idx
+            self._refresh_paiements()
+
+        self.paie_summary.content = self._card(ft.Row([
+            ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET, color=NAVY),
+            ft.Text(total_label, color=MUTED),
+            ft.Container(expand=True),
+            ft.Text(f"{somme:.2f}", size=22, weight=ft.FontWeight.BOLD, color=NAVY),
+        ]))
+        self.paie_results.content = self._card(liste)
+        self.paie_pager.content = self._pagination(self.paie_page, count, on_page)
+        self.page.update()
+
+    # --- Vue PARAMETRAGE (Modeles de documents + Modeles d'email) -------------
+    def show_parametrage(self, tab: str | None = None) -> None:
+        """Page de parametrage regroupant les deux sous-vues, avec un sous-menu
+        permettant de basculer entre « Modèles de documents » et « Emails ».
+
+        `current_view` conserve la cle de la sous-vue active ("templates"/"mail")
+        afin que les actions Nouveau / Rechercher / Pagination restent contextuelles.
+        """
+        self.param_tab = tab or self.param_tab
+        self.current_view = self.param_tab
+        self.rail.selected_index = 4
+        if self.param_tab == "templates":
+            action = self._btn("Nouveau modèle", lambda e: self._new_template_dialog(),
+                               icon=ft.Icons.ADD, shortcut=SC_NEW, busy=False)
+            body = [
+                ft.Text("Chaque modèle est un fichier Word. Balises : <NOM>, <PRENOM>, <DATE>, <ACTE>, <MONTANT>…",
+                        color=MUTED, size=13),
+                ft.Row([self.tpl_search]),
+                self.tpl_results,
+                self.tpl_pager,
+            ]
+        else:
+            action = self._btn("Nouveau modèle", lambda e: self._mail_template_dialog(),
+                               icon=ft.Icons.ADD, shortcut=SC_NEW, busy=False)
+            body = [
+                ft.Text("Associez un nom lisible à l'ID d'un template transactionnel Mailjet. "
+                        "Le modèle « par défaut » est présélectionné à l'envoi.", color=MUTED, size=13),
+                ft.Row([self.mail_search]),
+                self.mail_results,
+                self.mail_pager,
+            ]
+        self._set_body(self._title("Paramétrage", action), self._param_submenu(), *body)
+        if self.param_tab == "templates":
+            self._refresh_templates()
+        else:
+            self._refresh_mail_templates()
+
+    def _param_submenu(self) -> ft.Control:
+        """Sous-menu a deux onglets de la page Parametrage."""
+        def tab_btn(key: str, label: str, icon) -> ft.Control:
+            active = self.param_tab == key
+            return ft.Container(
+                ft.Row([ft.Icon(icon, size=18, color=SURFACE if active else NAVY),
+                        ft.Text(label, color=SURFACE if active else NAVY,
+                                weight=ft.FontWeight.BOLD, size=13)],
+                       spacing=8, tight=True),
+                bgcolor=NAVY if active else ft.Colors.with_opacity(0.10, NAVY),
+                padding=ft.Padding.symmetric(vertical=9, horizontal=16),
+                border_radius=10, ink=True,
+                on_click=lambda e, k=key: self.show_parametrage(k),
+            )
+        return ft.Row([
+            tab_btn("templates", "Modèles de documents", ft.Icons.DESCRIPTION),
+            tab_btn("mail", "Modèles d'email", ft.Icons.MARK_EMAIL_READ),
+        ], spacing=10)
+
+    # --- Sous-vue MODELES DE DOCUMENTS ----------------------------------------
+    def show_templates(self) -> None:
+        self.show_parametrage("templates")
+
+    def _refresh_templates(self) -> None:
+        q = (self.tpl_search.value or "").strip().lower()
+        all_tpls = templates.list_templates()
+        if q:
+            all_tpls = [t for t in all_tpls if q in t.label.lower() or q in t.name.lower()]
+        total = len(all_tpls)
+        self.tpl_page = self._clamp_page(self.tpl_page, total)
+        start = self.tpl_page * PAGE_SIZE
+        tpls = all_tpls[start:start + PAGE_SIZE]
+        rows = []
+        for t in tpls:
+            rows.append(ft.Row([
+                ft.Icon(ft.Icons.DESCRIPTION, color=NAVY),
+                ft.Column([
+                    ft.Text(t.label, weight=ft.FontWeight.W_600, color=TEXT),
+                    ft.Text(t.path.name, size=12, color=MUTED),
+                ], spacing=2, expand=True),
+                self._btn("Éditer dans Word", lambda e, tt=t: self._edit_template(tt),
+                          icon=ft.Icons.OPEN_IN_NEW, primary=False),
+                ft.IconButton(ft.Icons.TUNE, tooltip="Configurer les variables",
+                              icon_color=NAVY, on_click=lambda e, tt=t: self._template_fields_dialog(tt)),
+                ft.IconButton(ft.Icons.DRIVE_FILE_RENAME_OUTLINE, tooltip="Renommer",
+                              icon_color=NAVY, on_click=lambda e, tt=t: self._rename_template_dialog(tt)),
+                ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Supprimer", icon_color=RED,
+                              on_click=lambda e, tt=t: self._delete_template_dialog(tt)),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+        if rows:
+            liste = ft.Column(rows, spacing=10)
+        elif q:
+            liste = ft.Text("Aucun modèle ne correspond à votre recherche.", color=MUTED)
+        else:
+            liste = ft.Text("Aucun modèle. Créez-en un avec le bouton ci-dessus.", color=MUTED)
+
+        def on_page(idx):
+            self.tpl_page = idx
+            self._refresh_templates()
+
+        self.tpl_results.content = self._card(liste)
+        self.tpl_pager.content = self._pagination(self.tpl_page, total, on_page)
+        self.page.update()
+
+    def _template_fields_dialog(self, template: templates.Template) -> None:
+        try:
+            detected = extract_placeholders(template.path)
+        except Exception as exc:  # noqa: BLE001
+            self._toast(f"Lecture du modèle impossible : {exc}", ok=False)
+            return
+        existing = {f.tag: f for f in repo.list_template_fields(self.conn, template.name)}
+        auto = [t for t in detected if t in generator.AUTO_PATIENT_TAGS]
+        custom = [t for t in detected if t not in generator.AUTO_PATIENT_TAGS]
+
+        controls: dict[str, tuple] = {}
+        field_rows = []
+        for tag in custom:
+            ex = existing.get(tag)
+            label_tf = ft.TextField(value=(ex.label if ex else _humanize(tag)),
+                                    label="Libellé", expand=True)
+            type_dd = ft.Dropdown(
+                value=(ex.type if ex else _guess_type(tag)), width=130,
+                color=TEXT, text_style=ft.TextStyle(color=TEXT),
+                options=[ft.dropdown.Option("text", "Texte"),
+                         ft.dropdown.Option("paragraph", "Paragraphe"),
+                         ft.dropdown.Option("number", "Nombre"),
+                         ft.dropdown.Option("date", "Date")],
+            )
+            default_tf = ft.TextField(value=(ex.default_value if ex else ""),
+                                      label="Défaut", width=120)
+            controls[tag] = (label_tf, type_dd, default_tf)
+            field_rows.append(ft.Row(
+                [ft.Container(ft.Text(f"<{tag}>", color=NAVY, weight=ft.FontWeight.W_600), width=140),
+                 label_tf, type_dd, default_tf],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8))
+
+        body = []
+        if auto:
+            body.append(ft.Text(
+                "Auto-remplies depuis la fiche patient : " + ", ".join(f"<{t}>" for t in auto),
+                color=MUTED, size=12))
+        body += field_rows or [ft.Text(
+            "Aucune variable personnalisée détectée. Ajoutez des balises <MA_VARIABLE> "
+            "dans le modèle Word puis revenez ici.", color=MUTED, size=12)]
+
+        def on_save(e):
+            fields = [
+                TemplateField(template.name, tag,
+                              (l.value or _humanize(tag)), (ty.value or "text"), (d.value or ""))
+                for tag, (l, ty, d) in controls.items()
+            ]
+            repo.replace_template_fields(self.conn, template.name, fields)
+            self._close_dialog()
+            self._toast("Variables enregistrées.")
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Variables — {template.label}"),
+            content=ft.Container(
+                ft.Column(body, tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=620, height=440),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                # Sauvegarde instantanee (ecriture SQLite) : pas de spinner inutile.
+                # Cf. _mail_template_dialog, meme cas en busy=False.
+                self._btn("Enregistrer", on_save, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    # --- Sous-vue MODELES D'EMAIL (Mailjet) -----------------------------------
+    def show_mail_templates(self) -> None:
+        self.show_parametrage("mail")
+
+    def _refresh_mail_templates(self) -> None:
+        q = (self.mail_search.value or "").strip().lower()
+        all_templates = repo.list_mail_templates(self.conn)
+        if q:
+            mtemplates = [t for t in all_templates
+                          if q in t.name.lower() or q in str(t.mailjet_template_id)]
+        else:
+            mtemplates = all_templates
+        total = len(mtemplates)
+        self.mail_page = self._clamp_page(self.mail_page, total)
+        start = self.mail_page * PAGE_SIZE
+        mtemplates = mtemplates[start:start + PAGE_SIZE]
+        rows = []
+        for t in mtemplates:
+            badge = []
+            if t.is_default:
+                badge.append(ft.Container(
+                    ft.Text("Par défaut", size=11, color=GREEN),
+                    bgcolor=ft.Colors.with_opacity(0.12, GREEN),
+                    padding=ft.Padding.symmetric(vertical=3, horizontal=8), border_radius=20))
+            actions = []
+            if not t.is_default:
+                actions.append(ft.IconButton(ft.Icons.STAR_OUTLINE, tooltip="Définir par défaut",
+                               icon_color=NAVY, on_click=lambda e, tt=t: self._set_default_mail_template(tt)))
+            actions += [
+                ft.IconButton(ft.Icons.EDIT, tooltip="Modifier", icon_color=NAVY,
+                              on_click=lambda e, tt=t: self._mail_template_dialog(tt)),
+                ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Supprimer", icon_color=RED,
+                              on_click=lambda e, tt=t: self._delete_mail_template(tt)),
+            ]
+            rows.append(ft.Row([
+                ft.Icon(ft.Icons.MARK_EMAIL_READ, color=NAVY),
+                ft.Column([
+                    ft.Text(t.name, weight=ft.FontWeight.W_600, color=TEXT),
+                    ft.Text(f"Template Mailjet #{t.mailjet_template_id}", size=12, color=MUTED),
+                ], spacing=2, expand=True),
+                *badge, *actions,
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+        if rows:
+            liste = ft.Column(rows, spacing=8)
+        elif q:
+            liste = ft.Text("Aucun modèle ne correspond à votre recherche.", color=MUTED)
+        else:
+            liste = ft.Text(
+                "Aucun modèle d'email. Ajoutez-en un (nom + ID de template Mailjet).", color=MUTED)
+
+        def on_page(idx):
+            self.mail_page = idx
+            self._refresh_mail_templates()
+
+        self.mail_results.content = self._card(liste)
+        self.mail_pager.content = self._pagination(self.mail_page, total, on_page)
+        self.page.update()
+
+    def _mail_template_dialog(self, t: "repo.MailTemplate | None" = None) -> None:
+        is_edit = t is not None
+        name = ft.TextField(label="Nom du modèle (ex. Note d'honoraires)",
+                            value=t.name if t else "", autofocus=True)
+        mid = ft.TextField(label="ID du template Mailjet",
+                           value=str(t.mailjet_template_id) if t else "",
+                           keyboard_type=ft.KeyboardType.NUMBER)
+        is_def = ft.Checkbox(label="Modèle par défaut", value=t.is_default if t else False)
+        status = ft.Text("", color=RED, size=12)
+
+        def on_save(e):
+            if not name.value.strip():
+                status.value = "Le nom est obligatoire."; self.page.update(); return
+            try:
+                mid_val = int((mid.value or "").strip())
+            except ValueError:
+                status.value = "L'ID Mailjet doit être un nombre."; self.page.update(); return
+            if is_edit:
+                t.name = name.value; t.mailjet_template_id = mid_val; t.is_default = is_def.value
+                repo.update_mail_template(self.conn, t)
+            else:
+                repo.create_mail_template(self.conn, repo.MailTemplate(
+                    id=None, name=name.value, mailjet_template_id=mid_val, is_default=is_def.value))
+            self._close_dialog()
+            self._toast("Modèle d'email enregistré.")
+            self._refresh_mail_templates()
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Modifier le modèle d'email" if is_edit else "Nouveau modèle d'email"),
+            content=ft.Container(ft.Column([name, mid, is_def, status], tight=True, spacing=12), width=400),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Enregistrer", on_save, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _set_default_mail_template(self, t: "repo.MailTemplate") -> None:
+        repo.set_default_mail_template(self.conn, t.id)
+        self._refresh_mail_templates()
+
+    def _delete_mail_template(self, t: "repo.MailTemplate") -> None:
+        repo.delete_mail_template(self.conn, t.id)
+        self._toast("Modèle supprimé.")
+        self._refresh_mail_templates()
+
+    # --- Vue TRAVAUX (Documents + liste des jobs) -----------------------------
+    def show_travaux(self, tab: str | None = None) -> None:
+        """Page Travaux a deux sous-vues : « Documents » (lignes de documents,
+        avec navigation vers la fiche patient) et « Travaux » (jobs par lot).
+
+        `current_view` conserve la cle de la sous-vue active ("documents"/"jobs")
+        afin que Recherche / Pagination restent contextuelles.
+        """
+        self.travaux_tab = tab or self.travaux_tab
+        self.current_view = "documents" if self.travaux_tab == "documents" else "jobs"
+        self.rail.selected_index = 3
+        if self.travaux_tab == "documents":
+            body = [
+                ft.Text("Toutes les lignes de documents. Cliquez le nom du patient "
+                        "pour ouvrir sa fiche.", color=MUTED, size=13),
+                ft.Row([self.doc_search, self.doc_statut,
+                        ft.Container(self.doc_date_from_row, width=190),
+                        ft.Container(self.doc_date_to_row, width=190)],
+                       spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                self.doc_batch_bar,
+                self.doc_results,
+                self.doc_pager,
+            ]
+        else:
+            body = [
+                ft.Text("Jobs de génération et d'envoi par lot. Cliquez un job pour "
+                        "voir le détail (ligne par patient).", color=MUTED, size=13),
+                ft.Row([ft.Container(self.jobs_date_from_row, width=190),
+                        ft.Container(self.jobs_date_to_row, width=190)],
+                       spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                self.jobs_results,
+                self.jobs_pager,
+            ]
+        self._set_body(self._title("Travaux"), self._travaux_submenu(), *body)
+        if self.travaux_tab == "documents":
+            self._refresh_documents()
+        else:
+            self._refresh_jobs()
+
+    def _travaux_submenu(self) -> ft.Control:
+        """Sous-menu a deux onglets de la page Travaux."""
+        def tab_btn(key: str, label: str, icon) -> ft.Control:
+            active = self.travaux_tab == key
+            return ft.Container(
+                ft.Row([ft.Icon(icon, size=18, color=SURFACE if active else NAVY),
+                        ft.Text(label, color=SURFACE if active else NAVY,
+                                weight=ft.FontWeight.BOLD, size=13)],
+                       spacing=8, tight=True),
+                bgcolor=NAVY if active else ft.Colors.with_opacity(0.10, NAVY),
+                padding=ft.Padding.symmetric(vertical=9, horizontal=16),
+                border_radius=10, ink=True,
+                on_click=lambda e, k=key: self.show_travaux(k),
+            )
+        return ft.Row([
+            tab_btn("documents", "Documents", ft.Icons.DESCRIPTION),
+            tab_btn("jobs", "Travaux", ft.Icons.WORK),
+        ], spacing=10)
+
+    def show_jobs(self) -> None:
+        """Alias historique (retour depuis le detail d'un job)."""
+        self.show_travaux("jobs")
+
+    def _refresh_documents(self) -> None:
+        search = self.doc_search.value or ""
+        statut = self.doc_statut.value or "tous"
+        date_from = _date_iso(self.doc_date_from)
+        date_to = _date_iso(self.doc_date_to)
+        total = repo.count_documents_filtered(self.conn, search, statut, date_from, date_to)
+        self.doc_page = self._clamp_page(self.doc_page, total)
+        items = repo.list_documents_filtered(
+            self.conn, search, statut,
+            limit=PAGE_SIZE, offset=self.doc_page * PAGE_SIZE,
+            date_from=date_from, date_to=date_to,
+        )
+        # Barre de lot contextuelle : visible seulement sur un filtre de statut
+        # actionnable (brouillon/erreur -> generer ; en_attente/erreur_envoi -> envoyer).
+        action = self._doc_batch_action()
+        if action:
+            self.doc_batch_bar.content = self._doc_batch_bar_content(action)
+        else:
+            self.doc_batch_bar.content = None
+            self.doc_selected.clear()
+        rows = [self._doc_line_row(d, pt, selectable=bool(action)) for d, pt in items]
+        if rows:
+            liste = ft.Column(rows, spacing=8)
+        elif search.strip():
+            liste = ft.Text("Aucun document ne correspond à votre recherche.", color=MUTED)
+        elif date_from.strip() or date_to.strip():
+            liste = ft.Text("Aucun document sur la période sélectionnée.", color=MUTED)
+        else:
+            liste = ft.Text("Aucun document.", color=MUTED)
+
+        def on_page(idx):
+            self.doc_page = idx
+            self._refresh_documents()
+
+        self.doc_results.content = self._card(liste)
+        self.doc_pager.content = self._pagination(self.doc_page, total, on_page)
+        self.page.update()
+
+    def _doc_line_row(self, d: Document, patient: Patient,
+                      selectable: bool = False) -> ft.Control:
+        """Ligne de la page Documents : case de selection (en mode lot), cellule
+        patient cliquable + actions (ouvrir le fichier, generer un brouillon,
+        envoyer un email unitaire)."""
+        label, color = _STATUT_LABELS.get(d.statut, (d.statut, MUTED))
+        sub = " · ".join(filter(None, [
+            _humanize(d.type),
+            d.date_envoi or d.date_generation or "",
+        ]))
+        cells: list[ft.Control] = []
+        if selectable:
+            cells.append(ft.Checkbox(
+                value=d.id in self.doc_selected,
+                on_change=lambda e, did=d.id: self._doc_toggle_select(did, e.control.value)))
+        actions: list[ft.Control] = []
+        if d.statut in ("brouillon", "erreur"):
+            tip = "Générer le document" if d.statut == "brouillon" else "Réessayer la génération"
+            actions.append(ft.IconButton(
+                ft.Icons.PLAY_CIRCLE_OUTLINE, tooltip=tip, icon_color=NAVY,
+                on_click=lambda e, dd=d: self._render_draft(e, dd)))
+        else:
+            actions.append(ft.IconButton(
+                ft.Icons.FOLDER_OPEN, tooltip="Ouvrir le fichier",
+                on_click=lambda e, dd=d: self._open_file(dd)))
+        if d.email and d.statut in ("en_attente_envoi", "erreur_envoi"):
+            actions.append(ft.IconButton(
+                ft.Icons.SEND, tooltip="Envoyer par email", icon_color=NAVY,
+                on_click=lambda e, dd=d: self._send_dialog(dd)))
+        cells += [
+            ft.Icon(ft.Icons.PICTURE_AS_PDF if d.output_format == "pdf" else ft.Icons.IMAGE,
+                    color=TEAL_DARK),
+            ft.Column([
+                ft.TextButton(
+                    patient.display, tooltip="Ouvrir la fiche patient",
+                    on_click=lambda e, pid=patient.id: self.show_patient_detail(pid)),
+                ft.Text(sub, size=12, color=MUTED),
+            ], spacing=0, expand=True),
+            ft.Text(_doc_label(d), color=TEXT, width=160),
+            ft.Container(ft.Text(label, size=12, color=color),
+                         bgcolor=ft.Colors.with_opacity(0.12, color),
+                         padding=ft.Padding.symmetric(vertical=4, horizontal=10),
+                         border_radius=20),
+            *actions,
+        ]
+        return ft.Row(cells, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def _after_doc_change(self) -> None:
+        """Rafraichit la bonne vue apres une action document (generation/envoi) :
+        la liste Documents si on y est, sinon la fiche patient courante."""
+        if self.current_view == "documents":
+            self._refresh_documents()
+        elif self.current_patient:
+            self.show_patient_detail(self.current_patient.id)
+
+    def _refresh_jobs(self, conn: sqlite3.Connection | None = None) -> None:
+        conn = conn or self.conn
+        date_from = _date_iso(self.jobs_date_from)
+        date_to = _date_iso(self.jobs_date_to)
+        total = repo.count_jobs(conn, date_from, date_to)
+        self.jobs_page = self._clamp_page(self.jobs_page, total)
+        jobs = repo.list_jobs(
+            conn, limit=PAGE_SIZE, offset=self.jobs_page * PAGE_SIZE,
+            date_from=date_from, date_to=date_to)
+        rows = [self._job_row(j) for j in jobs]
+        if rows:
+            liste = ft.Column(rows, spacing=8)
+        elif date_from.strip() or date_to.strip():
+            liste = ft.Text("Aucun job sur la période sélectionnée.", color=MUTED)
+        else:
+            liste = ft.Text("Aucun job lancé pour l'instant.", color=MUTED)
+
+        def on_page(idx):
+            self.jobs_page = idx
+            self._refresh_jobs()
+
+        self.jobs_results.content = self._card(liste)
+        self.jobs_pager.content = self._pagination(self.jobs_page, total, on_page)
+        self.page.update()
+
+    def _job_row(self, j: Job) -> ft.Control:
+        label, color = _JOB_STATUT_LABELS.get(j.statut, (j.statut, MUTED))
+        kind_label = "Génération" if j.kind == "generation" else "Envoi email"
+        progress = (j.done / j.total) if j.total else 0.0
+        chip = ft.Container(
+            ft.Text(label, size=12, color=color),
+            bgcolor=ft.Colors.with_opacity(0.12, color),
+            padding=ft.Padding.symmetric(vertical=4, horizontal=10), border_radius=20,
+        )
+        counts = (f"{j.done}/{j.total} traité(s) · {j.ok} ok · "
+                  f"{j.skipped} ignoré(s) · {j.errors} erreur(s)")
+        return ft.Container(
+            content=ft.Row([
+                ft.Icon(ft.Icons.BUILD_CIRCLE if j.kind == "generation"
+                        else ft.Icons.OUTGOING_MAIL, color=TEAL_DARK),
+                ft.Column([
+                    ft.Text(f"#{j.id} · {kind_label} — {_humanize(j.doc_type)}",
+                            weight=ft.FontWeight.W_600, color=TEXT),
+                    ft.Text(counts, size=12, color=MUTED),
+                    ft.ProgressBar(value=progress, color=NAVY,
+                                   bgcolor=ft.Colors.with_opacity(0.15, NAVY), width=320),
+                    ft.Text(j.created_at or "", size=11, color=MUTED),
+                ], spacing=4, expand=True),
+                chip,
+                ft.Icon(ft.Icons.CHEVRON_RIGHT, color=MUTED),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=10, border_radius=10, ink=True,
+            on_click=lambda e, jid=j.id: self.show_job_detail(jid),
+        )
+
+    def show_job_detail(self, job_id: int,
+                        conn: sqlite3.Connection | None = None) -> None:
+        # `conn` : passe par le thread d'un job en cours (cf. show_patient_detail)
+        # pour ne pas partager self.conn entre threads.
+        conn = conn or self.conn
+        self.current_view = "job_detail"
+        self.current_job_id = job_id
+        self.rail.selected_index = 3
+        job = repo.get_job(conn, job_id)
+        if not job:
+            return self.show_jobs()
+        kind_label = "Génération" if job.kind == "generation" else "Envoi email"
+        header_row = [
+            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: self.show_jobs()),
+            ft.Text(f"Job #{job.id} — {kind_label} · {_humanize(job.doc_type)}",
+                    size=22, weight=ft.FontWeight.BOLD, color=TEXT),
+        ]
+        # Relance des erreurs : seulement si le job est fini et a des echecs.
+        if job.statut in ("termine", "termine_partiel", "erreur", "interrompu") and job.errors:
+            header_row.append(ft.Container(expand=True))
+            header_row.append(self._btn(
+                "Relancer les erreurs", lambda e, j=job: self._relaunch_failed(j),
+                icon=ft.Icons.REPLAY, busy=False))
+        header = ft.Row(header_row, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        self._set_body(header, self.job_detail_container)
+        self._refresh_job_detail(job_id, conn)
+
+    def _relaunch_failed(self, job: Job) -> None:
+        """Relance un nouveau job sur les seuls documents en échec du job donné."""
+        if self._job_running:
+            self._toast("Un job est déjà en cours.", ok=False)
+            return
+        failed = repo.list_failed_job_items(self.conn, job.id)
+        doc_ids = [it.document_id for it in failed if it.document_id]
+        if not doc_ids:
+            self._toast("Aucune erreur à relancer.", ok=False)
+            return
+        try:
+            params = json.loads(job.params) if job.params else {}
+        except (ValueError, TypeError):
+            params = {}
+        repo.log_audit(self.conn, "job_relance",
+                       f"job #{job.id} → {len(doc_ids)} document(s) en erreur")
+        self._launch_job(job.kind, job.doc_type, document_ids=doc_ids, params=params)
+
+    def _refresh_job_detail(self, job_id: int,
+                            conn: sqlite3.Connection | None = None) -> None:
+        conn = conn or self.conn
+        job = repo.get_job(conn, job_id)
+        if not job:
+            return
+        label, color = _JOB_STATUT_LABELS.get(job.statut, (job.statut, MUTED))
+        progress = (job.done / job.total) if job.total else 0.0
+        summary = self._card(ft.Column([
+            ft.Row([
+                ft.Container(ft.Text(label, size=12, color=color),
+                             bgcolor=ft.Colors.with_opacity(0.12, color),
+                             padding=ft.Padding.symmetric(vertical=4, horizontal=10),
+                             border_radius=20),
+                ft.Container(expand=True),
+                ft.Text(f"{job.done}/{job.total}", color=MUTED, size=12),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.ProgressBar(value=progress, color=NAVY,
+                           bgcolor=ft.Colors.with_opacity(0.15, NAVY)),
+            ft.Text(f"{job.ok} ok · {job.skipped} ignoré(s) · {job.errors} erreur(s)",
+                    size=12, color=MUTED),
+        ], spacing=10))
+
+        items = repo.list_job_items(conn, job_id)
+        item_rows = []
+        for it in items:
+            ilabel, icolor = _JOB_ITEM_LABELS.get(it.statut, (it.statut, MUTED))
+            patient = repo.get_patient(conn, it.patient_id) if it.patient_id else None
+            doc = repo.get_document(conn, it.document_id) if it.document_id else None
+            # Cellule patient cliquable -> fiche du patient.
+            if patient:
+                name_ctrl = ft.TextButton(
+                    patient.display, tooltip="Ouvrir la fiche patient",
+                    on_click=lambda e, pid=patient.id: self.show_patient_detail(pid))
+            else:
+                name_ctrl = ft.Text(f"Patient #{it.patient_id}",
+                                    weight=ft.FontWeight.W_600, color=TEXT)
+            # Action : ouvrir le document genere depuis la ligne (si fichier present).
+            row_actions: list[ft.Control] = []
+            if doc and doc.file_path:
+                row_actions.append(ft.IconButton(
+                    ft.Icons.FOLDER_OPEN, tooltip="Ouvrir le fichier", icon_color=NAVY,
+                    on_click=lambda e, dd=doc: self._open_file(dd)))
+            item_rows.append(ft.Row([
+                ft.Container(ft.Text(ilabel, size=12, color=icolor),
+                             bgcolor=ft.Colors.with_opacity(0.12, icolor),
+                             padding=ft.Padding.symmetric(vertical=4, horizontal=10),
+                             border_radius=20, width=90, alignment=ft.Alignment.CENTER),
+                ft.Column([
+                    name_ctrl,
+                    ft.Text(it.message or "", size=12,
+                            color=RED if it.statut == "erreur" else MUTED),
+                ], spacing=2, expand=True),
+                *row_actions,
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+        detail = (ft.Column(item_rows, spacing=8) if item_rows
+                  else ft.Text("Aucune ligne traitée pour l'instant.", color=MUTED))
+
+        self.job_detail_container.content = ft.Column([
+            summary,
+            ft.Text("Détail par patient", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
+            self._card(detail),
+        ], spacing=18)
+        self.page.update()
+
+    # --- Dialogues ------------------------------------------------------------
+    def _patient_dialog(self, p: Patient | None = None) -> None:
+        is_edit = p is not None
+        nom = ft.TextField(label="Nom *", value=p.nom if p else "", autofocus=True)
+        prenom = ft.TextField(label="Prénom *", value=p.prenom if p else "")
+        email = ft.TextField(label="Email", value=(p.email if p else "") or "")
+        tel = ft.TextField(label="Téléphone", value=(p.telephone if p else "") or "")
+        ddn_row, ddn = self._date_field(
+            "Date de naissance", (p.date_naissance if p else "") or "", editable=True)
+        adresse = ft.TextField(label="Adresse", value=(p.adresse if p else "") or "", multiline=True, min_lines=1, max_lines=3)
+        notes = ft.TextField(label="Notes", value=(p.notes if p else "") or "", multiline=True, min_lines=1, max_lines=3)
+        warn = ft.Text("", color=NAVY, size=12)
+
+        def on_save(e):
+            if not nom.value.strip() or not prenom.value.strip():
+                warn.value = "Nom et prénom sont obligatoires."
+                self.page.update()
+                return
+            ddn_iso, ddn_ok = _fr_to_iso(ddn.value)
+            if not ddn_ok:
+                warn.value = "Date de naissance invalide (format attendu : JJ/MM/AAAA)."
+                self.page.update()
+                return
+            # Detection de doublon a la creation
+            if not is_edit:
+                matches = repo.find_matches(self.conn, nom.value, prenom.value)
+                if matches and not getattr(on_save, "_confirmed", False):
+                    warn.value = (f"⚠ Un patient « {matches[0].display} » (#{matches[0].id}) existe déjà. "
+                                  "Cliquez de nouveau sur Enregistrer pour créer quand même un doublon.")
+                    on_save._confirmed = True
+                    self.page.update()
+                    return
+            data = dict(
+                nom=nom.value, prenom=prenom.value, email=email.value or None,
+                telephone=tel.value or None, date_naissance=ddn_iso,
+                adresse=adresse.value or None, notes=notes.value or None,
+            )
+            if is_edit:
+                for k, v in data.items():
+                    setattr(p, k, v)
+                repo.update_patient(self.conn, p)
+                repo.log_audit(self.conn, "patient_modifie", f"#{p.id} {p.display}")
+                self._close_dialog()
+                self._toast("Patient mis à jour.")
+                self.show_patient_detail(p.id)
+            else:
+                new = repo.create_patient(self.conn, Patient(id=None, **data))
+                repo.log_audit(self.conn, "patient_cree", f"#{new.id} {new.display}")
+                self._close_dialog()
+                self._toast("Patient créé.")
+                self.show_patient_detail(new.id)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Modifier le patient" if is_edit else "Nouveau patient"),
+            content=ft.Container(
+                ft.Column([nom, prenom, email, tel, ddn_row, adresse, notes, warn],
+                          tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=420, height=460,
+            ),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Enregistrer", on_save, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _resolve_fields(self, template: templates.Template) -> list[TemplateField]:
+        """Variables a demander pour un template : config enregistree, sinon auto-detection.
+
+        Exclut les balises auto-remplies depuis la fiche patient.
+        """
+        fields = repo.list_template_fields(self.conn, template.name)
+        if fields:
+            return [f for f in fields if f.tag.upper() not in generator.AUTO_PATIENT_TAGS]
+        out: list[TemplateField] = []
+        for tag in extract_placeholders(template.path):
+            if tag in generator.AUTO_PATIENT_TAGS:
+                continue
+            out.append(TemplateField(template.name, tag, _humanize(tag), _guess_type(tag), ""))
+        return out
+
+    def _generate_dialog(self, p: Patient, draft: Document | None = None) -> None:
+        tpls = templates.list_templates()
+        if not tpls:
+            self._toast("Aucun modèle disponible. Créez-en un dans « Modèles ».", ok=False)
+            return
+        # Edition d'un brouillon : pre-remplir depuis les saisies memorisees.
+        draft_vars: dict[str, str] = {}
+        if draft and draft.variables:
+            try:
+                draft_vars = json.loads(draft.variables)
+            except (ValueError, TypeError):
+                draft_vars = {}
+        tpl_names = [t.name for t in tpls]
+        init_tpl = (draft.template if (draft and draft.template in tpl_names)
+                    else tpls[0].name)
+        tpl_dd = ft.Dropdown(
+            label="Modèle / type de document",
+            color=TEXT, text_style=ft.TextStyle(color=TEXT),
+            options=[ft.dropdown.Option(key=t.name, text=t.label) for t in tpls],
+            value=init_tpl,
+        )
+        fmt = ft.Dropdown(label="Format", value=(draft.output_format if draft else "jpg"),
+                          color=TEXT, text_style=ft.TextStyle(color=TEXT),
+                          options=[ft.dropdown.Option("jpg"), ft.dropdown.Option("pdf")])
+        paie_montant = ft.TextField(
+            label="Montant du paiement", value="",
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+
+        def on_paie_toggle(e):
+            paie_montant.disabled = not add_paie.value
+            self.page.update()
+
+        add_paie = ft.Checkbox(
+            label="Créer un paiement en attente", value=True, on_change=on_paie_toggle,
+        )
+        status = ft.Text("", color=RED, size=12)
+        fields_col = ft.Column([], tight=True, spacing=10)
+        getters: dict[str, callable] = {}
+
+        def sync_paie_montant():
+            """Pré-remplit le montant du paiement depuis la balise montant du modèle."""
+            for tag, get in getters.items():
+                if tag.upper() in generator._MONTANT_KEYS:
+                    paie_montant.value = (get() or "").strip()
+                    break
+
+        def build_fields():
+            getters.clear()
+            controls = []
+            tpl = templates.get_template(tpl_dd.value)
+            for f in (self._resolve_fields(tpl) if tpl else []):
+                # En edition, la valeur memorisee du brouillon prime sur le defaut.
+                init = draft_vars.get(f.tag, f.default_value or "")
+                if f.type == "date":
+                    row, field = self._date_field(f.label or f.tag, init)
+                    controls.append(row)
+                    getters[f.tag] = (lambda fld=field: fld.value)
+                elif f.type == "paragraph":
+                    tf = ft.TextField(
+                        label=f.label or f.tag, value=init,
+                        multiline=True, min_lines=3, max_lines=8,
+                    )
+                    controls.append(tf)
+                    getters[f.tag] = (lambda c=tf: c.value)
+                else:
+                    is_montant = f.tag.upper() in generator._MONTANT_KEYS
+                    tf = ft.TextField(
+                        label=f.label or f.tag, value=init,
+                        keyboard_type=ft.KeyboardType.NUMBER if f.type == "number" else None,
+                        on_change=(lambda e: sync_paie_montant()) if is_montant else None,
+                    )
+                    controls.append(tf)
+                    getters[f.tag] = (lambda c=tf: c.value)
+            if not controls:
+                controls.append(ft.Text("Aucune variable à saisir pour ce modèle.",
+                                        color=MUTED, size=12))
+            fields_col.controls = controls
+            sync_paie_montant()
+            self.page.update()
+
+        def on_tpl_change(e):
+            build_fields()
+
+        tpl_dd.on_select = on_tpl_change
+
+        def on_save_draft(e):
+            tpl = templates.get_template(tpl_dd.value)
+            if not tpl:
+                status.value = "Modèle introuvable."; self.page.update(); return
+            variables = {tag: (get() or "") for tag, get in getters.items()}
+            try:
+                if draft is not None:
+                    generator.update_draft(
+                        self.conn, draft, variables=variables, output_format=fmt.value)
+                    repo.log_audit(self.conn, "brouillon_modifie",
+                                   f"#{draft.id} {tpl.name} (patient #{p.id})")
+                else:
+                    montant_paie = generator.parse_montant_str(paie_montant.value)
+                    doc = generator.save_draft(
+                        self.conn, p, tpl, variables=variables, output_format=fmt.value,
+                    )
+                    repo.log_audit(self.conn, "brouillon_cree",
+                                   f"#{doc.id} {tpl.name} (patient #{p.id})")
+                    montant = montant_paie if montant_paie else doc.montant
+                    # Paiement cree uniquement pour un montant strictement positif.
+                    if add_paie.value and montant and montant > 0:
+                        repo.create_paiement(self.conn, Paiement(
+                            id=None, patient_id=p.id, document_id=doc.id, montant=montant,
+                            statut="en_attente", notes=f"{tpl.label}",
+                        ))
+            except Exception as exc:  # noqa: BLE001
+                status.value = f"Échec : {exc}"; status.color = RED
+                self.page.update(); return
+            self._close_dialog()
+            self._toast("Brouillon mis à jour." if draft is not None else "Brouillon enregistré.")
+            self.show_patient_detail(p.id)
+
+        build_fields()
+        is_edit = draft is not None
+        body_controls = [tpl_dd, fields_col, fmt]
+        if not is_edit:  # le paiement n'est cree qu'a la creation du brouillon
+            body_controls += [add_paie, paie_montant]
+        body_controls.append(status)
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Modifier le brouillon — {p.display}" if is_edit
+                          else f"Nouveau brouillon — {p.display}"),
+            content=ft.Container(
+                ft.Column(body_controls, tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=420, height=460,
+            ),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Enregistrer" if is_edit else "Enregistrer en brouillon",
+                          on_save_draft, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _paiement_dialog(self, p: Patient) -> None:
+        montant = ft.TextField(label="Montant", value="0", autofocus=True)
+        echeance_row, echeance = self._date_field("Échéance", "")
+        notes = ft.TextField(label="Libellé", value="")
+        status = ft.Text("", color=RED, size=12)
+
+        def on_add(e):
+            try:
+                montant_val = float((montant.value or "0").replace(",", "."))
+            except ValueError:
+                status.value = "Montant invalide."; self.page.update(); return
+            if montant_val <= 0:
+                status.value = "Le montant doit être strictement supérieur à 0."
+                self.page.update(); return
+            ech_iso, ech_ok = _fr_to_iso(echeance.value)
+            if not ech_ok:
+                status.value = "Échéance invalide (format attendu : JJ/MM/AAAA)."
+                self.page.update(); return
+            repo.create_paiement(self.conn, Paiement(
+                id=None, patient_id=p.id, montant=montant_val, statut="en_attente",
+                date_echeance=ech_iso, notes=notes.value or None,
+            ))
+            self._close_dialog()
+            self._toast("Paiement ajouté.")
+            self.show_patient_detail(p.id)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Nouveau paiement"),
+            content=ft.Container(ft.Column([montant, echeance_row, notes, status], tight=True, spacing=10), width=380),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Ajouter", on_add, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _new_template_dialog(self) -> None:
+        name = ft.TextField(label="Nom du modèle (ex. devis, recu)", autofocus=True)
+        status = ft.Text("", color=RED, size=12)
+
+        def on_create(e):
+            try:
+                t = templates.create_template(name.value or "")
+            except Exception as exc:  # noqa: BLE001
+                status.value = str(exc); self.page.update(); return
+            self._close_dialog()
+            self._toast("Modèle créé. Ouverture dans Word…")
+            templates.open_in_word(t)
+            self.show_templates()
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Nouveau modèle"),
+            content=ft.Container(ft.Column([name, status], tight=True, spacing=10), width=360),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Créer et ouvrir", on_create, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    # --- Actions --------------------------------------------------------------
+    def _edit_template(self, t: templates.Template) -> None:
+        try:
+            templates.open_in_word(t)
+            self._toast(f"Ouverture de « {t.label} » dans Word…")
+        except Exception as exc:  # noqa: BLE001
+            self._toast(f"Impossible d'ouvrir : {exc}", ok=False)
+
+    def _rename_template_dialog(self, t: templates.Template) -> None:
+        name = ft.TextField(label="Nouveau nom du modèle", value=t.name, autofocus=True)
+        status = ft.Text("", color=RED, size=12)
+
+        def on_rename(e):
+            if not (name.value or "").strip():
+                status.value = "Le nom ne peut pas être vide."; self.page.update(); return
+            try:
+                templates.rename_template(t, name.value)
+            except Exception as exc:  # noqa: BLE001
+                status.value = str(exc); self.page.update(); return
+            self._close_dialog()
+            self._toast("Modèle renommé.")
+            self.show_templates()
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Renommer « {t.label} »"),
+            content=ft.Container(ft.Column([name, status], tight=True, spacing=10), width=360),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Renommer", on_rename, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _delete_template_dialog(self, t: templates.Template) -> None:
+        def on_delete(e):
+            try:
+                templates.delete_template(t)
+            except Exception as exc:  # noqa: BLE001
+                self._close_dialog()
+                self._toast(f"Suppression impossible : {exc}", ok=False)
+                return
+            self._close_dialog()
+            self._toast("Modèle supprimé.")
+            self.show_templates()
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Supprimer le modèle"),
+            content=ft.Text(f"Supprimer définitivement le modèle « {t.label} » ? "
+                            "Le fichier Word sera effacé."),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Supprimer", on_delete, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _open_file(self, d: Document) -> None:
+        import os
+        path = d.file_path or ""
+        if path and Path(path).exists():
+            try:
+                os.startfile(path)  # type: ignore[attr-defined]
+            except Exception as exc:  # noqa: BLE001
+                self._toast(f"Ouverture impossible : {exc}", ok=False)
+        else:
+            self._toast("Fichier introuvable.", ok=False)
+
+    def _send_dialog(self, d: Document) -> None:
+        mtemplates = repo.list_mail_templates(self.conn)
+        if not mtemplates:
+            self._toast("Aucun modèle d'email. Ajoutez-en un dans l'onglet « Emails ».", ok=False)
+            self.show_mail_templates()
+            return
+
+        default = repo.get_default_mail_template(self.conn)
+        tpl_dd = ft.Dropdown(
+            label="Modèle d'email",
+            color=TEXT, text_style=ft.TextStyle(color=TEXT),
+            options=[ft.dropdown.Option(key=str(t.id), text=f"{t.name}  (#{t.mailjet_template_id})")
+                     for t in mtemplates],
+            value=str(default.id) if default else str(mtemplates[0].id),
+        )
+        status = ft.Text("", color=RED, size=12)
+        by_id = {str(t.id): t for t in mtemplates}
+
+        def on_send(e):
+            chosen = by_id.get(tpl_dd.value)
+            if not chosen:
+                status.value = "Choisissez un modèle."; self.page.update(); return
+            try:
+                from src.config import load_config
+                config = load_config()
+            except Exception as exc:  # noqa: BLE001
+                status.value = f"config.ini invalide : {exc}"; self.page.update(); return
+
+            def work():
+                generator.send_document(
+                    self.conn, d, config, template_id=chosen.mailjet_template_id
+                )
+                repo.log_audit(self.conn, "email_envoye",
+                               f"document #{d.id} → {d.email}")
+                self._close_dialog()
+                self._toast("Email envoyé.")
+                self._after_doc_change()
+
+            self._run_busy(e.control, status, work)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Envoyer par email"),
+            content=ft.Container(
+                ft.Column([
+                    ft.Text(f"Destinataire : {d.email}", color=MUTED, size=13),
+                    tpl_dd, status,
+                ], tight=True, spacing=12),
+                width=400,
+            ),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Envoyer", on_send, icon=ft.Icons.SEND, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _encaisser(self, pa: Paiement, back_to_paiements: bool = False) -> None:
+        """Ouvre un dialog pour saisir le mode de reglement, puis encaisse."""
+        mode = ft.RadioGroup(
+            value=pa.mode or "especes",
+            content=ft.Column(
+                [ft.Radio(value=k, label=v) for k, v in _MODE_LABELS.items()],
+                tight=True, spacing=2,
+            ),
+        )
+        warn = ft.Text("", color=RED, size=12)
+
+        def confirm(e):
+            if not mode.value:
+                warn.value = "Sélectionnez un mode de paiement."
+                self.page.update()
+                return
+            repo.mark_paiement_encaisse(self.conn, pa.id, mode=mode.value)
+            repo.log_audit(
+                self.conn, "paiement_encaisse",
+                f"#{pa.id} {pa.montant:.2f} · {_MODE_LABELS[mode.value]} "
+                f"(patient #{pa.patient_id})")
+            self._close_dialog()
+            self._toast("Paiement encaissé.")
+            if back_to_paiements:
+                self.show_paiements()
+            elif self.current_patient:
+                self.show_patient_detail(self.current_patient.id)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Encaisser le paiement"),
+            content=ft.Container(
+                ft.Column([
+                    ft.Text(f"Montant : {pa.montant:.2f}", color=MUTED),
+                    ft.Text("Mode de règlement", weight=ft.FontWeight.BOLD, color=TEXT),
+                    mode, warn,
+                ], tight=True, spacing=10),
+                width=320,
+            ),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Encaisser", confirm, icon=ft.Icons.CHECK_CIRCLE, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _annuler_paiement(self, pa: Paiement, back_to_paiements: bool = False) -> None:
+        """Confirme puis supprime un paiement en attente (annulation)."""
+        def confirm(e):
+            repo.delete_paiement(self.conn, pa.id)
+            repo.log_audit(
+                self.conn, "paiement_annule",
+                f"#{pa.id} {pa.montant:.2f} (patient #{pa.patient_id})")
+            self._close_dialog()
+            self._toast("Paiement annulé.")
+            if back_to_paiements:
+                self.show_paiements()
+            elif self.current_patient:
+                self.show_patient_detail(self.current_patient.id)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Annuler le paiement"),
+            content=ft.Text(
+                f"Annuler définitivement ce paiement en attente de "
+                f"{pa.montant:.2f} ({pa.notes or 'Paiement'}) ?"),
+            actions=[
+                ft.TextButton("Retour", on_click=lambda e: self._close_dialog()),
+                self._btn("Annuler le paiement", confirm,
+                          icon=ft.Icons.CANCEL, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+
+# --- Helpers de presentation --------------------------------------------------
+
+def _initials(p: Patient) -> str:
+    a = (p.prenom[:1] or "").upper()
+    b = (p.nom[:1] or "").upper()
+    return (b + a) or "?"
+
+
+def _doc_label(d: Document) -> str:
+    base = d.type.replace("_", " ").capitalize()
+    if d.montant:
+        return f"{base} — {d.montant:.2f}"
+    return base
+
+
+def _kv(key: str, value: str) -> ft.Control:
+    return ft.Row([
+        ft.Text(key, color=MUTED, width=150),
+        ft.Text(value, color=TEXT, expand=True, selectable=True),
+    ])
+
+
+def _humanize(tag: str) -> str:
+    return tag.replace("_", " ").strip().capitalize()
+
+
+def _guess_type(tag: str) -> str:
+    t = tag.upper()
+    if "DATE" in t:
+        return "date"
+    if any(k in t for k in ("MONTANT", "PRIX", "TARIF")):
+        return "number"
+    return "text"
+
+
+def _asset(name: str) -> str:
+    """Chemin absolu d'un fichier ressource (logo, etc.).
+
+    En mode gele (PyInstaller), les ressources embarquees sont extraites dans
+    sys._MEIPASS ; en dev, elles sont a la racine du projet.
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    else:
+        base = Path(__file__).resolve().parent.parent
+    return str(base / name)
+
+
+# --- Point d'entree -----------------------------------------------------------
+
+def _show_db_too_new(page: ft.Page, err: SchemaTooNewError) -> None:
+    """Ecran bloquant : la base vient d'une version plus recente que cet exe.
+
+    On refuse d'ouvrir (et donc d'ecrire avec un schema plus ancien) pour ne pas
+    risquer de perdre des donnees. L'utilisateur doit installer la derniere
+    version de l'application.
+    """
+    page.add(
+        ft.Container(
+            expand=True,
+            alignment=ft.alignment.center,
+            padding=40,
+            content=ft.Column(
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=16,
+                tight=True,
+                controls=[
+                    ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=AMBER, size=64),
+                    ft.Text(
+                        "Base de données plus récente que l'application",
+                        size=22, weight=ft.FontWeight.BOLD, color=TEXT,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    ft.Text(
+                        f"La base a été créée ou mise à jour par une version plus "
+                        f"récente (schéma v{err.disk_version}) que cette application "
+                        f"(schéma v{err.app_version}).\n\n"
+                        "Pour éviter toute perte de données, l'ouverture est bloquée. "
+                        "Veuillez installer la dernière version de l'application.",
+                        size=15, color=MUTED, text_align=ft.TextAlign.CENTER,
+                    ),
+                ],
+            ),
+        )
+    )
+    page.update()
+
+
+def main(page: ft.Page) -> None:
+    page.title = "Cabinet Dr Aslem Gouiaa"
+    page.bgcolor = BG
+    page.padding = 0
+    page.theme = ft.Theme(color_scheme_seed=NAVY, font_family="Segoe UI")
+    # L'app est entierement concue en clair (cartes/fonds blancs explicites).
+    # On force le mode clair pour que les modales, leurs champs et leurs
+    # dropdowns ne basculent pas en sombre quand Windows est en theme sombre.
+    page.theme_mode = ft.ThemeMode.LIGHT
+    # Taille de repli si l'utilisateur restaure la fenetre (bouton "Restaurer").
+    page.window.width = 1100
+    page.window.height = 760
+    # Demarrage agrandi au maximum, en gardant la barre de titre Windows
+    # (boutons reduire / restaurer / fermer visibles).
+    page.window.maximized = True
+    page.window.icon = _asset("logo.ico")  # icone de la fenetre (barre des taches)
+
+    # Sauvegarde horodatee AVANT toute migration (best-effort) : connect() peut
+    # migrer la base, donc on capture l'etat d'avant. connect() ajoute en plus
+    # une copie etiquetee non purgee dans backups/pre-migration/ si le schema
+    # change, et refuse d'ouvrir une base plus recente que cet exe (anti-downgrade).
+    backup.backup_db()
+    try:
+        conn = connect()
+    except SchemaTooNewError as e:
+        _show_db_too_new(page, e)
+        return
+
+    # Un job 'en_cours' ne survit pas a une fermeture : le marquer interrompu
+    # (a faire AVANT tout lancement de job dans cette session).
+    repo.mark_stale_jobs_interrupted(conn)
+    repo.log_audit(conn, "demarrage", "Ouverture de l'application")
+
+    # Amorce : reprend le template Mailjet de config.ini comme modele par defaut.
+    if not repo.list_mail_templates(conn):
+        try:
+            from src.config import load_config
+
+            tid = load_config().mail.template_id
+            if tid:
+                repo.create_mail_template(conn, repo.MailTemplate(
+                    id=None, name="Par défaut", mailjet_template_id=tid, is_default=True))
+        except Exception:  # noqa: BLE001
+            pass
+
+    CrmApp(page, conn)
+
+
+def run() -> None:
+    """Lance l'app.
+
+    Par defaut : fenetre desktop native. Pour servir l'app en web (accessible
+    depuis Chrome), definir CRM_WEB=1 (et au besoin CRM_PORT / CRM_HOST) :
+
+        CRM_WEB=1 python -m crm          # http://localhost:8550
+        CRM_WEB=1 CRM_PORT=9000 ...      # port choisi
+        CRM_WEB=1 CRM_HOST=0.0.0.0 ...   # accessible depuis le reseau (LAN)
+    """
+    import os
+
+    if os.environ.get("CRM_WEB") in ("1", "true", "True"):
+        ft.run(
+            main,
+            view=ft.AppView.WEB_BROWSER,
+            host=os.environ.get("CRM_HOST"),
+            port=int(os.environ.get("CRM_PORT", "8550")),
+        )
+    else:
+        ft.run(main)
+
+
+if __name__ == "__main__":
+    run()

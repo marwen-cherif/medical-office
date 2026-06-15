@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+*.spec
+# ...sauf les specs de build du CRM (necessaires a build-crm.bat)
+!crm-desktop.spec
+!crm-web.spec
+build/
+dist/
+.venv/
+venv/
+
+# Sortie et fichiers utilisateur (garder le dossier via .gitkeep)
+output/*
+
+# Sauvegardes de la base (donnees patients - ne pas versionner)
+backups/
+
+# Base de donnees locale du CRM (donnees patients - ne pas versionner)
+data/
+crm/__pycache__/
+
+# Secrets Mailjet (cles API) - ne pas versionner
+config.ini
+
+# Modeles utilisateur (garder le dossier, pas les .docx perso)
+templates/*.docx
+
+# Garder les dossiers
+!output/.gitkeep
