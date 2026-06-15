@@ -22,6 +22,9 @@ crm/__pycache__/
 # Secrets Mailjet (cles API) - ne pas versionner
 config.ini
 
+# Reglages locaux Claude Code (specifiques a la machine)
+.claude/settings.local.json
+
 # Modeles utilisateur (garder le dossier, pas les .docx perso)
 templates/*.docx
 
