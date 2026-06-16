@@ -33,7 +33,8 @@ Editer `config.ini` :
   `{{var:prenom}}`, `{{var:nom}}`, `{{var:montant}}`, `{{var:acte}}`, `{{var:date}}`,
   `{{var:type_document}}`. `mail.subject` (optionnel) surcharge le sujet du template.
 
-> `config.ini` contient des cles API Mailjet : a traiter comme des secrets.
+> `config.ini` contient des cles API Mailjet : a traiter comme des secrets. Le fichier est
+> git-ignore (jamais versionne) — ne pas le retirer du `.gitignore`.
 
 ## Lancer l'application
 

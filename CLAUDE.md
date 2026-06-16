@@ -60,8 +60,9 @@ Mailjet credentials, the sender address, output format (`jpg`/`pdf`), and the Ma
 app dir — which is the exe's folder when frozen (`sys.frozen`), else the project root
 (see `_app_dir()` in `src/config.py` and `app_dir()` in `crm/db.py`).
 
-> Note: `config.ini` currently contains live Mailjet API keys committed to the repo.
-> Treat them as secrets — don't echo them, and flag if asked to share/commit them.
+> Note: `config.ini` holds live Mailjet API keys and is **git-ignored** (never committed —
+> verified absent from history). Treat the keys as secrets — don't echo them, and flag if
+> asked to share/commit them or to remove `config.ini` from `.gitignore`.
 
 ## Architecture
 
