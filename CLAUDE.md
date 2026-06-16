@@ -103,6 +103,13 @@ The CRM keeps its state in **`data/cabinet.db`** and reuses the `src/` engine
   opening them in Word for editing. Template `<TAG>`s are auto-detected via
   `src.doc_filler.extract_placeholders`; tags in `AUTO_PATIENT_TAGS` (NOM, PRENOM, EMAIL,
   TELEPHONE, ADRESSE, DATE_NAISSANCE) are filled from the patient, the rest are prompted.
+- `crm/printing.py` — impression directe des documents générés (JPG/PDF) vers une
+  imprimante Windows via GDI (pywin32 `win32print`/`win32ui`, déjà embarqué pour Word) :
+  pixelise le PDF avec `fitz`, met l'image à l'échelle de la page avec Pillow
+  (`ImageWin.Dib`) et l'envoie sans boîte de dialogue. L'imprimante cible est choisie
+  une fois dans Paramétrage › Imprimante et mémorisée dans `meta` (clé `printer_name`,
+  via `repo.get_setting`/`set_setting` — pas de migration). En mode web, l'impression
+  s'exécute côté serveur (machine où tourne l'app), pas dans le navigateur.
 - `crm/backup.py` — timestamped copy of `cabinet.db` into `backups/` on each startup,
   keeping the latest `KEEP` (10).
 - `crm/app.py` — the entire Flet UI (large single file). Palette + status-label maps live

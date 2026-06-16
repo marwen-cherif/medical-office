@@ -12,10 +12,11 @@ binaries = []
 hiddenimports = [
     'win32com.client', 'pythoncom', 'fitz', 'docx', 'requests',
     'uvicorn', 'websockets',
+    'win32print', 'win32ui',  # impression directe (crm/printing.py)
     'crm._build_info',  # genere par build-crm.bat (numero de build) ; absent = avertissement
 ]
 # Embarque les assets web de Flet + le serveur (uvicorn/fastapi) + back-end.
-for pkg in ('flet_web', 'uvicorn', 'fastapi', 'win32com', 'docx'):
+for pkg in ('flet_web', 'uvicorn', 'fastapi', 'win32com', 'docx', 'PIL'):
     d, b, h = collect_all(pkg)
     datas += d; binaries += b; hiddenimports += h
 

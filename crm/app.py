@@ -22,7 +22,7 @@ from flet import canvas as cv
 
 from src.doc_filler import extract_placeholders
 
-from . import backup, generator, repo, templates, version
+from . import backup, generator, printing, repo, templates, version
 from .db import SchemaTooNewError, connect
 from .repo import Document, Job, Paiement, Patient, TemplateField
 
@@ -38,6 +38,10 @@ BORDER = "#DCE3EC"      # bordure froide visible
 GREEN = "#1E7E45"       # vert fonce (encaisse / envoye)
 RED = "#B5271B"         # rouge fonce (erreurs)
 AMBER = "#B45309"       # ambre fonce (succes partiel d'un job)
+
+
+# Cle `meta` memorisant l'imprimante cible choisie dans Parametrage > Imprimante.
+PRINTER_KEY = "printer_name"
 
 
 _STATUT_LABELS = {
@@ -1614,6 +1618,9 @@ class CrmApp:
             actions.append(ft.IconButton(
                 ft.Icons.FOLDER_OPEN, tooltip="Ouvrir le fichier",
                 on_click=lambda e, dd=d: self._open_file(dd)))
+            actions.append(ft.IconButton(
+                ft.Icons.PRINT, tooltip="Imprimer", icon_color=NAVY,
+                on_click=lambda e, dd=d: self._print_file(e, dd)))
         if d.email and d.statut in ("en_attente_envoi", "erreur_envoi"):
             actions.append(ft.IconButton(ft.Icons.SEND, tooltip="Envoyer par email", icon_color=NAVY,
                                          on_click=lambda e, dd=d: self._send_dialog(dd)))
@@ -2112,6 +2119,9 @@ class CrmApp:
                 self.tpl_results,
                 self.tpl_pager,
             ]
+        elif self.param_tab == "printer":
+            action = None
+            body = [self._printer_settings_card()]
         else:
             action = self._btn("Nouveau modèle", lambda e: self._mail_template_dialog(),
                                icon=ft.Icons.ADD, shortcut=SC_NEW, busy=False)
@@ -2125,11 +2135,11 @@ class CrmApp:
         self._set_body(self._title("Paramétrage", action), self._param_submenu(), *body)
         if self.param_tab == "templates":
             self._refresh_templates()
-        else:
+        elif self.param_tab == "mail":
             self._refresh_mail_templates()
 
     def _param_submenu(self) -> ft.Control:
-        """Sous-menu a deux onglets de la page Parametrage."""
+        """Sous-menu a trois onglets de la page Parametrage."""
         def tab_btn(key: str, label: str, icon) -> ft.Control:
             active = self.param_tab == key
             return ft.Container(
@@ -2145,7 +2155,79 @@ class CrmApp:
         return ft.Row([
             tab_btn("templates", "Modèles de documents", ft.Icons.DESCRIPTION),
             tab_btn("mail", "Modèles d'email", ft.Icons.MARK_EMAIL_READ),
+            tab_btn("printer", "Imprimante", ft.Icons.PRINT),
         ], spacing=10)
+
+    # --- Sous-vue IMPRIMANTE --------------------------------------------------
+    def _printer_settings_card(self) -> ft.Control:
+        """Carte de configuration de l'imprimante cible (memorisee dans `meta`)."""
+        try:
+            printers = printing.list_printers()
+        except Exception as exc:  # noqa: BLE001
+            return self._card(ft.Text(
+                f"Impossible de lister les imprimantes : {exc}", color=RED))
+        saved = repo.get_setting(self.conn, PRINTER_KEY)
+        current = saved or printing.default_printer()
+        if printers and current not in printers:
+            current = printers[0]
+
+        intro = ft.Text(
+            "Choisissez l'imprimante sur laquelle imprimer les notes générées. "
+            "Ce réglage est mémorisé : le bouton Imprimer d'un document l'utilise "
+            "directement. L'impression part de l'ordinateur où tourne l'application "
+            "(et non du navigateur, en mode web).",
+            color=MUTED, size=13)
+
+        if not printers:
+            return self._card(ft.Column([
+                intro,
+                ft.Text("Aucune imprimante détectée sur cet ordinateur.", color=RED),
+            ], spacing=12))
+
+        dd = ft.Dropdown(
+            label="Imprimante cible", value=current,
+            color=TEXT, text_style=ft.TextStyle(color=TEXT),
+            options=[ft.dropdown.Option(p) for p in printers], expand=True,
+        )
+
+        def on_save(e):
+            if not dd.value:
+                self._toast("Choisissez une imprimante.", ok=False); return
+            repo.set_setting(self.conn, PRINTER_KEY, dd.value)
+            repo.log_audit(self.conn, "imprimante_configuree", dd.value)
+            self._toast(f"Imprimante « {dd.value} » enregistrée.")
+
+        def on_test(e):
+            if not dd.value:
+                self._toast("Choisissez une imprimante.", ok=False); return
+            printer = dd.value
+
+            def work():
+                printing.print_test_page(printer)
+                self._toast(f"Page de test envoyée à « {printer} ».")
+
+            self._run_busy(e.control, None, work)
+
+        if saved:
+            note = f"Imprimante enregistrée : « {saved} »."
+        elif current:
+            note = f"Aucune imprimante enregistrée. Défaut Windows : « {current} »."
+        else:
+            note = "Aucune imprimante enregistrée."
+        return self._card(ft.Column([
+            intro,
+            ft.Row([dd,
+                    ft.IconButton(ft.Icons.REFRESH, tooltip="Rafraîchir la liste",
+                                  icon_color=NAVY,
+                                  on_click=lambda e: self.show_parametrage("printer"))],
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Text(note, size=12, color=MUTED),
+            ft.Row([
+                self._btn("Enregistrer", on_save, icon=ft.Icons.SAVE, busy=False),
+                self._btn("Imprimer une page de test", on_test,
+                          icon=ft.Icons.PRINT, primary=False, busy=False),
+            ], spacing=10),
+        ], spacing=14))
 
     # --- Sous-vue MODELES DE DOCUMENTS ----------------------------------------
     def show_templates(self) -> None:
@@ -2488,6 +2570,9 @@ class CrmApp:
             actions.append(ft.IconButton(
                 ft.Icons.FOLDER_OPEN, tooltip="Ouvrir le fichier",
                 on_click=lambda e, dd=d: self._open_file(dd)))
+            actions.append(ft.IconButton(
+                ft.Icons.PRINT, tooltip="Imprimer", icon_color=NAVY,
+                on_click=lambda e, dd=d: self._print_file(e, dd)))
         if d.email and d.statut in ("en_attente_envoi", "erreur_envoi"):
             actions.append(ft.IconButton(
                 ft.Icons.SEND, tooltip="Envoyer par email", icon_color=NAVY,
@@ -2661,6 +2746,9 @@ class CrmApp:
                 row_actions.append(ft.IconButton(
                     ft.Icons.FOLDER_OPEN, tooltip="Ouvrir le fichier", icon_color=NAVY,
                     on_click=lambda e, dd=doc: self._open_file(dd)))
+                row_actions.append(ft.IconButton(
+                    ft.Icons.PRINT, tooltip="Imprimer", icon_color=NAVY,
+                    on_click=lambda e, dd=doc: self._print_file(e, dd)))
             item_rows.append(ft.Row([
                 ft.Container(ft.Text(ilabel, size=12, color=icolor),
                              bgcolor=ft.Colors.with_opacity(0.12, icolor),
@@ -3243,59 +3331,119 @@ class CrmApp:
 
         tpl_dd.on_select = on_tpl_change
 
-        def on_save_draft(e):
+        is_edit = draft is not None
+
+        def persist() -> Document:
+            """Enregistre/maj le brouillon (+ paiement a la creation) et renvoie le doc.
+
+            Etape rapide commune aux trois actions (brouillon / generer /
+            generer+imprimer). Leve en cas d'echec ; l'appelant gere le statut.
+            """
             tpl = templates.get_template(tpl_dd.value)
             if not tpl:
-                status.value = "Modèle introuvable."; self.page.update(); return
+                raise ValueError("Modèle introuvable.")
             variables = {tag: (get() or "") for tag, get in getters.items()}
+            if draft is not None:
+                generator.update_draft(
+                    self.conn, draft, variables=variables, output_format=fmt.value)
+                repo.log_audit(self.conn, "brouillon_modifie",
+                               f"#{draft.id} {tpl.name} (patient #{p.id})")
+                return draft
+            montant_paie = generator.parse_montant_str(paie_montant.value)
+            doc = generator.save_draft(
+                self.conn, p, tpl, variables=variables, output_format=fmt.value)
+            repo.log_audit(self.conn, "brouillon_cree",
+                           f"#{doc.id} {tpl.name} (patient #{p.id})")
+            montant = montant_paie if montant_paie else doc.montant
+            # Paiement cree uniquement pour un montant strictement positif.
+            if add_paie.value and montant and montant > 0:
+                repo.create_paiement(self.conn, Paiement(
+                    id=None, patient_id=p.id, document_id=doc.id, montant=montant,
+                    statut="en_attente", notes=f"{tpl.label}"))
+            return doc
+
+        def on_save_draft(e=None):
+            """Action secondaire : enregistre le brouillon SANS generer (rapide)."""
             try:
-                if draft is not None:
-                    generator.update_draft(
-                        self.conn, draft, variables=variables, output_format=fmt.value)
-                    repo.log_audit(self.conn, "brouillon_modifie",
-                                   f"#{draft.id} {tpl.name} (patient #{p.id})")
-                else:
-                    montant_paie = generator.parse_montant_str(paie_montant.value)
-                    doc = generator.save_draft(
-                        self.conn, p, tpl, variables=variables, output_format=fmt.value,
-                    )
-                    repo.log_audit(self.conn, "brouillon_cree",
-                                   f"#{doc.id} {tpl.name} (patient #{p.id})")
-                    montant = montant_paie if montant_paie else doc.montant
-                    # Paiement cree uniquement pour un montant strictement positif.
-                    if add_paie.value and montant and montant > 0:
-                        repo.create_paiement(self.conn, Paiement(
-                            id=None, patient_id=p.id, document_id=doc.id, montant=montant,
-                            statut="en_attente", notes=f"{tpl.label}",
-                        ))
+                persist()
             except Exception as exc:  # noqa: BLE001
                 status.value = f"Échec : {exc}"; status.color = RED
                 self.page.update(); return
             self._close_dialog()
-            self._toast("Brouillon mis à jour." if draft is not None else "Brouillon enregistré.")
+            self._toast("Brouillon mis à jour." if is_edit else "Brouillon enregistré.")
             self.show_patient_detail(p.id)
 
+        def on_generate(button: ft.Control, do_print: bool):
+            """Genere le document a la volee (Word), puis l'imprime si demande.
+
+            La generation lance Word (lent) : travail en arriere-plan via
+            `_run_busy` (spinner + anti double-clic), comme l'envoi email.
+            """
+            printer = None
+            if do_print:  # verifier l'imprimante AVANT de lancer le travail
+                printer = repo.get_setting(self.conn, PRINTER_KEY)
+                if not printer:
+                    status.value = ("Aucune imprimante configurée "
+                                    "(Paramétrage › Imprimante).")
+                    status.color = RED; self.page.update(); return
+                try:
+                    available = printing.list_printers()
+                except Exception:  # noqa: BLE001
+                    available = []
+                if available and printer not in available:
+                    status.value = (f"Imprimante « {printer} » indisponible "
+                                    "(Paramétrage › Imprimante).")
+                    status.color = RED; self.page.update(); return
+
+            def work():
+                doc = persist()
+                generator.render_document(self.conn, doc)
+                repo.log_audit(self.conn, "document_genere",
+                               f"#{doc.id} {doc.type} (patient #{p.id})")
+                if do_print:
+                    printing.print_file(Path(doc.file_path or ""), printer)
+                    repo.log_audit(self.conn, "document_imprime",
+                                   f"#{doc.id} {doc.type} -> {printer}")
+                self._close_dialog()
+                self._toast(f"Document généré et envoyé à « {printer} »." if do_print
+                            else "Document généré.")
+                self.show_patient_detail(p.id)
+
+            self._run_busy(button, status, work)
+
         build_fields()
-        is_edit = draft is not None
         body_controls = [tpl_dd, fields_col, fmt]
         if not is_edit:  # le paiement n'est cree qu'a la creation du brouillon
             body_controls += [add_paie, paie_montant]
         body_controls.append(status)
+
+        # Brouillon = action secondaire ; Générer (et imprimer) = actions primaires.
+        # Les boutons de generation pilotent eux-memes `_run_busy` (busy=False ici)
+        # et capturent leur propre bouton (robuste au Ctrl+Entree ou e est None).
+        btn_draft = self._btn("Enregistrer" if is_edit else "Enregistrer en brouillon",
+                              on_save_draft, primary=False, busy=False)
+        btn_gen = self._btn("Générer", None,
+                            icon=ft.Icons.PLAY_CIRCLE_OUTLINE, busy=False)
+        btn_print = self._btn("Générer et imprimer", None,
+                              icon=ft.Icons.PRINT, busy=False)
+        btn_gen.on_click = lambda e=None: on_generate(btn_gen, False)
+        btn_print.on_click = lambda e=None: on_generate(btn_print, True)
+
         dlg = ft.AlertDialog(
             modal=True,
             title=ft.Text(f"Modifier le brouillon — {p.display}" if is_edit
                           else f"Nouveau brouillon — {p.display}"),
             content=ft.Container(
                 ft.Column(body_controls, tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
-                width=420, height=460,
+                width=460, height=480,
             ),
             actions=[
                 ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
-                self._btn("Enregistrer" if is_edit else "Enregistrer en brouillon",
-                          on_save_draft, busy=False),
+                btn_draft, btn_gen, btn_print,
             ],
         )
-        self._show_dialog(dlg)
+        # Ctrl+Entrée (et Entrée depuis un champ) -> action principale : Générer.
+        self._show_dialog(dlg, submit=lambda e=None: on_generate(btn_gen, False))
 
     def _paiement_dialog(self, p: Patient) -> None:
         montant = ft.TextField(label="Montant", value="0", autofocus=True)
@@ -3427,6 +3575,40 @@ class CrmApp:
                 self._toast(f"Ouverture impossible : {exc}", ok=False)
         else:
             self._toast("Fichier introuvable.", ok=False)
+
+    def _print_file(self, e: ft.ControlEvent, d: Document) -> None:
+        """Imprime un document genere sur l'imprimante configuree (Parametrage).
+
+        L'impression part de la machine ou tourne l'application (cote serveur en
+        mode web), vers l'imprimante reseau choisie une fois pour toutes.
+        """
+        path = d.file_path or ""
+        if not (path and Path(path).exists()):
+            self._toast("Fichier introuvable.", ok=False)
+            return
+        printer = repo.get_setting(self.conn, PRINTER_KEY)
+        if not printer:
+            self._toast("Aucune imprimante configurée. Choisissez-en une dans "
+                        "Paramétrage › Imprimante.", ok=False)
+            self.show_parametrage("printer")
+            return
+        try:
+            available = printing.list_printers()
+        except Exception:  # noqa: BLE001
+            available = []
+        if available and printer not in available:
+            self._toast(f"L'imprimante « {printer} » n'est plus disponible. "
+                        "Choisissez-en une autre dans Paramétrage › Imprimante.", ok=False)
+            self.show_parametrage("printer")
+            return
+
+        def work():
+            printing.print_file(Path(path), printer)
+            repo.log_audit(self.conn, "document_imprime",
+                           f"#{d.id} {d.type} -> {printer}")
+            self._toast(f"Envoyé à l'imprimante « {printer} ».")
+
+        self._run_busy(e.control, None, work)
 
     def _send_dialog(self, d: Document) -> None:
         mtemplates = repo.list_mail_templates(self.conn)

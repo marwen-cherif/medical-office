@@ -27,6 +27,26 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+# --- Reglages applicatifs (table meta, cle/valeur) ----------------------------
+# Petits reglages globaux de l'app (ex. imprimante cible). La table `meta` existe
+# deja (cf. db.py) et sert aussi au numero de schema : aucune migration requise.
+
+def get_setting(conn: sqlite3.Connection, key: str) -> Optional[str]:
+    """Valeur d'un reglage, ou None s'il n'a jamais ete defini."""
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Enregistre (ou met a jour) un reglage global."""
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+    conn.commit()
+
+
 # --- Dataclasses --------------------------------------------------------------
 
 @dataclass
