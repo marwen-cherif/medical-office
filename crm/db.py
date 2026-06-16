@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 
 class SchemaTooNewError(RuntimeError):
@@ -158,6 +158,75 @@ CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT
 );
+
+-- v6 : suivi des depenses fournisseurs (factures importees + reglements partiels).
+-- Evolution PUREMENT ADDITIVE : ces tables n'existaient pas avant ; `documents`
+-- (notes patients) n'est pas touchee. Voir prd_depenses.md / spec_technique_depenses.md.
+CREATE TABLE IF NOT EXISTS prestataires (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    nom          TEXT NOT NULL,
+    prenom       TEXT NOT NULL DEFAULT '',
+    slug_nom     TEXT NOT NULL,
+    slug_prenom  TEXT NOT NULL,
+    email        TEXT,
+    telephone    TEXT,
+    adresse      TEXT,
+    notes        TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_prestataires_slug ON prestataires(slug_nom, slug_prenom);
+
+-- Facture fournisseur IMPORTEE (PDF/image archive). Pas de generation Word, pas d'envoi.
+CREATE TABLE IF NOT EXISTS factures (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    prestataire_id  INTEGER NOT NULL REFERENCES prestataires(id) ON DELETE CASCADE,
+    fichier         TEXT NOT NULL,
+    nom_original    TEXT,
+    montant         REAL,
+    libelle         TEXT,
+    notes           TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_factures_prestataire ON factures(prestataire_id);
+
+-- Depense (sortie d'argent) avec reglement partiel : montant du, cumul regle, reste derive.
+CREATE TABLE IF NOT EXISTS depenses (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    prestataire_id  INTEGER NOT NULL REFERENCES prestataires(id) ON DELETE CASCADE,
+    facture_id      INTEGER REFERENCES factures(id) ON DELETE SET NULL,
+    montant         REAL NOT NULL DEFAULT 0,
+    montant_regle   REAL NOT NULL DEFAULT 0,
+    statut          TEXT NOT NULL DEFAULT 'en_attente',  -- en_attente | regle_partiellement | regle
+    mode            TEXT,
+    motif           TEXT,
+    date_echeance   TEXT,
+    date_paiement   TEXT,
+    libelle         TEXT,
+    notes           TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_depenses_prestataire ON depenses(prestataire_id);
+
+-- v7 : historique des reglements d'une depense (1 ligne par versement, datee).
+-- Permet le vrai flux de tresorerie par date de transaction (date_reglement),
+-- y compris pour les reglements partiels. `depenses.montant_regle` reste le cumul
+-- (source de verite du solde) ; cette table est l'historique detaille.
+CREATE TABLE IF NOT EXISTS depense_reglements (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    depense_id      INTEGER NOT NULL REFERENCES depenses(id) ON DELETE CASCADE,
+    montant         REAL NOT NULL,
+    mode            TEXT,
+    motif           TEXT,
+    date_reglement  TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_depense_reglements_depense ON depense_reglements(depense_id);
+CREATE INDEX IF NOT EXISTS idx_depense_reglements_date ON depense_reglements(date_reglement);
 """
 
 
@@ -240,6 +309,19 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return any(r["name"] == column for r in rows)
 
 
+def _meta_get(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def _meta_set(conn: sqlite3.Connection, key: str, value: str = "1") -> None:
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     """Migrations idempotentes pour les bases existantes (executescript ne fait pas d'ALTER)."""
     # v2 : valeurs de variables saisies, stockees en JSON sur chaque document.
@@ -250,6 +332,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE documents ADD COLUMN mailjet_opened_at TEXT")
     if not _column_exists(conn, "documents", "mailjet_clicked_at"):
         conn.execute("ALTER TABLE documents ADD COLUMN mailjet_clicked_at TEXT")
+    # v7 : backfill de l'historique des reglements pour les depenses deja (partiellement)
+    # reglees AVANT l'introduction de la table (la table elle-meme est creee par _SCHEMA).
+    # 1 ligne resumant le cumul, datee du dernier reglement (sinon de la creation).
+    # Idempotent : sentinelle meta + garde NOT IN (ne duplique jamais).
+    if _meta_get(conn, "reglements_backfill_v7") is None:
+        conn.execute(
+            "INSERT INTO depense_reglements (depense_id, montant, mode, motif, date_reglement) "
+            "SELECT id, montant_regle, mode, motif, COALESCE(date_paiement, created_at) "
+            "FROM depenses WHERE montant_regle > 0 "
+            "AND id NOT IN (SELECT depense_id FROM depense_reglements)"
+        )
+        _meta_set(conn, "reglements_backfill_v7")
 
 
 def _set_version(conn: sqlite3.Connection) -> None:

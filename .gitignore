@@ -19,6 +19,12 @@ backups/
 data/
 crm/__pycache__/
 
+# Journaux runtime (mailjet.log, ai.log) : peuvent contenir emails / reponses IA
+logs/
+
+# Numero de build genere a chaque build (build-crm.bat) - ne pas versionner
+crm/_build_info.py
+
 # Secrets Mailjet (cles API) - ne pas versionner
 config.ini
 

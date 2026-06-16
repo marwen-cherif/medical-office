@@ -44,7 +44,12 @@ class ResetSummary:
 # Tables a vider (l'ordre respecte les cles etrangeres : enfants avant parents).
 # meta n'est PAS videe : elle ne contient que schema_version, qui doit rester
 # defini comme apres une installation neuve.
-_TABLES = ("job_items", "jobs", "paiements", "documents", "mail_templates", "patients")
+# L'ordre respecte les cles etrangeres :
+# depense_reglements -> depenses -> factures -> prestataires.
+_TABLES = (
+    "job_items", "jobs", "paiements", "documents", "mail_templates", "patients",
+    "depense_reglements", "depenses", "factures", "prestataires",
+)
 
 
 def _output_dir() -> Path:

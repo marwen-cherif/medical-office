@@ -22,7 +22,7 @@ from flet import canvas as cv
 
 from src.doc_filler import extract_placeholders
 
-from . import backup, generator, repo, templates
+from . import backup, generator, repo, templates, version
 from .db import SchemaTooNewError, connect
 from .repo import Document, Job, Paiement, Patient, TemplateField
 
@@ -74,6 +74,13 @@ _MODE_LABELS = {
     "especes": "Espèces",
     "cheque": "Chèque",
     "virement": "Virement",
+}
+
+# Statuts d'une depense fournisseur (cle -> libelle + couleur de chip).
+_DEPENSE_STATUT_LABELS = {
+    "en_attente": ("À régler", NAVY),
+    "regle_partiellement": ("Réglé partiellement", AMBER),
+    "regle": ("Réglé", GREEN),
 }
 
 # Formats acceptes en saisie manuelle d'une date (le 1er sert aussi a l'affichage).
@@ -174,7 +181,7 @@ _JOURS_FR = ["Lu", "Ma", "Me", "Je", "Ve", "Sa", "Di"]
 # --- Registre des raccourcis clavier (source unique : pilote a la fois le
 # dispatch clavier dans _on_key ET le texte des infobulles, pour que la
 # legende affichee ne diverge jamais du comportement reel). -------------------
-SC_NAV = {0: "Ctrl+1", 1: "Ctrl+2", 2: "Ctrl+3", 3: "Ctrl+4", 4: "Ctrl+5"}
+SC_NAV = {0: "Ctrl+1", 1: "Ctrl+2", 2: "Ctrl+3", 3: "Ctrl+4", 4: "Ctrl+5", 5: "Ctrl+6"}
 SC_NEW = "Ctrl+N"          # « Nouveau » contextuel selon la vue
 SC_SEARCH = "Ctrl+F"       # focus du champ de recherche
 SC_PREV = "Ctrl+←"         # page precedente
@@ -241,6 +248,36 @@ class CrmApp:
         self.paie_date_to_row, self.paie_date_to = self._date_field(
             "Au", _last.isoformat(), on_change=_on_dates)
         self.paie_page = 0
+        # Prestataires (annuaire fournisseurs)
+        self.pr_search = self._search_field(
+            "Rechercher un prestataire…", lambda e: self._reset_and("prestataires"))
+        self.pr_page = 0
+        self.current_prestataire = None
+        self.detail_pr_factures_page = 0
+        self.detail_pr_depenses_page = 0
+        # Finances : onglet actif du sous-menu (Paiements / Depenses).
+        self.finances_tab = "paiements"
+        # Depenses (sous-onglet Finances)
+        self.dep_search = self._search_field(
+            "Rechercher un prestataire…", lambda e: self._reset_and("depenses"))
+        self.dep_statut = ft.Dropdown(
+            value="tous", width=210, border_radius=10, content_padding=10,
+            bgcolor=SURFACE, color=TEXT, text_style=ft.TextStyle(color=TEXT),
+            border_color=BORDER, focused_border_color=NAVY,
+            on_select=lambda e: self._reset_and("depenses"),
+            options=[
+                ft.dropdown.Option(key="en_attente", text="À régler"),
+                ft.dropdown.Option(key="regle_partiellement", text="Réglé partiellement"),
+                ft.dropdown.Option(key="regle", text="Réglé"),
+                ft.dropdown.Option(key="tous", text="Tous"),
+            ],
+        )
+        _dep_on = lambda: self._reset_and("depenses")
+        self.dep_date_from_row, self.dep_date_from = self._date_field(
+            "Du", _first.isoformat(), on_change=_dep_on)
+        self.dep_date_to_row, self.dep_date_to = self._date_field(
+            "Au", _last.isoformat(), on_change=_dep_on)
+        self.dep_page = 0
         # Parametrage : onglet actif du sous-menu (Modeles de documents / Emails).
         self.param_tab = "templates"
         # Modeles de documents
@@ -314,6 +351,19 @@ class CrmApp:
         self.jobs_pager = ft.Container()
         self.job_detail_container = ft.Container()
         self.dash_results = ft.Container()
+        self.pr_results = ft.Container()
+        self.pr_pager = ft.Container()
+        self.dep_summary = ft.Container()
+        self.dep_results = ft.Container()
+        self.dep_pager = ft.Container()
+
+        # Selecteur de fichier (import de factures) : service Flet (page.services).
+        # API recente : pick_files() est une coroutine qui renvoie la liste de fichiers.
+        self.file_picker = ft.FilePicker()
+        try:
+            self.page.services.append(self.file_picker)
+        except (AttributeError, TypeError):
+            self.page.services = [self.file_picker]
 
         self.body = ft.Container(expand=True, padding=24, bgcolor=BG)
         self.page.on_keyboard_event = self._on_key
@@ -349,8 +399,8 @@ class CrmApp:
                         tooltip=(
                             "Raccourcis clavier\n"
                             f"Tableau de bord {SC_NAV[0]} · Patients {SC_NAV[1]} · "
-                            f"Paiements {SC_NAV[2]} · Travaux {SC_NAV[3]} · "
-                            f"Paramétrage {SC_NAV[4]}\n"
+                            f"Prestataires {SC_NAV[2]} · Finances {SC_NAV[3]} · "
+                            f"Travaux {SC_NAV[4]} · Paramétrage {SC_NAV[5]}\n"
                             f"Nouveau {SC_NEW} · Rechercher {SC_SEARCH}\n"
                             f"Page {SC_PREV}/{SC_NEXT} · Fermer {SC_CLOSE} · Valider {SC_SUBMIT}"
                         ),
@@ -367,6 +417,7 @@ class CrmApp:
             label_type=ft.NavigationRailLabelType.ALL,
             min_width=92,
             bgcolor=SURFACE,
+            expand=True,  # occupe toute la hauteur pour pousser le footer version tout en bas
             leading=brand,
             indicator_color=ft.Colors.with_opacity(0.45, TEAL),
             selected_label_text_style=ft.TextStyle(color=NAVY, weight=ft.FontWeight.BOLD, size=12),
@@ -375,18 +426,41 @@ class CrmApp:
             destinations=[
                 dest(ft.Icons.SPACE_DASHBOARD_OUTLINED, ft.Icons.SPACE_DASHBOARD, "Tableau"),
                 dest(ft.Icons.PEOPLE_OUTLINE, ft.Icons.PEOPLE, "Patients"),
-                dest(ft.Icons.PAYMENTS_OUTLINED, ft.Icons.PAYMENTS, "Paiements"),
+                dest(ft.Icons.STOREFRONT_OUTLINED, ft.Icons.STOREFRONT, "Prestataires"),
+                dest(ft.Icons.ACCOUNT_BALANCE_WALLET_OUTLINED, ft.Icons.ACCOUNT_BALANCE_WALLET, "Finances"),
                 dest(ft.Icons.WORK_OUTLINE, ft.Icons.WORK, "Travaux"),
                 dest(ft.Icons.SETTINGS_OUTLINED, ft.Icons.SETTINGS, "Paramétrage"),
             ],
             on_change=self._on_nav,
         )
+        # Sidebar = rail (extensible) + footer version épinglé tout en bas.
+        sidebar = ft.Container(
+            content=ft.Column(
+                [self.rail, self._version_footer()],
+                spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            bgcolor=SURFACE,
+        )
         self.page.add(
             ft.Row(
-                [self.rail, ft.VerticalDivider(width=1), self.body],
+                [sidebar, ft.VerticalDivider(width=1), self.body],
                 expand=True,
                 spacing=0,
             )
+        )
+
+    def _version_footer(self) -> ft.Control:
+        """Pied du sidebar : version sémantique + tag de build (change à chaque build)."""
+        return ft.Container(
+            content=ft.Column([
+                ft.Text(version.app_version(), size=10, weight=ft.FontWeight.BOLD,
+                        color=MUTED, text_align=ft.TextAlign.CENTER),
+                ft.Text(version.build_tag(), size=8, color=MUTED,
+                        text_align=ft.TextAlign.CENTER, selectable=True),
+            ], spacing=0, tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding.only(top=4, bottom=10, left=2, right=2),
+            alignment=ft.Alignment.CENTER,
+            tooltip=f"Cabinet CRM {version.app_version_full()}",
         )
 
     def _on_nav(self, e: ft.ControlEvent) -> None:
@@ -396,8 +470,10 @@ class CrmApp:
         elif idx == 1:
             self.show_patients()
         elif idx == 2:
-            self.show_paiements()
+            self.show_prestataires()
         elif idx == 3:
+            self.show_finances()
+        elif idx == 4:
             self.show_travaux()
         else:
             self.show_parametrage()
@@ -420,6 +496,25 @@ class CrmApp:
             border=ft.Border.all(1, BORDER),
             expand=expand,
         )
+
+    def _money_summary(self, items: list[tuple[str, float, str]],
+                       icon=ft.Icons.SHOPPING_CART_CHECKOUT) -> ft.Container:
+        """Carte récap de montants : chaque (libellé, valeur, couleur) en colonne,
+        le libellé exactement au-dessus de sa valeur, cellules de largeur égale
+        séparées par un filet vertical (alignement propre, sans « · »)."""
+        cells: list[ft.Control] = [ft.Icon(icon, color=NAVY)]
+        for i, (label, value, color) in enumerate(items):
+            if i:
+                cells.append(ft.VerticalDivider(width=24, thickness=1, color=BORDER))
+            cells.append(ft.Container(
+                content=ft.Column([
+                    ft.Text(label, color=MUTED, size=12),
+                    ft.Text(f"{value:.2f}", size=20, weight=ft.FontWeight.BOLD, color=color),
+                ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.START, tight=True),
+                expand=True,
+            ))
+        return self._card(ft.Row(
+            cells, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=12))
 
     def _btn(self, text, on_click, icon=None, primary=True, shortcut=None, busy=True):
         """Bouton primaire/secondaire de l'app.
@@ -524,11 +619,11 @@ class CrmApp:
             return
 
         # 2) Portee globale.
-        if cmd and key in ("1", "2", "3", "4", "5"):
+        if cmd and key in ("1", "2", "3", "4", "5", "6"):
             idx = int(key) - 1
             self.rail.selected_index = idx
-            (self.show_dashboard, self.show_patients, self.show_paiements,
-             self.show_travaux, self.show_parametrage)[idx]()
+            (self.show_dashboard, self.show_patients, self.show_prestataires,
+             self.show_finances, self.show_travaux, self.show_parametrage)[idx]()
         elif cmd and key == "N":
             self._new_for_current_view()
         elif cmd and key == "F":
@@ -537,13 +632,17 @@ class CrmApp:
             self._page_step(-1 if key == "Arrow Left" else 1)
         elif key == "Escape" and self.current_view == "patient_detail":
             self.show_patients()
+        elif key == "Escape" and self.current_view == "prestataire_detail":
+            self.show_prestataires()
         elif key == "Escape" and self.current_view == "job_detail":
             self.show_jobs()
 
     def _new_for_current_view(self) -> None:
-        """Action « Nouveau » selon la vue (Paiements : vue transverse, aucune)."""
+        """Action « Nouveau » selon la vue (Paiements/Dépenses : vues transverses)."""
         if self.current_view == "patients":
             self._patient_dialog()
+        elif self.current_view == "prestataires":
+            self._prestataire_dialog()
         elif self.current_view == "templates":
             self._new_template_dialog()
         elif self.current_view == "mail":
@@ -552,7 +651,9 @@ class CrmApp:
     def _focus_search(self) -> None:
         field = {
             "patients": self.search,
+            "prestataires": self.pr_search,
             "paiements": self.paie_search,
+            "depenses": self.dep_search,
             "documents": self.doc_search,
             "templates": self.tpl_search,
             "mail": self.mail_search,
@@ -565,9 +666,15 @@ class CrmApp:
         if self.current_view == "patients":
             self.patients_page += delta
             self._refresh_patients()
+        elif self.current_view == "prestataires":
+            self.pr_page += delta
+            self._refresh_prestataires()
         elif self.current_view == "paiements":
             self.paie_page += delta
             self._refresh_paiements()
+        elif self.current_view == "depenses":
+            self.dep_page += delta
+            self._refresh_depenses()
         elif self.current_view == "templates":
             self.tpl_page += delta
             self._refresh_templates()
@@ -609,9 +716,15 @@ class CrmApp:
         if view == "patients":
             self.patients_page = 0
             self._refresh_patients()
+        elif view == "prestataires":
+            self.pr_page = 0
+            self._refresh_prestataires()
         elif view == "paiements":
             self.paie_page = 0
             self._refresh_paiements()
+        elif view == "depenses":
+            self.dep_page = 0
+            self._refresh_depenses()
         elif view == "templates":
             self.tpl_page = 0
             self._refresh_templates()
@@ -886,6 +999,54 @@ class CrmApp:
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
+    def _balance_chart(self, entrees: float, sorties: float) -> ft.Control:
+        """Donut « entrées encaissées vs sorties réglées » + solde net (sans dépendance)."""
+        total = entrees + sorties
+        size = 170
+        if total <= 0:
+            shapes = [cv.Circle(size / 2, size / 2, size / 2,
+                                paint=ft.Paint(color=BORDER, style=ft.PaintingStyle.FILL))]
+        else:
+            start = -math.pi / 2
+            sweep_in = 2 * math.pi * (entrees / total)
+            shapes = [
+                cv.Arc(0, 0, size, size, start, sweep_in, use_center=True,
+                       paint=ft.Paint(color=GREEN, style=ft.PaintingStyle.FILL)),
+                cv.Arc(0, 0, size, size, start + sweep_in, 2 * math.pi - sweep_in,
+                       use_center=True,
+                       paint=ft.Paint(color=AMBER, style=ft.PaintingStyle.FILL)),
+                cv.Circle(size / 2, size / 2, size / 4,
+                          paint=ft.Paint(color=SURFACE, style=ft.PaintingStyle.FILL)),
+            ]
+        chart = cv.Canvas(shapes, width=size, height=size)
+        solde = entrees - sorties
+
+        def legende(color, label, montant):
+            pct = (montant / total * 100) if total > 0 else 0
+            return ft.Row([
+                ft.Container(width=12, height=12, bgcolor=color, border_radius=3),
+                ft.Text(label, color=TEXT, size=13, expand=True),
+                ft.Text(f"{montant:.2f}  ({pct:.0f} %)", color=MUTED, size=12),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8)
+
+        details = ft.Column([
+            ft.Text("Balance entrées / sorties", weight=ft.FontWeight.BOLD, color=TEXT, size=13),
+            legende(GREEN, "Entrées (encaissé)", entrees),
+            legende(AMBER, "Sorties (payé)", sorties),
+            ft.Row([
+                ft.Text("Solde net", color=TEXT, size=13, weight=ft.FontWeight.BOLD, expand=True),
+                ft.Text(f"{solde:.2f}", color=GREEN if solde >= 0 else RED,
+                        size=14, weight=ft.FontWeight.BOLD),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ], spacing=10)
+        if total <= 0:
+            details.controls.append(ft.Text("Aucun flux sur la période.", color=MUTED, size=12))
+
+        return ft.Row(
+            [chart, ft.Container(details, expand=True, padding=ft.Padding.only(left=20))],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
     def _refresh_dashboard(self) -> None:
         df = _date_iso(self.dash_date_from)
         dt = _date_iso(self.dash_date_to)
@@ -901,6 +1062,15 @@ class CrmApp:
         nouveaux = repo.count_patients_new(self.conn, df, dt)
         total_pat = repo.count_patients(self.conn)
         impayes = repo.count_patients(self.conn, filtre="impayes")
+
+        # Flux de tresorerie de la PERIODE, par date de transaction :
+        #  - entrees = encaisse sur la periode (ca ci-dessus, par date_encaissement) ;
+        #  - sorties = paye sur la periode (par date_reglement, reglements partiels inclus).
+        sorties = repo.total_regle_periode(self.conn, df, dt)
+        solde = ca - sorties
+        # Stock "a ce jour" (independant du filtre de dates) : dette fournisseurs courante.
+        # statut="tous" => inclut aussi les depenses partiellement reglees (reste > 0).
+        _, _, reste_total = repo.total_depenses(self.conn, statut="tous")
 
         # Bandeau de KPI : 9 tuiles, 3 par ligne, occupant toute la largeur
         # (repli a 2 puis 1 par ligne sur fenetre etroite). Le `col` est pose
@@ -919,9 +1089,15 @@ class CrmApp:
             self._kpi("Nouveaux (période)", nouveaux, ft.Icons.PERSON_ADD, NAVY),
             self._kpi("Total patients", total_pat, ft.Icons.PEOPLE, NAVY),
             self._kpi("Avec impayés", impayes, ft.Icons.WARNING_AMBER, AMBER),
+            self._kpi("Dépenses payées (période)", f"{sorties:.2f}", ft.Icons.PRICE_CHECK, AMBER),
+            self._kpi("Reste à payer (à ce jour)", f"{reste_total:.2f}",
+                      ft.Icons.SCHEDULE_SEND, AMBER),
+            self._kpi("Solde net (période)", f"{solde:.2f}", ft.Icons.ACCOUNT_BALANCE,
+                      GREEN if solde >= 0 else RED),
         ]], spacing=12, run_spacing=12)
 
         camembert = self._card(self._camembert(ca, encours))
+        balance = self._card(self._balance_chart(ca, sorties))
 
         by_type = repo.documents_by_type(self.conn, df, dt)
         if by_type:
@@ -954,8 +1130,9 @@ class CrmApp:
         self.dash_results.content = ft.Column([
             kpis,
             ft.ResponsiveRow(
-                [_col(camembert, 12, 5), _col(repartition, 12, 7)],
+                [_col(camembert, 12, 6), _col(balance, 12, 6)],
                 spacing=20, run_spacing=20),
+            repartition,
             activite,
         ], spacing=20)
         self.page.update()
@@ -1605,12 +1782,46 @@ class CrmApp:
             chip, *right,
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
-    # --- Vue PAIEMENTS --------------------------------------------------------
+    # --- Vue FINANCES (Paiements + Depenses) ----------------------------------
+    def show_finances(self, tab: str | None = None) -> None:
+        """Page Finances a deux sous-vues : Paiements (entrees) et Depenses (sorties).
+
+        `current_view` conserve la cle de la sous-vue active ("paiements"/"depenses")
+        afin que Recherche / Pagination restent contextuelles.
+        """
+        self.finances_tab = tab or self.finances_tab
+        self.rail.selected_index = 3
+        if self.finances_tab == "depenses":
+            self.show_depenses()
+        else:
+            self.show_paiements()
+
+    def _finances_submenu(self) -> ft.Control:
+        """Sous-menu a deux onglets de la page Finances (calque _param_submenu)."""
+        def tab_btn(key: str, label: str, icon) -> ft.Control:
+            active = self.finances_tab == key
+            return ft.Container(
+                ft.Row([ft.Icon(icon, size=18, color=SURFACE if active else NAVY),
+                        ft.Text(label, color=SURFACE if active else NAVY,
+                                weight=ft.FontWeight.BOLD, size=13)],
+                       spacing=8, tight=True),
+                bgcolor=NAVY if active else ft.Colors.with_opacity(0.10, NAVY),
+                padding=ft.Padding.symmetric(vertical=9, horizontal=16),
+                border_radius=10, ink=True,
+                on_click=lambda e, k=key: self.show_finances(k),
+            )
+        return ft.Row([
+            tab_btn("paiements", "Paiements", ft.Icons.PAYMENTS),
+            tab_btn("depenses", "Dépenses", ft.Icons.SHOPPING_CART_CHECKOUT),
+        ], spacing=10)
+
     def show_paiements(self) -> None:
+        self.finances_tab = "paiements"
         self.current_view = "paiements"
-        self.rail.selected_index = 2
+        self.rail.selected_index = 3
         self._set_body(
-            self._title("Paiements"),
+            self._title("Finances"),
+            self._finances_submenu(),
             ft.Row([self.paie_search, self.paie_statut,
                     ft.Container(self.paie_date_from_row, width=190),
                     ft.Container(self.paie_date_to_row, width=190)],
@@ -1696,6 +1907,189 @@ class CrmApp:
         self.paie_results.content = self._card(liste)
         self.paie_pager.content = self._pagination(self.paie_page, count, on_page)
         self.page.update()
+
+    # --- Sous-vue DEPENSES (Finances) -----------------------------------------
+    def show_depenses(self) -> None:
+        self.finances_tab = "depenses"
+        self.current_view = "depenses"
+        self.rail.selected_index = 3
+        self._set_body(
+            self._title("Finances"),
+            self._finances_submenu(),
+            ft.Row([self.dep_search, self.dep_statut,
+                    ft.Container(self.dep_date_from_row, width=190),
+                    ft.Container(self.dep_date_to_row, width=190)],
+                   spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            self.dep_summary,
+            self.dep_results,
+            self.dep_pager,
+        )
+        self._refresh_depenses()
+
+    def _refresh_depenses(self) -> None:
+        search = self.dep_search.value or ""
+        statut = self.dep_statut.value or "tous"
+        date_from = _date_iso(self.dep_date_from)
+        date_to = _date_iso(self.dep_date_to)
+        count = repo.count_depenses(self.conn, search, statut, date_from, date_to)
+        du, regle, reste = repo.total_depenses(self.conn, search, statut, date_from, date_to)
+        self.dep_page = self._clamp_page(self.dep_page, count)
+        items = repo.list_depenses_filtered(
+            self.conn, search, statut,
+            limit=PAGE_SIZE, offset=self.dep_page * PAGE_SIZE,
+            date_from=date_from, date_to=date_to,
+        )
+        rows = [self._depense_list_row(dep, pr) for dep, pr in items]
+        if rows:
+            liste = ft.Column(rows, spacing=8)
+        elif search.strip():
+            liste = ft.Text("Aucune dépense ne correspond à votre recherche.", color=MUTED)
+        elif date_from.strip() or date_to.strip():
+            liste = ft.Text("Aucune dépense sur la période sélectionnée.", color=MUTED)
+        else:
+            liste = ft.Text("Aucune dépense. Importez une facture depuis une fiche prestataire.",
+                            color=MUTED)
+
+        def on_page(idx):
+            self.dep_page = idx
+            self._refresh_depenses()
+
+        self.dep_summary.content = self._money_summary([
+            ("Total dû", du, TEXT),
+            ("Réglé", regle, GREEN),
+            ("Reste à payer", reste, AMBER),
+        ])
+        self.dep_results.content = self._card(liste)
+        self.dep_pager.content = self._pagination(self.dep_page, count, on_page)
+        self.page.update()
+
+    def _depense_list_row(self, dep: "repo.Depense", pr: "repo.Prestataire | None",
+                          from_fiche: bool = False) -> ft.Control:
+        label, color = _DEPENSE_STATUT_LABELS.get(dep.statut, (dep.statut, MUTED))
+        chip = ft.Container(
+            ft.Text(label, size=12, color=color),
+            bgcolor=ft.Colors.with_opacity(0.12, color),
+            padding=ft.Padding.symmetric(vertical=4, horizontal=10), border_radius=20,
+        )
+        if dep.statut in ("regle", "regle_partiellement") and dep.date_paiement:
+            mode_txt = _MODE_LABELS.get(dep.mode, "mode non précisé")
+            sub = f"Dernier règlement le {_iso_to_fr(dep.date_paiement)} · {mode_txt}"
+        else:
+            sub = f"Échéance : {_iso_to_fr(dep.date_echeance) or '—'}"
+        back = "fiche" if from_fiche else "depenses"
+        actions: list[ft.Control] = []
+        if not from_fiche:
+            actions.append(ft.TextButton(
+                "Ouvrir la fiche",
+                on_click=lambda e, pid=(pr.id if pr else dep.prestataire_id):
+                    self.show_prestataire_detail(pid)))
+        if dep.statut != "regle":
+            actions.append(ft.IconButton(
+                ft.Icons.CHECK_CIRCLE, tooltip="Régler (versement)", icon_color=GREEN,
+                on_click=lambda e, d=dep: self._regler_depense(d, back)))
+        actions.append(ft.IconButton(
+            ft.Icons.DELETE_OUTLINE, tooltip="Supprimer la dépense", icon_color=RED,
+            on_click=lambda e, d=dep: self._supprimer_depense(d, back)))
+        title = pr.display if pr else (dep.libelle or "Dépense")
+        return ft.Row([
+            ft.Column([
+                ft.Text(f"{dep.montant:.2f}", weight=ft.FontWeight.W_600, color=TEXT),
+                ft.Text(f"réglé {dep.montant_regle:.2f} · reste {dep.reste:.2f}",
+                        size=11, color=MUTED),
+            ], spacing=2, width=160),
+            ft.Column([
+                ft.Text(title, weight=ft.FontWeight.W_600, color=TEXT),
+                ft.Text(sub, size=12, color=MUTED),
+            ], spacing=2, expand=True),
+            chip, *actions,
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def _after_depense_change(self, prestataire_id: int, back: str) -> None:
+        if back == "fiche":
+            self.show_prestataire_detail(prestataire_id)
+        else:
+            self._refresh_depenses()
+
+    def _regler_depense(self, dep: "repo.Depense", back: str = "depenses") -> None:
+        """Modale de versement (partiel ou solde) : calque de _encaisser, etendue au partiel."""
+        dep = repo.get_depense(self.conn, dep.id) or dep
+        versement = ft.TextField(
+            label="Montant versé", value=f"{dep.reste:.2f}",
+            keyboard_type=ft.KeyboardType.NUMBER, autofocus=True)
+        mode = ft.RadioGroup(
+            value=dep.mode or "especes",
+            content=ft.Column([ft.Radio(value=k, label=v) for k, v in _MODE_LABELS.items()],
+                              tight=True, spacing=2))
+        motif = ft.TextField(label="Motif (optionnel)", value="")
+        warn = ft.Text("", color=RED, size=12)
+
+        def confirm(e):
+            try:
+                v = float((versement.value or "0").replace(",", "."))
+            except ValueError:
+                warn.value = "Montant invalide."; self.page.update(); return
+            if v <= 0:
+                warn.value = "Le versement doit être strictement supérieur à 0."
+                self.page.update(); return
+            if v > dep.reste + 1e-9:
+                warn.value = f"Le versement dépasse le reste à payer ({dep.reste:.2f})."
+                self.page.update(); return
+            if not mode.value:
+                warn.value = "Sélectionnez un mode de règlement."; self.page.update(); return
+            new = repo.add_depense_reglement(
+                self.conn, dep.id, v, mode=mode.value, motif=motif.value or None)
+            repo.log_audit(
+                self.conn, "depense_reglee",
+                f"#{dep.id} +{v:.2f} ({_MODE_LABELS.get(mode.value, mode.value)}) "
+                f"→ {new.statut} (prestataire #{dep.prestataire_id})")
+            self._close_dialog()
+            self._toast("Dépense soldée." if new.statut == "regle" else "Règlement enregistré.")
+            self._after_depense_change(dep.prestataire_id, back)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Régler la dépense"),
+            content=ft.Container(
+                ft.Column([
+                    ft.Text(f"Total dû : {dep.montant:.2f}", color=MUTED),
+                    ft.Text(f"Déjà réglé : {dep.montant_regle:.2f}", color=MUTED),
+                    ft.Text(f"Reste à payer : {dep.reste:.2f}",
+                            weight=ft.FontWeight.BOLD, color=AMBER),
+                    versement,
+                    ft.Text("Mode de règlement", weight=ft.FontWeight.BOLD, color=TEXT),
+                    mode, motif, warn,
+                ], tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=340, height=430),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Régler", confirm, icon=ft.Icons.CHECK_CIRCLE, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _supprimer_depense(self, dep: "repo.Depense", back: str = "depenses") -> None:
+        """Confirme puis supprime une dépense (la facture archivée reste conservée)."""
+        def confirm(e):
+            repo.delete_depense(self.conn, dep.id)
+            repo.log_audit(
+                self.conn, "depense_supprimee",
+                f"#{dep.id} {dep.montant:.2f} (prestataire #{dep.prestataire_id})")
+            self._close_dialog()
+            self._toast("Dépense supprimée.")
+            self._after_depense_change(dep.prestataire_id, back)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Supprimer la dépense"),
+            content=ft.Text(
+                f"Supprimer définitivement cette dépense de {dep.montant:.2f} ? "
+                "La facture archivée est conservée."),
+            actions=[
+                ft.TextButton("Retour", on_click=lambda e: self._close_dialog()),
+                self._btn("Supprimer", confirm, icon=ft.Icons.DELETE_OUTLINE, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
 
     # --- Vue PARAMETRAGE (Modeles de documents + Modeles d'email) -------------
     def show_parametrage(self, tab: str | None = None) -> None:
@@ -2289,6 +2683,398 @@ class CrmApp:
         ], spacing=18)
         self.page.update()
 
+    # --- Vue PRESTATAIRES -----------------------------------------------------
+    def show_prestataires(self) -> None:
+        self.current_view = "prestataires"
+        self.rail.selected_index = 2
+        self._set_body(
+            self._title(
+                "Prestataires",
+                self._btn("Nouveau prestataire", lambda e: self._prestataire_dialog(),
+                          icon=ft.Icons.ADD, shortcut=SC_NEW, busy=False),
+            ),
+            ft.Row([self.pr_search], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            self.pr_results,
+            self.pr_pager,
+        )
+        self._refresh_prestataires()
+
+    def _refresh_prestataires(self) -> None:
+        search = self.pr_search.value or ""
+        total = repo.count_prestataires(self.conn, search)
+        self.pr_page = self._clamp_page(self.pr_page, total)
+        items = repo.list_prestataires(
+            self.conn, search, limit=PAGE_SIZE, offset=self.pr_page * PAGE_SIZE)
+        rows = [self._prestataire_row(p) for p in items]
+        empty = ("Aucun prestataire ne correspond à votre recherche." if search.strip()
+                 else "Aucun prestataire. Cliquez sur « Nouveau prestataire ».")
+        liste = ft.Column(rows, spacing=8) if rows else ft.Text(empty, color=MUTED)
+
+        def on_page(idx):
+            self.pr_page = idx
+            self._refresh_prestataires()
+
+        self.pr_results.content = self._card(liste)
+        self.pr_pager.content = self._pagination(self.pr_page, total, on_page)
+        self.page.update()
+
+    def _prestataire_row(self, p: "repo.Prestataire") -> ft.Control:
+        sub = " · ".join(filter(None, [p.email, p.telephone])) or "—"
+        avatar = ft.CircleAvatar(
+            content=ft.Icon(ft.Icons.STOREFRONT, color=NAVY, size=18), bgcolor=TEAL, radius=18)
+        infos = ft.Column(
+            [ft.Text(p.display, weight=ft.FontWeight.W_600, color=TEXT),
+             ft.Text(sub, size=12, color=MUTED)],
+            spacing=2, expand=True)
+        return ft.Container(
+            content=ft.Row(
+                [avatar, infos, ft.Text(f"#{p.id}", color=MUTED, size=12),
+                 ft.Icon(ft.Icons.CHEVRON_RIGHT, color=MUTED)],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=10, border_radius=10, ink=True,
+            on_click=lambda e, pid=p.id: self.show_prestataire_detail(pid),
+        )
+
+    def show_prestataire_detail(self, prestataire_id: int,
+                                conn: sqlite3.Connection | None = None) -> None:
+        conn = conn or self.conn
+        p = repo.get_prestataire(conn, prestataire_id)
+        if not p:
+            return self.show_prestataires()
+        if not self.current_prestataire or self.current_prestataire.id != prestataire_id:
+            self.detail_pr_factures_page = 0
+            self.detail_pr_depenses_page = 0
+        self.current_view = "prestataire_detail"  # Echap revient a la liste
+        self.current_prestataire = p
+
+        fac_total = repo.count_factures_for_prestataire(conn, prestataire_id)
+        dep_total = repo.count_depenses_for_prestataire(conn, prestataire_id)
+        self.detail_pr_factures_page = self._clamp_page(self.detail_pr_factures_page, fac_total)
+        self.detail_pr_depenses_page = self._clamp_page(self.detail_pr_depenses_page, dep_total)
+        factures = repo.list_factures(
+            conn, prestataire_id, limit=PAGE_SIZE, offset=self.detail_pr_factures_page * PAGE_SIZE)
+        depenses = repo.list_depenses(
+            conn, prestataire_id, limit=PAGE_SIZE, offset=self.detail_pr_depenses_page * PAGE_SIZE)
+        # Totaux du prestataire (toutes ses depenses, non pagine : peu de lignes).
+        all_dep = repo.list_depenses(conn, prestataire_id)
+        du = sum(d.montant or 0 for d in all_dep)
+        regle = sum(d.montant_regle or 0 for d in all_dep)
+        reste = max(0.0, du - regle)
+
+        async def _on_import(e):
+            await self._pick_and_import(p)
+
+        header = ft.Row([
+            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: self.show_prestataires()),
+            ft.Text(p.display, size=24, weight=ft.FontWeight.BOLD, color=TEXT),
+            ft.Container(expand=True),
+            self._btn("Modifier", lambda e: self._prestataire_dialog(p), icon=ft.Icons.EDIT,
+                      primary=False, busy=False),
+            self._btn("Importer une facture", _on_import,
+                      icon=ft.Icons.UPLOAD_FILE, busy=False),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+        infos = self._card(ft.Column([
+            _kv("Email", p.email or "—"),
+            _kv("Téléphone", p.telephone or "—"),
+            _kv("Adresse", p.adresse or "—"),
+            _kv("Notes", p.notes or "—"),
+        ], spacing=6))
+
+        summary = self._money_summary([
+            ("Total dû", du, TEXT),
+            ("Réglé", regle, GREEN),
+            ("Reste à payer", reste, AMBER),
+        ])
+
+        fac_col = ft.Column(
+            [self._facture_row(f) for f in factures] or [ft.Text("Aucune facture.", color=MUTED)],
+            spacing=8)
+        dep_col = ft.Column(
+            [self._depense_list_row(d, p, from_fiche=True) for d in depenses]
+            or [ft.Text("Aucune dépense.", color=MUTED)],
+            spacing=8)
+
+        def on_fac_page(idx):
+            self.detail_pr_factures_page = idx
+            self.show_prestataire_detail(prestataire_id)
+
+        def on_dep_page(idx):
+            self.detail_pr_depenses_page = idx
+            self.show_prestataire_detail(prestataire_id)
+
+        fac_pager = (self._pagination(self.detail_pr_factures_page, fac_total, on_fac_page)
+                     if fac_total > PAGE_SIZE else ft.Container())
+        dep_pager = (self._pagination(self.detail_pr_depenses_page, dep_total, on_dep_page)
+                     if dep_total > PAGE_SIZE else ft.Container())
+
+        self._set_body(
+            header,
+            infos,
+            summary,
+            ft.Text("Factures", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
+            self._card(fac_col),
+            fac_pager,
+            ft.Text("Dépenses", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
+            self._card(dep_col),
+            dep_pager,
+        )
+
+    def _facture_row(self, f: "repo.Facture") -> ft.Control:
+        info = " · ".join(filter(None, [
+            f.created_at or "",
+            f"{f.montant:.2f}" if f.montant else "",
+        ])) or "—"
+        return ft.Row([
+            ft.Icon(ft.Icons.RECEIPT_LONG, color=TEAL_DARK),
+            ft.Column([
+                ft.Text(f.nom_original or Path(f.fichier).name, weight=ft.FontWeight.W_600, color=TEXT),
+                ft.Text(info, size=12, color=MUTED),
+            ], spacing=2, expand=True),
+            ft.IconButton(ft.Icons.FOLDER_OPEN, tooltip="Ouvrir le fichier",
+                          on_click=lambda e, ff=f: self._open_path(ff.fichier)),
+            ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Supprimer la facture", icon_color=RED,
+                          on_click=lambda e, ff=f: self._delete_facture_dialog(ff)),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def _open_path(self, path: str) -> None:
+        """Ouvre un fichier archive avec l'application par defaut du systeme."""
+        import os
+        try:
+            if not path or not Path(path).exists():
+                self._toast("Fichier introuvable.", ok=False); return
+            if os.name == "nt":
+                os.startfile(path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                import subprocess; subprocess.Popen(["open", path])
+            else:
+                import subprocess; subprocess.Popen(["xdg-open", path])
+        except Exception as exc:  # noqa: BLE001
+            self._toast(f"Ouverture impossible : {exc}", ok=False)
+
+    def _delete_facture_dialog(self, f: "repo.Facture") -> None:
+        def confirm(e):
+            try:
+                if f.fichier and Path(f.fichier).exists():
+                    Path(f.fichier).unlink()
+            except OSError:
+                pass  # fichier verrouille/absent : on supprime quand meme l'enregistrement
+            repo.delete_facture(self.conn, f.id)
+            repo.log_audit(self.conn, "facture_supprimee",
+                           f"#{f.id} (prestataire #{f.prestataire_id})")
+            self._close_dialog()
+            self._toast("Facture supprimée.")
+            if self.current_prestataire:
+                self.show_prestataire_detail(self.current_prestataire.id)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Supprimer la facture"),
+            content=ft.Text(
+                f"Supprimer définitivement « {f.nom_original or Path(f.fichier).name} » ? "
+                "Les dépenses liées sont conservées (déliées du fichier)."),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Supprimer", confirm, icon=ft.Icons.DELETE_OUTLINE, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _prestataire_dialog(self, p: "repo.Prestataire | None" = None) -> None:
+        is_edit = p is not None
+        nom = ft.TextField(label="Nom / Raison sociale *", value=p.nom if p else "", autofocus=True)
+        prenom = ft.TextField(label="Prénom (optionnel)", value=(p.prenom if p else "") or "")
+        email = ft.TextField(label="Email", value=(p.email if p else "") or "")
+        tel = ft.TextField(label="Téléphone", value=(p.telephone if p else "") or "")
+        adresse = ft.TextField(label="Adresse", value=(p.adresse if p else "") or "",
+                               multiline=True, min_lines=1, max_lines=3)
+        notes = ft.TextField(label="Notes", value=(p.notes if p else "") or "",
+                             multiline=True, min_lines=1, max_lines=3)
+        warn = ft.Text("", color=NAVY, size=12)
+
+        def on_save(e):
+            if not nom.value.strip():
+                warn.value = "Le nom est obligatoire."
+                self.page.update()
+                return
+            if not is_edit:
+                matches = repo.find_prestataire_matches(self.conn, nom.value, prenom.value)
+                if matches and not getattr(on_save, "_confirmed", False):
+                    warn.value = (f"⚠ Un prestataire « {matches[0].display} » (#{matches[0].id}) "
+                                  "existe déjà. Cliquez de nouveau sur Enregistrer pour "
+                                  "créer quand même un doublon.")
+                    on_save._confirmed = True
+                    self.page.update()
+                    return
+            data = dict(
+                nom=nom.value, prenom=prenom.value or "", email=email.value or None,
+                telephone=tel.value or None, adresse=adresse.value or None,
+                notes=notes.value or None,
+            )
+            if is_edit:
+                for k, v in data.items():
+                    setattr(p, k, v)
+                repo.update_prestataire(self.conn, p)
+                repo.log_audit(self.conn, "prestataire_modifie", f"#{p.id} {p.display}")
+                self._close_dialog()
+                self._toast("Prestataire mis à jour.")
+                self.show_prestataire_detail(p.id)
+            else:
+                new = repo.create_prestataire(self.conn, repo.Prestataire(id=None, **data))
+                repo.log_audit(self.conn, "prestataire_cree", f"#{new.id} {new.display}")
+                self._close_dialog()
+                self._toast("Prestataire créé.")
+                self.show_prestataire_detail(new.id)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Modifier le prestataire" if is_edit else "Nouveau prestataire"),
+            content=ft.Container(
+                ft.Column([nom, prenom, email, tel, adresse, notes, warn],
+                          tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=420, height=440,
+            ),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Enregistrer", on_save, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    # --- Import d'une facture (upload + extraction IA du montant) --------------
+    async def _pick_and_import(self, prestataire: "repo.Prestataire") -> None:
+        """Ouvre le sélecteur de fichier (API async Flet) puis le dialog d'import."""
+        try:
+            files = await self.file_picker.pick_files(
+                allow_multiple=False, allowed_extensions=["pdf", "jpg", "jpeg", "png"])
+        except Exception as exc:  # noqa: BLE001
+            self._toast(f"Sélecteur de fichier indisponible : {exc}", ok=False)
+            return
+        if not files:
+            return  # annulé
+        path = getattr(files[0], "path", None)
+        if not path:
+            self._toast("Fichier non accessible (sélection web non supportée).", ok=False)
+            return
+        self._import_facture_dialog(prestataire, str(path))
+
+    def _import_facture_dialog(self, prestataire: "repo.Prestataire", src_path: str) -> None:
+        src = Path(src_path)
+        cfg = None
+        ia_ok = False
+        try:
+            from src.ai.factory import provider_for_feature
+            from src.config import load_config
+            cfg = load_config()
+            ia_ok = provider_for_feature(cfg, "facture_montant") is not None
+        except Exception:  # noqa: BLE001
+            ia_ok = False
+
+        montant = ft.TextField(label="Montant total (TTC)", value="",
+                               keyboard_type=ft.KeyboardType.NUMBER)
+        ia_status = ft.Text("", size=12, color=MUTED)
+        ech_row, ech = self._date_field("Échéance (optionnelle)", "")
+        add_dep = ft.Checkbox(label="Ajouter une ligne de dépense", value=True)
+        avance_type = ft.Dropdown(
+            value="montant", width=150, color=TEXT, text_style=ft.TextStyle(color=TEXT),
+            options=[ft.dropdown.Option(key="montant", text="Montant"),
+                     ft.dropdown.Option(key="pourcent", text="Pourcentage")])
+        avance_val = ft.TextField(label="Part déjà payée (avance)", value="",
+                                  keyboard_type=ft.KeyboardType.NUMBER)
+        motif = ft.TextField(label="Motif (ex. Avance)", value="")
+        status = ft.Text("", color=RED, size=12)
+
+        def run_ia(e=None):
+            if not ia_ok:
+                return
+            ia_status.value = "Lecture de la facture par IA…"
+            ia_status.color = MUTED
+            self.page.update()
+
+            def work():
+                from src.ai.features.facture_montant import extract_facture_montant
+                val = extract_facture_montant(cfg, str(src))
+
+                def apply():
+                    if val is not None:
+                        montant.value = f"{val:.2f}"
+                        ia_status.value = "Montant lu par IA — vérifiez avant d'importer."
+                        ia_status.color = GREEN
+                    else:
+                        ia_status.value = "IA : montant non trouvé, saisissez-le manuellement."
+                        ia_status.color = AMBER
+                    self.page.update()
+                self._run_on_ui(apply)
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def on_save(e):
+            m = generator.parse_montant_str(montant.value)
+            ech_iso, ech_ok = _fr_to_iso(ech.value)
+            if not ech_ok:
+                status.value = "Échéance invalide (format attendu : JJ/MM/AAAA)."
+                self.page.update(); return
+            if add_dep.value and (m is None or m <= 0):
+                status.value = "Renseignez un montant total (> 0) pour créer la dépense."
+                self.page.update(); return
+            try:
+                fac = generator.import_facture(
+                    self.conn, prestataire, str(src), montant=m, libelle=src.name)
+            except Exception as exc:  # noqa: BLE001
+                status.value = f"Échec de l'import : {exc}"
+                self.page.update(); return
+            repo.log_audit(self.conn, "facture_importee",
+                           f"#{fac.id} {src.name} (prestataire #{prestataire.id})")
+            if add_dep.value and m and m > 0:
+                paye = 0.0
+                raw = generator.parse_montant_str(avance_val.value)
+                if raw and raw > 0:
+                    paye = round(m * raw / 100.0, 2) if (avance_type.value == "pourcent") else raw
+                    paye = max(0.0, min(paye, m))
+                dep = repo.create_depense(
+                    self.conn, prestataire.id, m, montant_regle=paye,
+                    motif=(motif.value or None), facture_id=fac.id, date_echeance=ech_iso)
+                repo.log_audit(self.conn, "depense_creee",
+                               f"#{dep.id} {m:.2f} (avance {paye:.2f}) prestataire #{prestataire.id}")
+            self._close_dialog()
+            self._toast("Facture importée.")
+            self.show_prestataire_detail(prestataire.id)
+
+        montant_row = (ft.Row([montant, self._btn("Relire (IA)", run_ia,
+                                                   icon=ft.Icons.AUTO_AWESOME,
+                                                   primary=False, busy=False)],
+                              vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                       if ia_ok else montant)
+        if not ia_ok:
+            ia_status.value = "Extraction IA non configurée — saisie manuelle du montant."
+            ia_status.color = MUTED
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Importer une facture — {prestataire.display}"),
+            content=ft.Container(
+                ft.Column([
+                    ft.Text(f"Fichier : {src.name}", color=MUTED, size=12),
+                    montant_row,
+                    ia_status,
+                    ech_row,
+                    ft.Divider(),
+                    add_dep,
+                    ft.Row([avance_type, avance_val],
+                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    motif,
+                    status,
+                ], tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=460, height=500),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Importer", on_save, icon=ft.Icons.UPLOAD_FILE, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+        if ia_ok:
+            run_ia()  # auto-extraction a l'ouverture (montant editable ensuite)
+
     # --- Dialogues ------------------------------------------------------------
     def _patient_dialog(self, p: Patient | None = None) -> None:
         is_edit = p is not None
@@ -2863,7 +3649,7 @@ def _show_db_too_new(page: ft.Page, err: SchemaTooNewError) -> None:
 
 
 def main(page: ft.Page) -> None:
-    page.title = "Cabinet Dr Aslem Gouiaa"
+    page.title = f"Cabinet Dr Aslem Gouiaa — {version.app_version_full()}"
     page.bgcolor = BG
     page.padding = 0
     page.theme = ft.Theme(color_scheme_seed=NAVY, font_family="Segoe UI")

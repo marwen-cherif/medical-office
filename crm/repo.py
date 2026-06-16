@@ -1135,3 +1135,534 @@ def list_audit(
         params.append(limit)
     rows = conn.execute(sql, params).fetchall()
     return [(r["ts"], r["action"], r["detail"] or "") for r in rows]
+
+
+# =============================================================================
+# Depenses fournisseurs (v6) : prestataires, factures importees, depenses.
+# Calque des patrons patients/paiements ci-dessus ; `documents` n'est pas touchee.
+# =============================================================================
+
+# --- Prestataires (calque de Patient) -----------------------------------------
+
+@dataclass
+class Prestataire:
+    id: Optional[int]
+    nom: str
+    prenom: str = ""
+    email: Optional[str] = None
+    telephone: Optional[str] = None
+    adresse: Optional[str] = None
+    notes: Optional[str] = None
+
+    @property
+    def display(self) -> str:
+        return f"{self.nom.upper()} {self.prenom}".strip()
+
+
+def _row_to_prestataire(row: sqlite3.Row) -> Prestataire:
+    return Prestataire(
+        id=row["id"],
+        nom=row["nom"],
+        prenom=row["prenom"],
+        email=row["email"],
+        telephone=row["telephone"],
+        adresse=row["adresse"],
+        notes=row["notes"],
+    )
+
+
+def create_prestataire(conn: sqlite3.Connection, p: Prestataire) -> Prestataire:
+    cur = conn.execute(
+        """INSERT INTO prestataires
+           (nom, prenom, slug_nom, slug_prenom, email, telephone, adresse, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            p.nom.strip(),
+            (p.prenom or "").strip(),
+            slugify(p.nom),
+            slugify(p.prenom or ""),
+            p.email,
+            p.telephone,
+            p.adresse,
+            p.notes,
+        ),
+    )
+    conn.commit()
+    p.id = cur.lastrowid
+    return p
+
+
+def update_prestataire(conn: sqlite3.Connection, p: Prestataire) -> None:
+    conn.execute(
+        """UPDATE prestataires SET
+             nom = ?, prenom = ?, slug_nom = ?, slug_prenom = ?,
+             email = ?, telephone = ?, adresse = ?, notes = ?, updated_at = ?
+           WHERE id = ?""",
+        (
+            p.nom.strip(),
+            (p.prenom or "").strip(),
+            slugify(p.nom),
+            slugify(p.prenom or ""),
+            p.email,
+            p.telephone,
+            p.adresse,
+            p.notes,
+            _now(),
+            p.id,
+        ),
+    )
+    conn.commit()
+
+
+def get_prestataire(conn: sqlite3.Connection, prestataire_id: int) -> Optional[Prestataire]:
+    row = conn.execute(
+        "SELECT * FROM prestataires WHERE id = ?", (prestataire_id,)
+    ).fetchone()
+    return _row_to_prestataire(row) if row else None
+
+
+def _prestataire_filter_clause(search: str) -> tuple[str, list[Any]]:
+    """Clause WHERE (recherche nom/prenom insensible aux accents) pour les prestataires."""
+    if not search.strip():
+        return "", []
+    needle = f"%{slugify(search)}%"
+    where = (
+        " WHERE ((slug_nom || '_' || slug_prenom) LIKE ? "
+        "OR (slug_prenom || '_' || slug_nom) LIKE ?)"
+    )
+    return where, [needle, needle]
+
+
+def list_prestataires(
+    conn: sqlite3.Connection, search: str = "",
+    limit: int | None = None, offset: int = 0,
+) -> list[Prestataire]:
+    where, params = _prestataire_filter_clause(search)
+    sql = f"SELECT * FROM prestataires{where} ORDER BY slug_nom, slug_prenom"
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    rows = conn.execute(sql, params).fetchall()
+    return [_row_to_prestataire(r) for r in rows]
+
+
+def count_prestataires(conn: sqlite3.Connection, search: str = "") -> int:
+    where, params = _prestataire_filter_clause(search)
+    row = conn.execute(
+        f"SELECT COUNT(*) AS n FROM prestataires{where}", params
+    ).fetchone()
+    return int(row["n"])
+
+
+def find_prestataire_matches(
+    conn: sqlite3.Connection, nom: str, prenom: str
+) -> list[Prestataire]:
+    """Prestataires potentiellement identiques (meme slug nom+prenom) : detection doublon."""
+    rows = conn.execute(
+        "SELECT * FROM prestataires WHERE slug_nom = ? AND slug_prenom = ?",
+        (slugify(nom), slugify(prenom or "")),
+    ).fetchall()
+    return [_row_to_prestataire(r) for r in rows]
+
+
+def get_or_create_prestataire(
+    conn: sqlite3.Connection, nom: str, prenom: str = "", **extra: Any
+) -> tuple[Prestataire, bool]:
+    """Renvoie (prestataire, created). Reutilise un prestataire au slug identique s'il existe."""
+    existing = find_prestataire_matches(conn, nom, prenom)
+    if existing:
+        return existing[0], False
+    p = Prestataire(id=None, nom=nom, prenom=prenom, **extra)
+    return create_prestataire(conn, p), True
+
+
+# --- Factures importees --------------------------------------------------------
+
+@dataclass
+class Facture:
+    id: Optional[int]
+    prestataire_id: int
+    fichier: str
+    nom_original: Optional[str] = None
+    montant: Optional[float] = None
+    libelle: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+def _row_to_facture(row: sqlite3.Row) -> Facture:
+    return Facture(
+        id=row["id"],
+        prestataire_id=row["prestataire_id"],
+        fichier=row["fichier"],
+        nom_original=row["nom_original"],
+        montant=row["montant"],
+        libelle=row["libelle"],
+        notes=row["notes"],
+        created_at=row["created_at"],
+    )
+
+
+def create_facture(conn: sqlite3.Connection, f: Facture) -> Facture:
+    cur = conn.execute(
+        """INSERT INTO factures
+           (prestataire_id, fichier, nom_original, montant, libelle, notes)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (f.prestataire_id, f.fichier, f.nom_original, f.montant, f.libelle, f.notes),
+    )
+    conn.commit()
+    f.id = cur.lastrowid
+    return f
+
+
+def get_facture(conn: sqlite3.Connection, facture_id: int) -> Optional[Facture]:
+    row = conn.execute("SELECT * FROM factures WHERE id = ?", (facture_id,)).fetchone()
+    return _row_to_facture(row) if row else None
+
+
+def list_factures(
+    conn: sqlite3.Connection, prestataire_id: int,
+    limit: int | None = None, offset: int = 0,
+) -> list[Facture]:
+    sql = "SELECT * FROM factures WHERE prestataire_id = ? ORDER BY id DESC"
+    params: list[Any] = [prestataire_id]
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    rows = conn.execute(sql, params).fetchall()
+    return [_row_to_facture(r) for r in rows]
+
+
+def count_factures_for_prestataire(conn: sqlite3.Connection, prestataire_id: int) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM factures WHERE prestataire_id = ?", (prestataire_id,)
+    ).fetchone()
+    return int(row["n"])
+
+
+def delete_facture(conn: sqlite3.Connection, facture_id: int) -> None:
+    """Supprime la ligne facture. La suppression du fichier archive est geree par l'appelant."""
+    conn.execute("DELETE FROM factures WHERE id = ?", (facture_id,))
+    conn.commit()
+
+
+# --- Depenses (calque de Paiement, etendu au reglement partiel) ----------------
+
+# Statuts d'une depense (symetrie volontaire avec paiements en_attente/encaisse,
+# enrichie d'un etat partiel).
+DEPENSE_STATUTS = ("en_attente", "regle_partiellement", "regle")
+
+
+def statut_depense(montant: float, regle: float) -> str:
+    """Statut derive du cumul regle (source unique de verite). A appeler a chaque ecriture."""
+    if regle <= 0:
+        return "en_attente"
+    if regle + 1e-9 < (montant or 0):
+        return "regle_partiellement"
+    return "regle"
+
+
+@dataclass
+class Depense:
+    id: Optional[int]
+    prestataire_id: int
+    facture_id: Optional[int] = None
+    montant: float = 0.0
+    montant_regle: float = 0.0
+    statut: str = "en_attente"
+    mode: Optional[str] = None
+    motif: Optional[str] = None
+    date_echeance: Optional[str] = None
+    date_paiement: Optional[str] = None
+    libelle: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: Optional[str] = None
+
+    @property
+    def reste(self) -> float:
+        return max(0.0, (self.montant or 0) - (self.montant_regle or 0))
+
+
+def _row_to_depense(row: sqlite3.Row) -> Depense:
+    return Depense(
+        id=row["id"],
+        prestataire_id=row["prestataire_id"],
+        facture_id=row["facture_id"],
+        montant=row["montant"],
+        montant_regle=row["montant_regle"],
+        statut=row["statut"],
+        mode=row["mode"],
+        motif=row["motif"],
+        date_echeance=row["date_echeance"],
+        date_paiement=row["date_paiement"],
+        libelle=row["libelle"],
+        notes=row["notes"],
+        created_at=row["created_at"],
+    )
+
+
+def create_depense(
+    conn: sqlite3.Connection,
+    prestataire_id: int,
+    montant: float,
+    *,
+    montant_regle: float = 0.0,
+    motif: Optional[str] = None,
+    facture_id: Optional[int] = None,
+    date_echeance: Optional[str] = None,
+    mode: Optional[str] = None,
+    libelle: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> Depense:
+    """Cree une depense. `montant` > 0 ; `montant_regle` (avance) borne a [0, montant]."""
+    if montant is None or montant <= 0:
+        raise ValueError("Le montant d'une depense doit etre strictement superieur a 0.")
+    regle = max(0.0, min(float(montant_regle or 0), float(montant)))
+    statut = statut_depense(float(montant), regle)
+    date_paiement = _now() if regle > 0 else None
+    cur = conn.execute(
+        """INSERT INTO depenses
+           (prestataire_id, facture_id, montant, montant_regle, statut, mode, motif,
+            date_echeance, date_paiement, libelle, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (prestataire_id, facture_id, float(montant), regle, statut, mode, motif,
+         date_echeance, date_paiement, libelle, notes),
+    )
+    depense_id = cur.lastrowid
+    # Avance saisie a la creation => 1re ligne d'historique (flux de tresorerie).
+    if regle > 0:
+        conn.execute(
+            "INSERT INTO depense_reglements (depense_id, montant, mode, motif, date_reglement) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (depense_id, regle, mode, motif, date_paiement),
+        )
+    conn.commit()
+    return get_depense(conn, depense_id)  # type: ignore[arg-type, return-value]
+
+
+def add_depense_reglement(
+    conn: sqlite3.Connection,
+    depense_id: int,
+    versement: float,
+    *,
+    mode: Optional[str] = None,
+    motif: Optional[str] = None,
+    when: Optional[str] = None,
+) -> Depense:
+    """Enregistre un versement (partiel ou solde). Incremente le cumul et derive le statut."""
+    dep = get_depense(conn, depense_id)
+    if dep is None:
+        raise ValueError("Depense introuvable.")
+    if versement is None or versement <= 0:
+        raise ValueError("Le versement doit etre strictement superieur a 0.")
+    if versement > dep.reste + 1e-9:
+        raise ValueError("Le versement depasse le reste a payer.")
+    nouveau = float(dep.montant_regle or 0) + float(versement)
+    statut = statut_depense(float(dep.montant or 0), nouveau)
+    when = when or _now()
+    conn.execute(
+        "UPDATE depenses SET montant_regle = ?, statut = ?, date_paiement = ?, "
+        "mode = COALESCE(?, mode), motif = COALESCE(?, motif) WHERE id = ?",
+        (nouveau, statut, when, mode, motif, depense_id),
+    )
+    # Ligne d'historique du versement (datee) : alimente le flux de tresorerie.
+    conn.execute(
+        "INSERT INTO depense_reglements (depense_id, montant, mode, motif, date_reglement) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (depense_id, float(versement), mode, motif, when),
+    )
+    conn.commit()
+    return get_depense(conn, depense_id)  # type: ignore[return-value]
+
+
+def get_depense(conn: sqlite3.Connection, depense_id: int) -> Optional[Depense]:
+    row = conn.execute("SELECT * FROM depenses WHERE id = ?", (depense_id,)).fetchone()
+    return _row_to_depense(row) if row else None
+
+
+def list_depenses(
+    conn: sqlite3.Connection, prestataire_id: int,
+    limit: int | None = None, offset: int = 0,
+) -> list[Depense]:
+    sql = "SELECT * FROM depenses WHERE prestataire_id = ? ORDER BY id DESC"
+    params: list[Any] = [prestataire_id]
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    rows = conn.execute(sql, params).fetchall()
+    return [_row_to_depense(r) for r in rows]
+
+
+def count_depenses_for_prestataire(conn: sqlite3.Connection, prestataire_id: int) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM depenses WHERE prestataire_id = ?", (prestataire_id,)
+    ).fetchone()
+    return int(row["n"])
+
+
+def delete_depense(conn: sqlite3.Connection, depense_id: int) -> None:
+    conn.execute("DELETE FROM depenses WHERE id = ?", (depense_id,))
+    conn.commit()
+
+
+def _depense_filter_clause(
+    search: str, statut: str, date_from: str = "", date_to: str = "",
+) -> tuple[str, list[Any]]:
+    """Clause WHERE (et parametres) pour la liste des depenses jointe au prestataire.
+
+    `statut` : en_attente | regle_partiellement | regle | tous. La colonne date du
+    filtre periode est contextuelle au statut (calque paiements) : date_paiement pour
+    les regles/partiels, date_echeance pour en_attente, sinon created_at.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    if statut in DEPENSE_STATUTS:
+        clauses.append("d.statut = ?")
+        params.append(statut)
+    if search.strip():
+        needle = f"%{slugify(search)}%"
+        clauses.append(
+            "((pr.slug_nom || '_' || pr.slug_prenom) LIKE ? "
+            "OR (pr.slug_prenom || '_' || pr.slug_nom) LIKE ?)"
+        )
+        params += [needle, needle]
+    date_col = {
+        "regle": "d.date_paiement",
+        "regle_partiellement": "d.date_paiement",
+        "en_attente": "d.date_echeance",
+    }.get(statut, "d.created_at")
+    if date_from.strip():
+        clauses.append(f"date({date_col}) >= ?")
+        params.append(date_from.strip())
+    if date_to.strip():
+        clauses.append(f"date({date_col}) <= ?")
+        params.append(date_to.strip())
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
+def list_depenses_filtered(
+    conn: sqlite3.Connection,
+    search: str = "",
+    statut: str = "en_attente",
+    limit: int | None = None,
+    offset: int = 0,
+    date_from: str = "",
+    date_to: str = "",
+) -> list[tuple[Depense, Prestataire]]:
+    """Liste paginee des depenses jointes a leur prestataire, filtree par statut/recherche."""
+    where, params = _depense_filter_clause(search, statut, date_from, date_to)
+    sql = (
+        "SELECT d.*, pr.id AS pr_id, pr.nom, pr.prenom, pr.email, pr.telephone, "
+        "pr.adresse, pr.notes AS pr_notes "
+        "FROM depenses d JOIN prestataires pr ON pr.id = d.prestataire_id"
+        f"{where} "
+        "ORDER BY d.date_echeance IS NULL, d.date_echeance, d.id DESC"
+    )
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    rows = conn.execute(sql, params).fetchall()
+    out: list[tuple[Depense, Prestataire]] = []
+    for r in rows:
+        depense = _row_to_depense(r)
+        prestataire = Prestataire(
+            id=r["pr_id"], nom=r["nom"], prenom=r["prenom"], email=r["email"],
+            telephone=r["telephone"], adresse=r["adresse"], notes=r["pr_notes"],
+        )
+        out.append((depense, prestataire))
+    return out
+
+
+def count_depenses(
+    conn: sqlite3.Connection,
+    search: str = "",
+    statut: str = "en_attente",
+    date_from: str = "",
+    date_to: str = "",
+) -> int:
+    where, params = _depense_filter_clause(search, statut, date_from, date_to)
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM depenses d "
+        f"JOIN prestataires pr ON pr.id = d.prestataire_id{where}",
+        params,
+    ).fetchone()
+    return int(row["n"])
+
+
+def total_depenses(
+    conn: sqlite3.Connection,
+    search: str = "",
+    statut: str = "tous",
+    date_from: str = "",
+    date_to: str = "",
+) -> tuple[float, float, float]:
+    """Renvoie (total_du, total_regle, reste_a_payer) sur le filtre (pour KPI / recap)."""
+    where, params = _depense_filter_clause(search, statut, date_from, date_to)
+    row = conn.execute(
+        "SELECT COALESCE(SUM(d.montant), 0) AS du, "
+        "COALESCE(SUM(d.montant_regle), 0) AS regle, "
+        "COALESCE(SUM(d.montant - d.montant_regle), 0) AS reste "
+        "FROM depenses d "
+        f"JOIN prestataires pr ON pr.id = d.prestataire_id{where}",
+        params,
+    ).fetchone()
+    return float(row["du"] or 0), float(row["regle"] or 0), float(row["reste"] or 0)
+
+
+# --- Historique des reglements (v7) : flux de tresorerie par date de transaction ----
+
+@dataclass
+class Reglement:
+    id: Optional[int]
+    depense_id: int
+    montant: float
+    mode: Optional[str] = None
+    motif: Optional[str] = None
+    date_reglement: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+def _row_to_reglement(row: sqlite3.Row) -> Reglement:
+    return Reglement(
+        id=row["id"],
+        depense_id=row["depense_id"],
+        montant=row["montant"],
+        mode=row["mode"],
+        motif=row["motif"],
+        date_reglement=row["date_reglement"],
+        created_at=row["created_at"],
+    )
+
+
+def list_reglements(conn: sqlite3.Connection, depense_id: int) -> list[Reglement]:
+    """Versements d'une depense (du plus recent au plus ancien)."""
+    rows = conn.execute(
+        "SELECT * FROM depense_reglements WHERE depense_id = ? "
+        "ORDER BY date(date_reglement) DESC, id DESC",
+        (depense_id,),
+    ).fetchall()
+    return [_row_to_reglement(r) for r in rows]
+
+
+def total_regle_periode(
+    conn: sqlite3.Connection, date_from: str = "", date_to: str = ""
+) -> float:
+    """Somme des montants REELLEMENT verses sur la periode (par `date_reglement`).
+
+    Exact pour les reglements partiels (1 ligne par versement), contrairement au cumul
+    `depenses.montant_regle`. C'est la sortie de tresorerie de la periode.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    if date_from.strip():
+        clauses.append("date(date_reglement) >= ?")
+        params.append(date_from.strip())
+    if date_to.strip():
+        clauses.append("date(date_reglement) <= ?")
+        params.append(date_to.strip())
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    row = conn.execute(
+        f"SELECT COALESCE(SUM(montant), 0) AS total FROM depense_reglements{where}", params
+    ).fetchone()
+    return float(row["total"] or 0)

@@ -8,6 +8,7 @@ Reutilise src.doc_filler, src.pdf_to_jpg et src.mailer sans les modifier.
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 import tempfile
 import traceback
@@ -22,7 +23,7 @@ from src.pdf_to_jpg import pdf_first_page_to_jpg
 
 from . import repo, templates
 from .db import app_dir
-from .repo import Document, Patient
+from .repo import Document, Facture, Patient, Prestataire
 from .templates import Template
 
 
@@ -68,6 +69,49 @@ def build_filename(
     if doc_id is not None:
         base = f"{base}_{doc_id}"
     return f"{base}.{ext}"
+
+
+# --- Factures fournisseurs (v6) : import/archivage, sans Word ni Mailjet ------
+
+def prestataire_dir(prestataire: Prestataire) -> Path:
+    """Dossier d'archive d'un prestataire : output/prestataires/<nom>_<prenom>/.
+
+    Sous-dossier dedie pour ne jamais collisionner avec les notes patients.
+    """
+    parts = [_slug(prestataire.nom), _slug(prestataire.prenom or "")]
+    name = "_".join(p for p in parts if p) or f"prestataire_{prestataire.id}"
+    d = output_dir() / "prestataires" / name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def import_facture(
+    conn: sqlite3.Connection,
+    prestataire: Prestataire,
+    src_path,
+    *,
+    montant: Optional[float] = None,
+    libelle: Optional[str] = None,
+) -> Facture:
+    """Archive le fichier uploade (PDF/image) et cree la ligne `factures`.
+
+    Pas de generation Word, pas d'envoi Mailjet : archivage seul. Le nom est horodate
+    pour garantir l'unicite (entre imports et vis-a-vis des patients).
+    """
+    src = Path(src_path)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    ext = src.suffix.lower()
+    dest = prestataire_dir(prestataire) / f"facture_{stamp}{ext}"
+    shutil.copy2(src, dest)
+    facture = Facture(
+        id=None,
+        prestataire_id=prestataire.id,  # type: ignore[arg-type]
+        fichier=str(dest),
+        nom_original=src.name,
+        montant=montant,
+        libelle=libelle,
+    )
+    return repo.create_facture(conn, facture)
 
 
 # Balises remplies automatiquement depuis la fiche patient (non demandees a l'ecran).
