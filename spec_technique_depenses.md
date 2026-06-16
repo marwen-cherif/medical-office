@@ -22,8 +22,8 @@
 | Patron `Paiement`/`create_paiement`/`mark_paiement_encaisse`/`list_paiements_filtered` | `crm/repo.py:90,701,720,806` | Calque `Depense` (étendu partiel) |
 | `output_dir`, `patient_dir`, `build_filename` | `crm/generator.py:29,39,54` | Archivage facture importée |
 | `load_config`, dataclasses `Config/Mailjet/Mail` | `src/config.py:48,15` | Ajout `AIConfig` (sections `ai_provider_*` / `ai_feature_*`) |
-| `requests` (HTTP) | déjà utilisé `src/mailer.py` | Provider DeepSeek (HTTP), sans nouvelle dépendance |
-| `fitz`/PyMuPDF | déjà utilisé `src/pdf_to_jpg.py` | `document_to_text` (étape texte de l'extraction) |
+| `requests` (HTTP) | déjà utilisé `src/mailer.py` | Provider Qwen-VL-OCR (HTTP), sans nouvelle dépendance |
+| `fitz`/PyMuPDF | déjà utilisé `src/pdf_to_jpg.py` | `as_image_parts` (rasterisation PDF → image pour la vision) |
 | Palette, `_STATUT_LABELS`, `_MODE_LABELS`, `PAGE_SIZE` | `crm/app.py:30,43,73,166` | Libellés/couleurs dépense |
 | `_build_shell`, `_date_field`, `_pagination`, `_run_busy`, `_toast`, `_show_dialog`, `_btn` | `crm/app.py:325,698,633,657,455,463,424` | Page Prestataires/Finances |
 | `show_patients`, `show_patient_detail`, `_patient_dialog` | `crm/app.py:964,1329,2293` | Calque Prestataires |
@@ -236,17 +236,19 @@ elle applique et *quel modèle* ; un **factory** instancie le bon provider d'apr
 Ajouter un provider (Anthropic, OpenAI…) ou une fonctionnalité IA future = ajouter une classe /
 une section de config, **sans toucher** au code appelant.
 
-**Premier provider : DeepSeek.** Implémenté en **HTTP via `requests`** (déjà une dépendance du
-projet — `src/mailer.py`), API OpenAA-compatible (`POST /chat/completions`), donc **aucune
-nouvelle dépendance** ni complication PyInstaller.
+**Premier provider : Qwen-VL-OCR** (Alibaba DashScope). Implémenté en **HTTP via `requests`**
+(déjà une dépendance — `src/mailer.py`), via l'endpoint **OpenAI-compatible** de DashScope
+(`/compatible-mode/v1/chat/completions`, bloc `image_url`), donc **aucune nouvelle dépendance**
+ni complication PyInstaller.
 
-> ⚠️ **Contrainte vision.** `deepseek-chat` est **text-only** (pas de lecture d'image). Le
-> pipeline sépare donc proprement deux étapes : **(1) document → texte** (extraction du texte
-> du PDF via PyMuPDF, déjà présent) puis **(2) texte → montant** (LLM). Les factures **scannées
-> en image** n'ont pas de texte extractible : dans ce cas, l'étape 1 renvoie vide ⇒ repli
-> saisie manuelle, **ou** on bascule la fonctionnalité sur un provider **vision** (Anthropic,
-> OpenAI) dans la config — sans changer le code de la fonctionnalité. C'est précisément ce que
-> le pattern factory + provider-par-fonctionnalité permet.
+> ⚠️ **Les factures sont des scans.** Hypothèse métier confirmée : entrées **JPG/PNG**, ou
+> **PDF contenant une image** (pas de texte sélectionnable). La fonctionnalité est donc
+> **vision-only** : pas d'étape « extraction de texte » (un `get_text` PyMuPDF renverrait vide
+> sur un scan). Pipeline : **image → modèle vision** ; **PDF scanné → rasterisé en image
+> (PyMuPDF, ~200 DPI) → modèle vision**. Un modèle vision-LLM cloud (Qwen-VL-OCR) est aussi
+> **plus robuste qu'un OCR local** sur des photos bruitées/inclinées. Grâce au factory, basculer
+> vers un autre provider vision (Gemini, Anthropic, OpenAI) reste un simple changement de
+> config — l'interface expose déjà `images` + `supports_vision`.
 
 ### 3.0 Arborescence
 ```
@@ -254,14 +256,14 @@ src/ai/
   __init__.py
   base.py            # AIProvider (ABC), ImagePart, AIError
   factory.py         # registre + build_provider + provider_for_feature
-  documents.py       # document_to_text (PyMuPDF) — étape OCR/texte
+  images.py          # as_image_parts(path) : JPG/PNG direct + rasterisation PDF (PyMuPDF)
   features/
     __init__.py
     facture_montant.py   # 1re fonctionnalité : extract_facture_montant(...)
   providers/
     __init__.py
-    deepseek.py      # DeepSeekProvider (HTTP/requests)
-    # anthropic.py, openai.py … (futurs, mêmes 2 méthodes)
+    qwen.py          # QwenVisionProvider (HTTP/requests, DashScope OpenAI-compatible)
+    # gemini.py, anthropic.py … (futurs, même interface)
 prompts/
   facture_montant.txt    # prompt ÉDITABLE par l'utilisateur (cf. §3.5)
 ```
@@ -270,18 +272,19 @@ prompts/
 `config.ini` (clés **git-ignorées** comme le reste du fichier) :
 ```ini
 ; --- Fournisseurs IA : 1 section par provider, clé d'API propre ---
-[ai_provider_deepseek]
+[ai_provider_qwen]
 api_key  = sk-...
-base_url = https://api.deepseek.com
-model    = deepseek-chat
+; Endpoint OpenAI-compatible DashScope (international hors Chine).
+base_url = https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+model    = qwen-vl-ocr
 
-[ai_provider_anthropic]      ; exemple futur (vision) — laissé vide pour l'instant
+[ai_provider_gemini]         ; exemple futur (PDF natif) — laissé vide pour l'instant
 api_key  =
-model    = claude-haiku-4-5
+model    = gemini-2.0-flash
 
 ; --- Fonctionnalités IA : 1 section par fonctionnalité ---
 [ai_feature_facture_montant]
-provider = deepseek                       ; quel provider sert CETTE fonctionnalité
+provider = qwen                           ; quel provider sert CETTE fonctionnalité
 prompt   = prompts/facture_montant.txt    ; prompt éditable (chemin relatif à l'app)
 enabled  = true
 ```
@@ -361,51 +364,72 @@ class AIProvider(ABC):
         """Renvoie un dict JSON. Lève AIError en cas d'échec."""
 ```
 
-### 3.3 Provider DeepSeek — `src/ai/providers/deepseek.py`
+### 3.3 Provider Qwen-VL-OCR — `src/ai/providers/qwen.py`
+DashScope expose un endpoint **OpenAI-compatible** : on envoie l'image dans un bloc
+`image_url` (data-URL base64). On ne s'appuie **pas** sur `response_format` (support variable
+sur les modèles VL) : le prompt impose le JSON et on le parse de façon tolérante.
 ```python
 import json
+import re
 import requests
-from ..base import AIProvider, AIError
+from ..base import AIProvider, AIError, ImagePart
 
-class DeepSeekProvider(AIProvider):
-    name = "deepseek"
-    supports_vision = False        # deepseek-chat = texte uniquement
+_DEFAULT_BASE = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+
+def _data_url(p: ImagePart) -> str:
+    return f"data:{p.media_type};base64,{p.data_b64}"
+
+def _extract_json(txt: str) -> dict:
+    """Tolère ```json … ``` ou du texte autour (robustesse VL/OCR)."""
+    m = re.search(r"\{.*\}", txt, re.DOTALL)
+    if not m:
+        raise AIError(f"Pas de JSON dans la réponse: {txt[:120]}")
+    try:
+        return json.loads(m.group(0))
+    except ValueError as e:
+        raise AIError(f"JSON invalide: {e}") from e
+
+class QwenVisionProvider(AIProvider):
+    name = "qwen"
+    supports_vision = True
 
     def complete_json(self, *, system, user, images=None, max_tokens=512):
-        if images:
-            raise AIError("DeepSeek ne lit pas les images : fournir du texte (OCR en amont).")
-        base = (self.cfg.base_url or "https://api.deepseek.com").rstrip("/")
+        base = (self.cfg.base_url or _DEFAULT_BASE).rstrip("/")
+        content = [{"type": "text", "text": user}]
+        for img in (images or []):
+            content.append({"type": "image_url", "image_url": {"url": _data_url(img)}})
         try:
             r = requests.post(
                 f"{base}/chat/completions",
                 headers={"Authorization": f"Bearer {self.cfg.api_key}",
                          "Content-Type": "application/json"},
-                json={"model": self.cfg.model or "deepseek-chat",
+                json={"model": self.cfg.model or "qwen-vl-ocr",
                       "messages": [{"role": "system", "content": system},
-                                   {"role": "user", "content": user}],
-                      "response_format": {"type": "json_object"},  # mode JSON DeepSeek
-                      "temperature": 0, "max_tokens": max_tokens, "stream": False},
-                timeout=30)
+                                   {"role": "user", "content": content}],
+                      "max_tokens": max_tokens, "stream": False},
+                timeout=60)        # vision : images = payload plus lourd
         except requests.RequestException as e:
-            raise AIError(f"DeepSeek réseau: {e}") from e
+            raise AIError(f"Qwen réseau: {e}") from e
         if r.status_code != 200:
-            raise AIError(f"DeepSeek HTTP {r.status_code}: {r.text[:200]}")
+            raise AIError(f"Qwen HTTP {r.status_code}: {r.text[:200]}")
         try:
-            return json.loads(r.json()["choices"][0]["message"]["content"])
+            txt = r.json()["choices"][0]["message"]["content"]
         except (KeyError, ValueError, IndexError) as e:
-            raise AIError(f"DeepSeek réponse invalide: {e}") from e
+            raise AIError(f"Qwen réponse invalide: {e}") from e
+        return _extract_json(txt)
 ```
-> Le **mode JSON** de DeepSeek exige que le mot « json » figure dans le prompt et de borner
-> `max_tokens` : le prompt par défaut (§3.5) le respecte.
+> Région : `dashscope-intl.…` hors Chine (le cabinet est en Tunisie). Modèle `qwen-vl-ocr`
+> (spécialisé documents) ; `qwen-vl-plus` est une alternative qui suit mieux des consignes
+> complexes si besoin. Réglable via `config.ini` (`model`), sans toucher au code.
 
 ### 3.4 Factory — `src/ai/factory.py`
 ```python
 from .base import AIProvider, AIError
-from .providers.deepseek import DeepSeekProvider
+from .providers.qwen import QwenVisionProvider
 
 _REGISTRY: dict[str, type[AIProvider]] = {
-    "deepseek": DeepSeekProvider,
-    # "anthropic": AnthropicProvider,   # à enregistrer quand ajouté
+    "qwen": QwenVisionProvider,
+    # "gemini": GeminiProvider, "anthropic": AnthropicProvider,  # à enregistrer quand ajoutés
 }
 
 def register_provider(name: str, cls: type[AIProvider]) -> None:
@@ -432,68 +456,86 @@ def provider_for_feature(cfg, feature: str) -> AIProvider | None:
 Fichier texte versionné (gabarit par défaut), **modifiable par l'utilisateur** pour changer la
 façon d'extraire l'information sans toucher au code (comme `templates/` pour le Word) :
 ```
-Tu es un assistant comptable. On te donne le TEXTE d'une facture fournisseur.
-Extrais le MONTANT TOTAL À PAYER (TTC).
-Réponds STRICTEMENT en json avec ce format : {"montant": <nombre ou null>,
+Tu es un assistant comptable. On te donne l'IMAGE d'une facture fournisseur scannée.
+Lis-la et extrais le MONTANT TOTAL À PAYER (TTC).
+Attention au format français : « 1 234,56 » signifie 1234.56 (espace = milliers,
+virgule = décimale). Renvoie le montant comme un nombre à point décimal.
+Réponds STRICTEMENT en json : {"montant": <nombre ou null>,
 "devise": "<code ou null>", "confiance": "haute|moyenne|basse"}.
 montant=null si tu ne le trouves pas. N'invente jamais de valeur.
 ```
 > Le prompt n'est volontairement **pas** en dur dans le code. Une future fonctionnalité IA
 > aura son propre fichier `prompts/<feature>.txt` + sa section `[ai_feature_<feature>]`.
 
-### 3.6 Fonctionnalité 1 — `src/ai/features/facture_montant.py`
+### 3.6 Image(s) en entrée — `src/ai/images.py`
+Convertit l'entrée (JPG/PNG **ou** PDF scanné) en `ImagePart`(s). Le PDF est **rasterisé** par
+PyMuPDF (déjà présent) à ~200 DPI ; on borne le nombre de pages (le total est en page 1/2).
+```python
+import base64
+from pathlib import Path
+from .base import ImagePart, AIError
+
+_DPI_ZOOM = 200 / 72        # ~200 DPI (matrice de zoom PyMuPDF)
+_MAX_PAGES = 2              # le total figure quasi toujours en page 1 ou 2
+
+def as_image_parts(path: Path, *, max_pages: int = _MAX_PAGES) -> list[ImagePart]:
+    suf = path.suffix.lower()
+    if suf in (".jpg", ".jpeg", ".png"):
+        media = "image/png" if suf == ".png" else "image/jpeg"
+        b64 = base64.standard_b64encode(path.read_bytes()).decode("ascii")
+        return [ImagePart(media_type=media, data_b64=b64)]
+    if suf == ".pdf":
+        import fitz                              # PyMuPDF (cf. src/pdf_to_jpg.py)
+        parts: list[ImagePart] = []
+        mat = fitz.Matrix(_DPI_ZOOM, _DPI_ZOOM)
+        with fitz.open(path) as doc:
+            for page in list(doc)[:max_pages]:
+                pix = page.get_pixmap(matrix=mat)          # rendu raster
+                b64 = base64.standard_b64encode(pix.tobytes("jpeg")).decode("ascii")
+                parts.append(ImagePart(media_type="image/jpeg", data_b64=b64))
+        if not parts:
+            raise AIError("PDF sans page exploitable.")
+        return parts
+    raise AIError(f"Format non supporté: {suf}")
+```
+
+### 3.7 Fonctionnalité 1 (vision-only) — `src/ai/features/facture_montant.py`
 ```python
 from pathlib import Path
 from ..factory import provider_for_feature
-from ..base import AIError, ImagePart
-from ..documents import document_to_text
-from ...config import _app_dir   # ou app_dir() — résolution chemin du prompt
+from ..base import AIError
+from ..images import as_image_parts
+from ...config import app_dir          # résolution du chemin de prompt (cf. crm/db.py:app_dir)
 
 FEATURE = "facture_montant"
 
 def _parse_montant(v) -> float | None:
     try:
-        return float(v) if v is not None else None
+        return float(v) if v is not None else None      # le provider renvoie déjà un nombre
     except (TypeError, ValueError):
         return None
 
 def extract_facture_montant(cfg, src_path) -> float | None:
-    """Montant TTC extrait, ou None (IA désactivée / illisible / échec). Ne lève jamais."""
+    """Montant TTC lu sur le scan, ou None (IA off / format inconnu / échec). Ne lève jamais."""
     provider = provider_for_feature(cfg, FEATURE)
-    if provider is None:
+    if provider is None or not provider.supports_vision:    # cette feature exige la vision
         return None
     feat = cfg.ai.feature(FEATURE)
-    system = (_app_dir() / feat.prompt_path).read_text(encoding="utf-8")
-    src = Path(src_path)
     try:
-        if provider.supports_vision:
-            data = provider.complete_json(
-                system=system, user="Facture en pièce jointe.",
-                images=[_as_image_part(src)], max_tokens=256)
-        else:                                    # DeepSeek : texte d'abord
-            text = document_to_text(src)
-            if not text.strip():                 # PDF scanné/image sans texte → repli manuel
-                return None
-            data = provider.complete_json(system=system, user=text, max_tokens=256)
+        system = (app_dir() / feat.prompt_path).read_text(encoding="utf-8")
+        images = as_image_parts(Path(src_path))             # JPG/PNG direct, PDF → rasterisé
+        data = provider.complete_json(
+            system=system, user="Facture scannée en pièce jointe.",
+            images=images, max_tokens=256)
         return _parse_montant(data.get("montant"))
-    except AIError:
+    except (AIError, OSError):
         return None
-```
-`src/ai/documents.py` (étape texte, réutilise PyMuPDF déjà présent) :
-```python
-from pathlib import Path
-
-def document_to_text(path: Path) -> str:
-    if path.suffix.lower() == ".pdf":
-        import fitz                       # PyMuPDF, déjà dépendance (src/pdf_to_jpg.py)
-        with fitz.open(path) as doc:
-            return "\n".join(p.get_text() for p in doc)
-    return ""        # image : pas d'OCR intégré → nécessite un provider vision
 ```
 
 > **Garanties** : un seul point d'appel côté app (`extract_facture_montant(cfg, path)`) ;
-> jamais d'exception remontée ; **le montant pré-remplit un champ éditable, jamais auto-validé** ;
-> appel **dans le thread d'arrière-plan** (`_run_busy`) car bloquant (réseau).
+> jamais d'exception remontée ; **le montant pré-remplit un champ éditable, jamais auto-validé**
+> (filet contre une mauvaise lecture OCR) ; appel **dans le thread d'arrière-plan** (`_run_busy`)
+> car bloquant (réseau).
 
 ---
 
@@ -638,18 +680,18 @@ Paramétrage : pas de typage de modèles. (PRD §6.6, §3.3.)
 
 ## 7. Dépendances & build
 
-- **Aucune nouvelle dépendance** pour DeepSeek : le provider utilise `requests` (déjà dans
-  `requirements.txt`) et `fitz`/PyMuPDF (déjà présent) pour l'étape texte. Rien à ajouter.
+- **Aucune nouvelle dépendance** pour Qwen-VL-OCR : le provider utilise `requests` (déjà dans
+  `requirements.txt`) et `fitz`/PyMuPDF (déjà présent) pour rasteriser les PDF. Rien à ajouter.
 - **PyInstaller** (`crm-desktop.spec`, `crm-web.spec`) : aucun `hiddenimports` supplémentaire
-  pour DeepSeek (requests/PyMuPDF déjà embarqués). Veiller seulement à inclure le dossier
-  **`prompts/`** dans les `datas` du build (comme `templates/`/`config.ini`).
-- `config.ini` (copié près de l'exe au build) : ajouter les sections `[ai_provider_deepseek]`
+  (requests/PyMuPDF déjà embarqués). Veiller seulement à inclure le dossier **`prompts/`**
+  dans les `datas` du build (comme `templates/`/`config.ini`).
+- `config.ini` (copié près de l'exe au build) : ajouter les sections `[ai_provider_qwen]`
   et `[ai_feature_facture_montant]` (clé vide ⇒ IA désactivée). Reste **git-ignoré**.
 - Tester l'exe gelé **hors-ligne** : l'app démarre et l'import fonctionne sans IA (clé absente
   ⇒ `provider_for_feature` renvoie `None` ⇒ saisie manuelle).
-- **Provider futur (Anthropic/OpenAI, vision)** : si ajouté, alors seulement, intégrer le SDK
-  correspondant (`anthropic` → `pydantic_core`, `httpx`, `certifi` en `hiddenimports`). Tant
-  qu'on reste sur DeepSeek, le build est inchangé.
+- **Provider futur (Gemini/OpenAI/Anthropic)** : si ajouté avec un SDK dédié, intégrer alors
+  ses `hiddenimports`. Tant qu'on reste sur des providers HTTP (Qwen via `requests`), le build
+  est inchangé.
 
 ---
 
@@ -673,9 +715,11 @@ Paramétrage : pas de typage de modèles. (PRD §6.6, §3.3.)
    `cabinet-v5-to-v6-*.db` créé, patients/documents/paiements **intacts**, nouvelles tables
    vides.
 2. **Prestataire** : créer, déclencher un doublon (même nom/prénom), éditer.
-3. **Import + IA** : importer un **PDF texte** de facture, case IA cochée → montant pré-rempli
-   (vérifier `[ai_provider_deepseek].api_key` renseignée) ; décocher → saisie manuelle ; clé
-   vide ou PDF **scanné sans texte** → case grisée / repli manuel (pas de vision sur DeepSeek).
+3. **Import + IA (vision)** : importer une **facture scannée** — JPG/PNG, puis un **PDF
+   contenant une image** (vérifier la rasterisation PyMuPDF → image). Case IA cochée
+   (`[ai_provider_qwen].api_key` renseignée) → montant pré-rempli ; vérifier la lecture du
+   **format FR** (« 1 234,56 » → 1234.56). Décocher → saisie manuelle ; clé vide → case grisée ;
+   format inconnu/échec réseau → repli manuel sans planter.
    Vérifier l'archivage dans `output/prestataires/<slug>/facture_<stamp>.pdf`, la ligne
    `factures` et la ligne `depenses` (avance % puis montant + motif → statut
    `regle_partiellement`).
@@ -695,15 +739,15 @@ Paramétrage : pas de typage de modèles. (PRD §6.6, §3.3.)
 |---|---|
 | `crm/db.py` | `SCHEMA_VERSION=6` ; 3 tables dans `_SCHEMA` (additif). `_migrate` inchangé. |
 | `crm/repo.py` | Dataclasses + CRUD `Prestataire` / `Facture` / `Depense` (+ `statut_depense`, `add_depense_reglement`). |
-| `src/ai/` (package) | **Nouveau** : `base.py` (ABC `AIProvider`), `factory.py` (registre + `provider_for_feature`), `documents.py` (texte/PyMuPDF), `providers/deepseek.py`, `features/facture_montant.py`. |
+| `src/ai/` (package) | **Nouveau** : `base.py` (ABC `AIProvider`), `factory.py` (registre + `provider_for_feature`), `images.py` (JPG/PNG + rasterisation PDF/PyMuPDF), `providers/qwen.py`, `features/facture_montant.py`. |
 | `prompts/facture_montant.txt` | **Nouveau** : prompt éditable de la 1re fonctionnalité. |
 | `src/config.py` | Dataclasses `AIProviderCfg`/`AIFeatureCfg`/`AIConfig` + chargement des sections `ai_provider_*` / `ai_feature_*` (optionnelles). |
 | `crm/generator.py` | `prestataire_dir`, `import_facture` (archivage, sans Word/Mailjet). |
 | `crm/app.py` | Rail 6 entrées, page Prestataires + fiche, dialog import+dépense, Finances/Dépenses, modales régler/supprimer, dashboard. |
 | `crm/reset.py` | Vider les nouvelles tables + `output/prestataires/`. |
-| `requirements.txt` | **Inchangé** (DeepSeek via `requests`/PyMuPDF déjà présents). |
-| `crm-desktop.spec` / `crm-web.spec` | Ajouter `prompts/` aux `datas`. (Pas de `hiddenimports` tant qu'on reste sur DeepSeek.) |
-| `config.ini` | Sections `[ai_provider_deepseek]` + `[ai_feature_facture_montant]` (clé vide, git-ignoré). |
+| `requirements.txt` | **Inchangé** (Qwen via `requests` + rasterisation PyMuPDF déjà présents). |
+| `crm-desktop.spec` / `crm-web.spec` | Ajouter `prompts/` aux `datas`. (Pas de `hiddenimports` tant qu'on reste sur des providers HTTP.) |
+| `config.ini` | Sections `[ai_provider_qwen]` + `[ai_feature_facture_montant]` (clé vide, git-ignoré). |
 
 > Non modifiés : `documents`, `crm/templates.py`, `src/doc_filler.py`, `src/mailer.py`,
 > `src/pdf_to_jpg.py`.
