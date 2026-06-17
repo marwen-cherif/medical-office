@@ -187,7 +187,11 @@ _JOURS_FR = ["Lu", "Ma", "Me", "Je", "Ve", "Sa", "Di"]
 # legende affichee ne diverge jamais du comportement reel). -------------------
 SC_NAV = {0: "Ctrl+1", 1: "Ctrl+2", 2: "Ctrl+3", 3: "Ctrl+4", 4: "Ctrl+5", 5: "Ctrl+6"}
 SC_NEW = "Ctrl+N"          # « Nouveau » contextuel selon la vue
+SC_EDIT = "Ctrl+M"         # Modifier (fiche patient / prestataire)
 SC_SEARCH = "Ctrl+F"       # focus du champ de recherche
+SC_IMPORT = "Ctrl+I"       # importer une facture (fiche prestataire)
+SC_SAVE = "Ctrl+S"         # enregistrer (brouillon ; parametres imprimante)
+SC_PRINT = "Ctrl+P"        # imprimer / generer et imprimer
 SC_PREV = "Ctrl+←"         # page precedente
 SC_NEXT = "Ctrl+→"         # page suivante
 SC_CLOSE = "Échap"         # fermer un dialogue / revenir au detail
@@ -204,6 +208,13 @@ class CrmApp:
         self.current_view = "patients"     # vue active (pilote les raccourcis contextuels)
         self.current_job_id: int | None = None  # job ouvert en vue detail
         self._dialog_submit = None         # callback du bouton primaire du dialogue ouvert
+        # Raccourcis additionnels du dialogue ouvert : {lettre majuscule -> callback}
+        # (ex. {"P": generer+imprimer, "S": enregistrer brouillon}). Cf. _on_key.
+        self._dialog_shortcuts: dict[str, Callable] = {}
+        # Actions de la page Parametrage > Imprimante, exposees au clavier
+        # (Ctrl+S enregistrer / Ctrl+P test) quand cette page est affichee.
+        self._printer_save_action: Callable | None = None
+        self._printer_test_action: Callable | None = None
         # Pagination de la fiche patient (documents / paiements), reinitialisee
         # a 0 quand on ouvre un autre patient.
         self.detail_docs_page = 0
@@ -247,10 +258,8 @@ class CrmApp:
         _last = date(_today.year, _today.month,
                      calendar.monthrange(_today.year, _today.month)[1])
         _on_dates = lambda: self._reset_and("paiements")
-        self.paie_date_from_row, self.paie_date_from = self._date_field(
-            "Du", _first.isoformat(), on_change=_on_dates)
-        self.paie_date_to_row, self.paie_date_to = self._date_field(
-            "Au", _last.isoformat(), on_change=_on_dates)
+        self.paie_date_range, self.paie_date_from, self.paie_date_to = self._date_range_field(
+            _first.isoformat(), _last.isoformat(), on_change=_on_dates)
         self.paie_page = 0
         # Prestataires (annuaire fournisseurs)
         self.pr_search = self._search_field(
@@ -277,10 +286,8 @@ class CrmApp:
             ],
         )
         _dep_on = lambda: self._reset_and("depenses")
-        self.dep_date_from_row, self.dep_date_from = self._date_field(
-            "Du", _first.isoformat(), on_change=_dep_on)
-        self.dep_date_to_row, self.dep_date_to = self._date_field(
-            "Au", _last.isoformat(), on_change=_dep_on)
+        self.dep_date_range, self.dep_date_from, self.dep_date_to = self._date_range_field(
+            _first.isoformat(), _last.isoformat(), on_change=_dep_on)
         self.dep_page = 0
         # Parametrage : onglet actif du sous-menu (Modeles de documents / Emails).
         self.param_tab = "templates"
@@ -313,10 +320,8 @@ class CrmApp:
             ],
         )
         _docs_on = lambda: self._reset_and("documents")
-        self.doc_date_from_row, self.doc_date_from = self._date_field(
-            "Du", _first.isoformat(), on_change=_docs_on)
-        self.doc_date_to_row, self.doc_date_to = self._date_field(
-            "Au", _last.isoformat(), on_change=_docs_on)
+        self.doc_date_range, self.doc_date_from, self.doc_date_to = self._date_range_field(
+            _first.isoformat(), _last.isoformat(), on_change=_docs_on)
         self.doc_page = 0
         self.doc_results = ft.Container()
         self.doc_pager = ft.Container()
@@ -327,16 +332,12 @@ class CrmApp:
         # Travaux (jobs) : periode pre-remplie sur le mois courant (limite le chargement).
         self.jobs_page = 0
         _jobs_on = lambda: self._reset_and("jobs")
-        self.jobs_date_from_row, self.jobs_date_from = self._date_field(
-            "Du", _first.isoformat(), on_change=_jobs_on)
-        self.jobs_date_to_row, self.jobs_date_to = self._date_field(
-            "Au", _last.isoformat(), on_change=_jobs_on)
+        self.jobs_date_range, self.jobs_date_from, self.jobs_date_to = self._date_range_field(
+            _first.isoformat(), _last.isoformat(), on_change=_jobs_on)
         # Tableau de bord : periode pre-remplie sur le mois courant.
         _dash_on = lambda: self._refresh_dashboard()
-        self.dash_date_from_row, self.dash_date_from = self._date_field(
-            "Du", _first.isoformat(), on_change=_dash_on)
-        self.dash_date_to_row, self.dash_date_to = self._date_field(
-            "Au", _last.isoformat(), on_change=_dash_on)
+        self.dash_date_range, self.dash_date_from, self.dash_date_to = self._date_range_field(
+            _first.isoformat(), _last.isoformat(), on_change=_dash_on)
 
         # Conteneurs persistants des parties dynamiques (liste + pagination).
         # On reconstruit le scaffold d'une vue une seule fois ; ensuite, lors
@@ -405,7 +406,9 @@ class CrmApp:
                             f"Tableau de bord {SC_NAV[0]} · Patients {SC_NAV[1]} · "
                             f"Prestataires {SC_NAV[2]} · Finances {SC_NAV[3]} · "
                             f"Travaux {SC_NAV[4]} · Paramétrage {SC_NAV[5]}\n"
-                            f"Nouveau {SC_NEW} · Rechercher {SC_SEARCH}\n"
+                            f"Nouveau {SC_NEW} · Modifier {SC_EDIT} · Rechercher {SC_SEARCH}\n"
+                            f"Importer facture {SC_IMPORT} · Enregistrer {SC_SAVE} · "
+                            f"Imprimer {SC_PRINT}\n"
                             f"Page {SC_PREV}/{SC_NEXT} · Fermer {SC_CLOSE} · Valider {SC_SUBMIT}"
                         ),
                     ),
@@ -559,7 +562,7 @@ class CrmApp:
             )
         )
 
-    def _show_dialog(self, dlg: ft.Control, submit=None) -> None:
+    def _show_dialog(self, dlg: ft.Control, submit=None, shortcuts=None) -> None:
         """Ouvre un AlertDialog en memorisant l'action de son bouton primaire.
 
         Si `submit` n'est pas fourni, on le deduit du bouton primaire du
@@ -568,6 +571,10 @@ class CrmApp:
         seul point centralise la validation clavier ET la legende, sans avoir
         a annoter chaque dialogue. `submit` est rappele par Ctrl+Entree et
         remis a None a la fermeture.
+
+        `shortcuts` : raccourcis additionnels du dialogue, {lettre -> callback}
+        (ex. {"P": generer+imprimer}). Chaque callback est appele avec None par
+        Ctrl+<lettre> tant que le dialogue est ouvert (cf. _on_key).
 
         Validation au clavier (systematique pour tous les formulaires) :
         - Entree depuis un champ texte simple ligne -> valide le formulaire
@@ -584,6 +591,7 @@ class CrmApp:
                         action.tooltip = f"{action.text} ({SC_SUBMIT})"
                     break
         self._dialog_submit = submit
+        self._dialog_shortcuts = shortcuts or {}
         # Saisie au clavier, systematique pour les champs simple ligne du
         # formulaire (les multilignes sont laisses intacts : Entree = saut de
         # ligne, et pas de select-all qui effacerait un texte qu'on complete) :
@@ -598,6 +606,7 @@ class CrmApp:
 
     def _close_dialog(self) -> None:
         self._dialog_submit = None
+        self._dialog_shortcuts = {}
         self.page.pop_dialog()
 
     # --- Raccourcis clavier ---------------------------------------------------
@@ -614,12 +623,15 @@ class CrmApp:
         # que les raccourcis chiffres fonctionnent aussi depuis le pave num.
         key = e.key[len("Numpad "):] if e.key.startswith("Numpad ") else e.key
 
-        # 1) Un dialogue est ouvert : on lui reserve Echap / Ctrl+Entree.
+        # 1) Un dialogue est ouvert : on lui reserve Echap / Ctrl+Entree, plus les
+        #    raccourcis additionnels declares par le dialogue (Ctrl+lettre).
         if self._dialog_submit is not None:
             if key == "Escape":
                 self._close_dialog()
             elif key == "Enter" and cmd:
                 self._dialog_submit(None)
+            elif cmd and key in self._dialog_shortcuts:
+                self._dialog_shortcuts[key](None)
             return
 
         # 2) Portee globale.
@@ -630,8 +642,19 @@ class CrmApp:
              self.show_finances, self.show_travaux, self.show_parametrage)[idx]()
         elif cmd and key == "N":
             self._new_for_current_view()
+        elif cmd and key == "M":
+            self._edit_current_view()
         elif cmd and key == "F":
             self._focus_search()
+        elif cmd and key == "I" and self.current_view == "prestataire_detail" \
+                and self.current_prestataire:
+            self.page.run_task(self._pick_and_import, self.current_prestataire)
+        elif cmd and key == "S" and self.current_view == "printer" \
+                and self._printer_save_action:
+            self._printer_save_action()
+        elif cmd and key == "P" and self.current_view == "printer" \
+                and self._printer_test_action:
+            self._printer_test_action()
         elif cmd and key in ("Arrow Left", "Arrow Right"):
             self._page_step(-1 if key == "Arrow Left" else 1)
         elif key == "Escape" and self.current_view == "patient_detail":
@@ -642,17 +665,37 @@ class CrmApp:
             self.show_jobs()
 
     def _new_for_current_view(self) -> None:
-        """Action « Nouveau » selon la vue (Paiements/Dépenses : vues transverses)."""
+        """Action « Nouveau » selon la vue (Ctrl+N). Sur une fiche, « Nouveau » =
+        l'action de creation propre a cette fiche (document / depense)."""
         if self.current_view == "patients":
             self._patient_dialog()
         elif self.current_view == "prestataires":
             self._prestataire_dialog()
+        elif self.current_view == "depenses":
+            self._depense_dialog()
         elif self.current_view == "templates":
             self._new_template_dialog()
         elif self.current_view == "mail":
             self._mail_template_dialog()
+        elif self.current_view == "patient_detail" and self.current_patient:
+            self._generate_dialog(self.current_patient)
+        elif self.current_view == "prestataire_detail" and self.current_prestataire:
+            self._depense_dialog(self.current_prestataire)
+
+    def _edit_current_view(self) -> None:
+        """Action « Modifier » (Ctrl+M) de la fiche actuellement ouverte."""
+        if self.current_view == "patient_detail" and self.current_patient:
+            self._patient_dialog(self.current_patient)
+        elif self.current_view == "prestataire_detail" and self.current_prestataire:
+            self._prestataire_dialog(self.current_prestataire)
 
     def _focus_search(self) -> None:
+        """Donne le focus au champ de recherche de la vue courante (s'il en a un).
+
+        `TextField.focus()` est une coroutine dans cette version de Flet : on la
+        planifie sur la boucle via `run_task` (un simple appel non attendu ne
+        ferait rien). Best-effort : silencieux si la boucle n'est pas prete
+        (ex. tout premier rendu au demarrage)."""
         field = {
             "patients": self.search,
             "prestataires": self.pr_search,
@@ -662,8 +705,12 @@ class CrmApp:
             "templates": self.tpl_search,
             "mail": self.mail_search,
         }.get(self.current_view)
-        if field is not None:
-            field.focus()
+        if field is None:
+            return
+        try:
+            self.page.run_task(field.focus)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _page_step(self, delta: int) -> None:
         """Page precedente/suivante de la vue active (bornee par _clamp_page)."""
@@ -695,10 +742,16 @@ class CrmApp:
     def _set_body(self, *controls: ft.Control) -> None:
         self.body.content = ft.Column(list(controls), spacing=18, scroll=ft.ScrollMode.AUTO, expand=True)
         self.page.update()
+        # A chaque arrivee sur une page, on place le curseur dans son champ de
+        # recherche (no-op si la vue n'en a pas). Les rafraichissements (saisie,
+        # pagination) passent par les conteneurs, pas par _set_body : le focus
+        # n'est donc jamais vole pendant la frappe.
+        self._focus_search()
 
     def _search_field(self, hint: str, on_change) -> ft.TextField:
         return ft.TextField(
             hint_text=hint,
+            tooltip=f"Rechercher ({SC_SEARCH})",
             prefix_icon=ft.Icons.SEARCH,
             on_change=on_change,
             border_radius=10,
@@ -934,14 +987,183 @@ class CrmApp:
         )
         self._show_dialog(dlg)
 
+    # --- Filtre periode : un seul champ pour la plage « du / au » -------------
+    @staticmethod
+    def _format_range(from_field: ft.TextField, to_field: ft.TextField) -> str:
+        """Libelle lisible de la plage a partir des deux champs (valeurs FR)."""
+        f = (from_field.value or "").strip()
+        t = (to_field.value or "").strip()
+        if f and t:
+            return f"{f} → {t}"
+        if f:
+            return f"À partir du {f}"
+        if t:
+            return f"Jusqu'au {t}"
+        return "Toutes les dates"
+
+    def _date_range_field(
+        self, initial_from: str = "", initial_to: str = "",
+        on_change: Callable[[], None] | None = None, label: str = "Période",
+    ) -> tuple[ft.Control, ft.TextField, ft.TextField]:
+        """Champ unique de selection d'une plage de dates (remplace deux « Du/Au »).
+
+        Renvoie (control, from_field, to_field). `from_field`/`to_field` sont des
+        champs *cachés* qui portent la valeur (format FR) : on les passe a
+        `_date_iso` exactement comme les anciens champs simples, donc le code de
+        filtrage (lecture des bornes) reste inchange. `control` est l'unique
+        widget affiche : un champ en lecture seule resumant la plage + un bouton
+        calendrier qui ouvre le selecteur de plage.
+        """
+        from_field = ft.TextField(value=_iso_to_fr(initial_from))
+        to_field = ft.TextField(value=_iso_to_fr(initial_to))
+        display = ft.TextField(
+            label=label, read_only=True, expand=True,
+            value=self._format_range(from_field, to_field),
+            prefix_icon=ft.Icons.DATE_RANGE,
+            color=TEXT, text_style=ft.TextStyle(color=TEXT),
+        )
+
+        def open_picker(e=None):
+            self._open_range_calendar(from_field, to_field, display, on_change)
+
+        display.on_click = open_picker
+        control = ft.Row(
+            [display, ft.IconButton(
+                ft.Icons.CALENDAR_MONTH, icon_color=NAVY, tooltip="Choisir une période",
+                on_click=open_picker)],
+            spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        return control, from_field, to_field
+
+    def _apply_range(self, from_field: ft.TextField, to_field: ft.TextField,
+                     display: ft.TextField, start, end,
+                     on_change: Callable[[], None] | None) -> None:
+        """Ecrit la plage (ou la vide) dans les champs, ferme et rafraichit."""
+        from_field.value = _iso_to_fr(start.isoformat()) if start else ""
+        to_field.value = _iso_to_fr(end.isoformat()) if end else ""
+        display.value = self._format_range(from_field, to_field)
+        self._close_dialog()
+        self.page.update()
+        if on_change is not None:
+            on_change()
+
+    def _open_range_calendar(self, from_field: ft.TextField, to_field: ft.TextField,
+                             display: ft.TextField,
+                             on_change: Callable[[], None] | None = None) -> None:
+        """Calendrier FR de selection d'une plage : 1er clic = debut, 2e = fin.
+
+        Cliquer une date avant le debut deja choisi inverse les bornes. La plage
+        complete s'applique et ferme aussitot (comme le calendrier simple). Le
+        bouton « Effacer la période » remet le filtre a « toutes les dates ».
+        """
+        def parse(field: ft.TextField):
+            iso, _ = _fr_to_iso(field.value)
+            try:
+                return date.fromisoformat(iso) if iso else None
+            except ValueError:
+                return None
+
+        sel = {"start": parse(from_field), "end": parse(to_field)}
+        today = date.today()
+        cursor = sel["start"] or today
+        state = {"year": cursor.year, "month": cursor.month}
+
+        title = ft.Text(weight=ft.FontWeight.BOLD, size=16, color=NAVY)
+        grid = ft.Column(spacing=4, tight=True)
+        hint = ft.Text(size=12, color=MUTED)
+
+        def hint_text() -> str:
+            s, e = sel["start"], sel["end"]
+            if s and e:
+                return f"Période : {_iso_to_fr(s.isoformat())} → {_iso_to_fr(e.isoformat())}"
+            if s:
+                return f"Début : {_iso_to_fr(s.isoformat())} — cliquez la date de fin."
+            return "Cliquez la date de début."
+
+        def click(d: date) -> None:
+            s, e = sel["start"], sel["end"]
+            if s is None or (s and e):       # (re)commence une nouvelle plage
+                sel["start"], sel["end"] = d, None
+            elif d >= s:                      # fin posterieure : borne haute
+                sel["end"] = d
+            else:                             # fin anterieure : on inverse
+                sel["start"], sel["end"] = d, s
+            if sel["start"] and sel["end"]:   # plage complete -> applique + ferme
+                self._apply_range(from_field, to_field, display,
+                                  sel["start"], sel["end"], on_change)
+                return
+            hint.value = hint_text()
+            render()
+            self.page.update()
+
+        def render() -> None:
+            y, m = state["year"], state["month"]
+            s, e = sel["start"], sel["end"]
+            title.value = f"{_MOIS_FR[m - 1]} {y}"
+            rows = [ft.Row(
+                [ft.Container(
+                    ft.Text(j, size=12, weight=ft.FontWeight.BOLD, color=MUTED,
+                            text_align=ft.TextAlign.CENTER),
+                    width=38, alignment=ft.Alignment.CENTER) for j in _JOURS_FR],
+                spacing=2)]
+            for week in calendar.Calendar(firstweekday=0).monthdayscalendar(y, m):
+                cells = []
+                for day in week:
+                    if day == 0:
+                        cells.append(ft.Container(width=38, height=38))
+                        continue
+                    d = date(y, m, day)
+                    is_end = d == s or d == e
+                    in_range = bool(s and e and s <= d <= e)
+                    is_today = d == today and not (s or e)
+                    cells.append(ft.Container(
+                        ft.Text(str(day), text_align=ft.TextAlign.CENTER,
+                                color=SURFACE if is_end else TEXT,
+                                weight=ft.FontWeight.BOLD if (is_end or is_today) else None),
+                        width=38, height=38, alignment=ft.Alignment.CENTER,
+                        border_radius=19, ink=True,
+                        bgcolor=(NAVY if is_end else
+                                 (ft.Colors.with_opacity(0.30, TEAL) if in_range else
+                                  (TEAL if is_today else None))),
+                        on_click=lambda e, dd=d: click(dd),
+                    ))
+                rows.append(ft.Row(cells, spacing=2))
+            grid.controls = rows
+
+        def shift(delta: int) -> None:
+            m = state["month"] - 1 + delta
+            state["year"] += m // 12
+            state["month"] = m % 12 + 1
+            render()
+            self.page.update()
+
+        render()
+        hint.value = hint_text()
+        header = ft.Row([
+            ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_color=NAVY, on_click=lambda e: shift(-1)),
+            ft.Container(title, expand=True, alignment=ft.Alignment.CENTER),
+            ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_color=NAVY, on_click=lambda e: shift(1)),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        dlg = ft.AlertDialog(
+            content=ft.Container(
+                ft.Column([header, grid, hint], tight=True, spacing=8), width=300),
+            actions=[
+                ft.TextButton("Effacer la période",
+                              on_click=lambda e: self._apply_range(
+                                  from_field, to_field, display, None, None, on_change)),
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+            ],
+            bgcolor=SURFACE,
+        )
+        self._show_dialog(dlg)
+
     # --- Vue TABLEAU DE BORD --------------------------------------------------
     def show_dashboard(self) -> None:
         self.current_view = "dashboard"
         self.rail.selected_index = 0
         self._set_body(
             self._title("Tableau de bord"),
-            ft.Row([ft.Container(self.dash_date_from_row, width=190),
-                    ft.Container(self.dash_date_to_row, width=190)],
+            ft.Row([ft.Container(self.dash_date_range, width=360)],
                    spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             self.dash_results,
         )
@@ -1538,9 +1760,7 @@ class CrmApp:
             ft.Text(p.display, size=24, weight=ft.FontWeight.BOLD, color=TEXT),
             ft.Container(expand=True),
             self._btn("Modifier", lambda e: self._patient_dialog(p), icon=ft.Icons.EDIT,
-                      primary=False, busy=False),
-            self._btn("Générer un document", lambda e: self._generate_dialog(p),
-                      icon=ft.Icons.NOTE_ADD, busy=False),
+                      primary=False, shortcut=SC_EDIT, busy=False),
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
         infos = self._card(ft.Column([
@@ -1575,14 +1795,17 @@ class CrmApp:
         paies_pager = (self._pagination(self.detail_paie_page, paies_total, on_paies_page)
                        if paies_total > PAGE_SIZE else ft.Container())
 
-        docs_title = [ft.Text("Documents", size=18, weight=ft.FontWeight.BOLD, color=TEXT)]
+        docs_title = [
+            ft.Text("Documents", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
+            ft.Container(expand=True),
+            self._btn("Générer un document", lambda e: self._generate_dialog(p),
+                      icon=ft.Icons.NOTE_ADD, primary=False, shortcut=SC_NEW, busy=False),
+        ]
         if has_sent:
-            docs_title += [
-                ft.Container(expand=True),
+            docs_title.append(
                 self._btn("Rafraîchir les statuts",
                           lambda e, pid=patient_id: self._refresh_patient_mail_statuses(e, pid),
-                          icon=ft.Icons.REFRESH, primary=False, busy=False),
-            ]
+                          icon=ft.Icons.REFRESH, primary=False, busy=False))
         self._set_body(
             header,
             infos,
@@ -1830,8 +2053,7 @@ class CrmApp:
             self._title("Finances"),
             self._finances_submenu(),
             ft.Row([self.paie_search, self.paie_statut,
-                    ft.Container(self.paie_date_from_row, width=190),
-                    ft.Container(self.paie_date_to_row, width=190)],
+                    ft.Container(self.paie_date_range, width=360)],
                    spacing=12,
                    vertical_alignment=ft.CrossAxisAlignment.CENTER),
             self.paie_summary,
@@ -1920,12 +2142,13 @@ class CrmApp:
         self.finances_tab = "depenses"
         self.current_view = "depenses"
         self.rail.selected_index = 3
+        action = self._btn("Nouvelle dépense", lambda e: self._depense_dialog(),
+                           icon=ft.Icons.ADD, shortcut=SC_NEW, busy=False)
         self._set_body(
-            self._title("Finances"),
+            self._title("Finances", action),
             self._finances_submenu(),
             ft.Row([self.dep_search, self.dep_statut,
-                    ft.Container(self.dep_date_from_row, width=190),
-                    ft.Container(self.dep_date_to_row, width=190)],
+                    ft.Container(self.dep_date_range, width=360)],
                    spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             self.dep_summary,
             self.dep_results,
@@ -1954,7 +2177,8 @@ class CrmApp:
         elif date_from.strip() or date_to.strip():
             liste = ft.Text("Aucune dépense sur la période sélectionnée.", color=MUTED)
         else:
-            liste = ft.Text("Aucune dépense. Importez une facture depuis une fiche prestataire.",
+            liste = ft.Text("Aucune dépense. Cliquez « Nouvelle dépense », ou importez "
+                            "une facture depuis une fiche prestataire.",
                             color=MUTED)
 
         def on_page(idx):
@@ -2108,7 +2332,7 @@ class CrmApp:
         """
         self.param_tab = tab or self.param_tab
         self.current_view = self.param_tab
-        self.rail.selected_index = 4
+        self.rail.selected_index = 5  # Paramétrage (5e après Travaux=4)
         if self.param_tab == "templates":
             action = self._btn("Nouveau modèle", lambda e: self._new_template_dialog(),
                                icon=ft.Icons.ADD, shortcut=SC_NEW, busy=False)
@@ -2161,6 +2385,10 @@ class CrmApp:
     # --- Sous-vue IMPRIMANTE --------------------------------------------------
     def _printer_settings_card(self) -> ft.Control:
         """Carte de configuration de l'imprimante cible (memorisee dans `meta`)."""
+        # Reinitialise les actions clavier de la page (reassignees plus bas si la
+        # carte aboutit a des boutons) pour ne jamais declencher une action obsolete.
+        self._printer_save_action = None
+        self._printer_test_action = None
         try:
             printers = printing.list_printers()
         except Exception as exc:  # noqa: BLE001
@@ -2190,14 +2418,14 @@ class CrmApp:
             options=[ft.dropdown.Option(p) for p in printers], expand=True,
         )
 
-        def on_save(e):
+        def on_save(e=None):
             if not dd.value:
                 self._toast("Choisissez une imprimante.", ok=False); return
             repo.set_setting(self.conn, PRINTER_KEY, dd.value)
             repo.log_audit(self.conn, "imprimante_configuree", dd.value)
             self._toast(f"Imprimante « {dd.value} » enregistrée.")
 
-        def on_test(e):
+        def on_test(e=None):
             if not dd.value:
                 self._toast("Choisissez une imprimante.", ok=False); return
             printer = dd.value
@@ -2206,7 +2434,18 @@ class CrmApp:
                 printing.print_test_page(printer)
                 self._toast(f"Page de test envoyée à « {printer} ».")
 
-            self._run_busy(e.control, None, work)
+            # `test_btn` (defini plus bas) plutot que e.control : robuste a l'appel
+            # clavier (Ctrl+P) ou il n'y a pas d'evenement.
+            self._run_busy(test_btn, None, work)
+
+        save_btn = self._btn("Enregistrer", on_save, icon=ft.Icons.SAVE,
+                             shortcut=SC_SAVE, busy=False)
+        test_btn = self._btn("Imprimer une page de test", on_test, icon=ft.Icons.PRINT,
+                            primary=False, shortcut=SC_PRINT, busy=False)
+        # Expose les actions au clavier tant que la page Imprimante est affichee
+        # (Ctrl+S enregistrer / Ctrl+P test) — cf. _on_key.
+        self._printer_save_action = on_save
+        self._printer_test_action = on_test
 
         if saved:
             note = f"Imprimante enregistrée : « {saved} »."
@@ -2222,11 +2461,7 @@ class CrmApp:
                                   on_click=lambda e: self.show_parametrage("printer"))],
                    vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ft.Text(note, size=12, color=MUTED),
-            ft.Row([
-                self._btn("Enregistrer", on_save, icon=ft.Icons.SAVE, busy=False),
-                self._btn("Imprimer une page de test", on_test,
-                          icon=ft.Icons.PRINT, primary=False, busy=False),
-            ], spacing=10),
+            ft.Row([save_btn, test_btn], spacing=10),
         ], spacing=14))
 
     # --- Sous-vue MODELES DE DOCUMENTS ----------------------------------------
@@ -2455,14 +2690,13 @@ class CrmApp:
         """
         self.travaux_tab = tab or self.travaux_tab
         self.current_view = "documents" if self.travaux_tab == "documents" else "jobs"
-        self.rail.selected_index = 3
+        self.rail.selected_index = 4  # Travaux
         if self.travaux_tab == "documents":
             body = [
                 ft.Text("Toutes les lignes de documents. Cliquez le nom du patient "
                         "pour ouvrir sa fiche.", color=MUTED, size=13),
                 ft.Row([self.doc_search, self.doc_statut,
-                        ft.Container(self.doc_date_from_row, width=190),
-                        ft.Container(self.doc_date_to_row, width=190)],
+                        ft.Container(self.doc_date_range, width=360)],
                        spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 self.doc_batch_bar,
                 self.doc_results,
@@ -2472,8 +2706,7 @@ class CrmApp:
             body = [
                 ft.Text("Jobs de génération et d'envoi par lot. Cliquez un job pour "
                         "voir le détail (ligne par patient).", color=MUTED, size=13),
-                ft.Row([ft.Container(self.jobs_date_from_row, width=190),
-                        ft.Container(self.jobs_date_to_row, width=190)],
+                ft.Row([ft.Container(self.jobs_date_range, width=360)],
                        spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 self.jobs_results,
                 self.jobs_pager,
@@ -2665,7 +2898,7 @@ class CrmApp:
         conn = conn or self.conn
         self.current_view = "job_detail"
         self.current_job_id = job_id
-        self.rail.selected_index = 3
+        self.rail.selected_index = 4  # détail d'un job : sous Travaux
         job = repo.get_job(conn, job_id)
         if not job:
             return self.show_jobs()
@@ -2857,9 +3090,7 @@ class CrmApp:
             ft.Text(p.display, size=24, weight=ft.FontWeight.BOLD, color=TEXT),
             ft.Container(expand=True),
             self._btn("Modifier", lambda e: self._prestataire_dialog(p), icon=ft.Icons.EDIT,
-                      primary=False, busy=False),
-            self._btn("Importer une facture", _on_import,
-                      icon=ft.Icons.UPLOAD_FILE, busy=False),
+                      primary=False, shortcut=SC_EDIT, busy=False),
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
         infos = self._card(ft.Column([
@@ -2900,10 +3131,20 @@ class CrmApp:
             header,
             infos,
             summary,
-            ft.Text("Factures", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
+            ft.Row([
+                ft.Text("Factures", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
+                ft.Container(expand=True),
+                self._btn("Importer une facture", _on_import, icon=ft.Icons.UPLOAD_FILE,
+                          primary=False, shortcut=SC_IMPORT, busy=False),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
             self._card(fac_col),
             fac_pager,
-            ft.Text("Dépenses", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
+            ft.Row([
+                ft.Text("Dépenses", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
+                ft.Container(expand=True),
+                self._btn("Nouvelle dépense", lambda e: self._depense_dialog(p),
+                          icon=ft.Icons.ADD, primary=False, shortcut=SC_NEW, busy=False),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
             self._card(dep_col),
             dep_pager,
         )
@@ -3163,6 +3404,103 @@ class CrmApp:
         if ia_ok:
             run_ia()  # auto-extraction a l'ouverture (montant editable ensuite)
 
+    def _depense_dialog(self, prestataire: "repo.Prestataire | None" = None) -> None:
+        """Cree une depense manuellement, SANS facture (cas sans justificatif).
+
+        Depuis une fiche prestataire (`prestataire` fourni, fixe) ou la vue
+        Finances > Depenses (selecteur de prestataire). La depense est creee avec
+        `facture_id=None` ; une facture reste rattachable plus tard via l'import.
+        """
+        prestataires = [] if prestataire else repo.list_prestataires(self.conn)
+        if prestataire is None and not prestataires:
+            self._toast("Aucun prestataire. Créez-en un d'abord.", ok=False)
+            self.show_prestataires()
+            return
+        pr_dd = None
+        if prestataire is None:
+            pr_dd = ft.Dropdown(
+                label="Prestataire *",
+                color=TEXT, text_style=ft.TextStyle(color=TEXT),
+                options=[ft.dropdown.Option(key=str(pp.id), text=pp.display)
+                         for pp in prestataires],
+                value=str(prestataires[0].id),
+            )
+
+        montant = ft.TextField(label="Montant total (TTC) *", value="",
+                               keyboard_type=ft.KeyboardType.NUMBER, autofocus=True)
+        libelle = ft.TextField(label="Libellé (ex. Loyer, Fournitures)", value="")
+        ech_row, ech = self._date_field("Échéance (optionnelle)", "")
+        avance_type = ft.Dropdown(
+            value="montant", width=150, color=TEXT, text_style=ft.TextStyle(color=TEXT),
+            options=[ft.dropdown.Option(key="montant", text="Montant"),
+                     ft.dropdown.Option(key="pourcent", text="Pourcentage")])
+        avance_val = ft.TextField(label="Part déjà payée (avance)", value="",
+                                  keyboard_type=ft.KeyboardType.NUMBER)
+        status = ft.Text("", color=RED, size=12)
+
+        def on_save(e=None):
+            if prestataire is not None:
+                pr = prestataire
+            elif pr_dd and pr_dd.value:
+                pr = repo.get_prestataire(self.conn, int(pr_dd.value))
+            else:
+                pr = None
+            if pr is None:
+                status.value = "Choisissez un prestataire."; self.page.update(); return
+            m = generator.parse_montant_str(montant.value)
+            if m is None or m <= 0:
+                status.value = "Renseignez un montant total (> 0)."
+                self.page.update(); return
+            ech_iso, ech_ok = _fr_to_iso(ech.value)
+            if not ech_ok:
+                status.value = "Échéance invalide (format attendu : JJ/MM/AAAA)."
+                self.page.update(); return
+            paye = 0.0
+            raw = generator.parse_montant_str(avance_val.value)
+            if raw and raw > 0:
+                paye = round(m * raw / 100.0, 2) if (avance_type.value == "pourcent") else raw
+                paye = max(0.0, min(paye, m))
+            lib = (libelle.value or "").strip() or None
+            try:
+                dep = repo.create_depense(
+                    self.conn, pr.id, m, montant_regle=paye,
+                    motif=lib, libelle=lib, facture_id=None, date_echeance=ech_iso)
+            except Exception as exc:  # noqa: BLE001
+                status.value = f"Échec : {exc}"; self.page.update(); return
+            repo.log_audit(
+                self.conn, "depense_creee",
+                f"#{dep.id} {m:.2f} (sans facture, avance {paye:.2f}) prestataire #{pr.id}")
+            self._close_dialog()
+            self._toast("Dépense ajoutée.")
+            if prestataire is not None:
+                self.show_prestataire_detail(pr.id)
+            else:
+                self._refresh_depenses()
+
+        fields: list[ft.Control] = []
+        if pr_dd is not None:
+            fields.append(pr_dd)
+        fields += [
+            montant, libelle, ech_row,
+            ft.Text("Avance déjà réglée (optionnelle)", size=12, color=MUTED),
+            ft.Row([avance_type, avance_val],
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            status,
+        ]
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Nouvelle dépense" if prestataire is None
+                          else f"Nouvelle dépense — {prestataire.display}"),
+            content=ft.Container(
+                ft.Column(fields, tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=440, height=430),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Ajouter la dépense", on_save, icon=ft.Icons.ADD, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
     # --- Dialogues ------------------------------------------------------------
     def _patient_dialog(self, p: Patient | None = None) -> None:
         is_edit = p is not None
@@ -3420,12 +3758,17 @@ class CrmApp:
         # Brouillon = action secondaire ; Générer (et imprimer) = actions primaires.
         # Les boutons de generation pilotent eux-memes `_run_busy` (busy=False ici)
         # et capturent leur propre bouton (robuste au Ctrl+Entree ou e est None).
-        btn_draft = self._btn("Enregistrer" if is_edit else "Enregistrer en brouillon",
-                              on_save_draft, primary=False, busy=False)
+        # Raccourcis : Générer = Ctrl+Entrée ; Générer et imprimer = Ctrl+P ;
+        # Enregistrer (brouillon) = Ctrl+S (cf. shortcuts du dialogue ci-dessous).
+        draft_label = "Enregistrer" if is_edit else "Enregistrer en brouillon"
+        btn_draft = self._btn(draft_label, on_save_draft, primary=False, busy=False)
+        btn_draft.tooltip = f"{draft_label} ({SC_SAVE})"
         btn_gen = self._btn("Générer", None,
                             icon=ft.Icons.PLAY_CIRCLE_OUTLINE, busy=False)
+        btn_gen.tooltip = f"Générer ({SC_SUBMIT})"
         btn_print = self._btn("Générer et imprimer", None,
                               icon=ft.Icons.PRINT, busy=False)
+        btn_print.tooltip = f"Générer et imprimer ({SC_PRINT})"
         btn_gen.on_click = lambda e=None: on_generate(btn_gen, False)
         btn_print.on_click = lambda e=None: on_generate(btn_print, True)
 
@@ -3442,8 +3785,12 @@ class CrmApp:
                 btn_draft, btn_gen, btn_print,
             ],
         )
-        # Ctrl+Entrée (et Entrée depuis un champ) -> action principale : Générer.
-        self._show_dialog(dlg, submit=lambda e=None: on_generate(btn_gen, False))
+        # Ctrl+Entrée (et Entrée depuis un champ) -> Générer ; Ctrl+P -> Générer et
+        # imprimer ; Ctrl+S -> Enregistrer en brouillon.
+        self._show_dialog(
+            dlg, submit=lambda e=None: on_generate(btn_gen, False),
+            shortcuts={"P": lambda e=None: on_generate(btn_print, True),
+                       "S": on_save_draft})
 
     def _paiement_dialog(self, p: Patient) -> None:
         montant = ft.TextField(label="Montant", value="0", autofocus=True)
