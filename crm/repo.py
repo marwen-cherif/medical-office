@@ -470,6 +470,19 @@ def list_draft_doc_types(conn: sqlite3.Connection, statuts: list[str]) -> list[s
     return [r["type"] for r in rows]
 
 
+def all_document_types(conn: sqlite3.Connection) -> list[str]:
+    """Tous les types de documents distincts deja generes (tous statuts confondus).
+
+    Alimente, avec les noms de modeles, la liste des types reglables dans
+    Parametrage > Imprimante (reglages d'impression par type).
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT type FROM documents WHERE type IS NOT NULL AND type <> '' "
+        "ORDER BY type"
+    ).fetchall()
+    return [r["type"] for r in rows]
+
+
 def _batch_patient_clause(
     search: str,
     doc_type: str,

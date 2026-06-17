@@ -22,7 +22,7 @@ from flet import canvas as cv
 
 from src.doc_filler import extract_placeholders
 
-from . import backup, generator, printing, repo, templates, version
+from . import backup, generator, print_settings, printing, repo, templates, version
 from .db import SchemaTooNewError, connect
 from .repo import Document, Job, Paiement, Patient, TemplateField
 
@@ -42,6 +42,20 @@ AMBER = "#B45309"       # ambre fonce (succes partiel d'un job)
 
 # Cle `meta` memorisant l'imprimante cible choisie dans Parametrage > Imprimante.
 PRINTER_KEY = "printer_name"
+
+# Reglages d'impression par type (format papier / couleur). Libelles d'affichage
+# (dropdowns Parametrage) et libelles courts pour l'audit `document_imprime`.
+# `None` = « Defaut imprimante » (repli neutre, cf. crm/print_settings.py).
+_PAPER_OPTIONS = [(None, "Défaut imprimante"), ("A4", "A4"), ("A5", "A5")]
+_COLOR_OPTIONS = [(None, "Défaut imprimante"), ("color", "Couleur"), ("mono", "Noir & blanc")]
+_PAPER_AUDIT = {"A4": "A4", "A5": "A5"}
+_COLOR_AUDIT = {"color": "Couleur", "mono": "N&B"}
+
+
+def _print_audit_suffix(paper: str | None, color: str | None) -> str:
+    """Suffixe « (A5, N&B) » pour l'audit, ou chaine vide si aucun reglage."""
+    parts = [lbl for lbl in (_PAPER_AUDIT.get(paper or ""), _COLOR_AUDIT.get(color or "")) if lbl]
+    return f" ({', '.join(parts)})" if parts else ""
 
 
 _STATUT_LABELS = {
@@ -2418,12 +2432,51 @@ class CrmApp:
             options=[ft.dropdown.Option(p) for p in printers], expand=True,
         )
 
+        # --- Reglages par type de document (format papier / couleur) -----------
+        # Types connus = union des noms de modeles et des types deja generes.
+        known_types = sorted(
+            {t.name for t in templates.list_templates()}
+            | set(repo.all_document_types(self.conn))
+        )
+        all_cfg = print_settings.all_settings(self.conn)
+        # type -> (dropdown format, dropdown couleur), lus a l'enregistrement.
+        type_controls: dict[str, tuple[ft.Dropdown, ft.Dropdown]] = {}
+
+        def _type_dropdown(options, value):
+            # Cle "" = « Defaut imprimante » (=> None cote print_settings).
+            return ft.Dropdown(
+                value=value or "", width=190, dense=True,
+                color=TEXT, text_style=ft.TextStyle(color=TEXT),
+                options=[ft.dropdown.Option(key=(k or ""), text=lbl)
+                         for k, lbl in options],
+            )
+
+        type_rows: list[ft.Control] = []
+        for t in known_types:
+            cfg = all_cfg.get(t, {})
+            paper_dd = _type_dropdown(_PAPER_OPTIONS, cfg.get("paper"))
+            color_dd = _type_dropdown(_COLOR_OPTIONS, cfg.get("color"))
+            type_controls[t] = (paper_dd, color_dd)
+            type_rows.append(ft.Row(
+                [ft.Text(t.replace("_", " "), color=TEXT, size=13, width=210),
+                 paper_dd, color_dd],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10))
+
         def on_save(e=None):
             if not dd.value:
                 self._toast("Choisissez une imprimante.", ok=False); return
             repo.set_setting(self.conn, PRINTER_KEY, dd.value)
             repo.log_audit(self.conn, "imprimante_configuree", dd.value)
-            self._toast(f"Imprimante « {dd.value} » enregistrée.")
+            for t, (pdd, cdd) in type_controls.items():
+                print_settings.set_settings_for(
+                    self.conn, t, pdd.value or None, cdd.value or None)
+            if type_controls:
+                repo.log_audit(self.conn, "reglages_impression_configures",
+                               f"{len(type_controls)} type(s)")
+                self._toast(f"Imprimante « {dd.value} » et réglages par type "
+                            "enregistrés.")
+            else:
+                self._toast(f"Imprimante « {dd.value} » enregistrée.")
 
         def on_test(e=None):
             if not dd.value:
@@ -2453,6 +2506,31 @@ class CrmApp:
             note = f"Aucune imprimante enregistrée. Défaut Windows : « {current} »."
         else:
             note = "Aucune imprimante enregistrée."
+
+        # Section « réglages par type » : tableau type -> Format / Couleur.
+        types_title = ft.Text("Format et couleur par type de document",
+                              size=14, weight=ft.FontWeight.BOLD, color=TEXT)
+        types_intro = ft.Text(
+            "Appliqués automatiquement, sans boîte de dialogue, au moment "
+            "d'imprimer un document. « Défaut imprimante » conserve le réglage "
+            "par défaut de l'imprimante (comportement antérieur).",
+            color=MUTED, size=13)
+        if type_rows:
+            header = ft.Row([
+                ft.Text("Type de document", color=MUTED, size=12,
+                        weight=ft.FontWeight.BOLD, width=210),
+                ft.Text("Format", color=MUTED, size=12,
+                        weight=ft.FontWeight.BOLD, width=190),
+                ft.Text("Couleur", color=MUTED, size=12,
+                        weight=ft.FontWeight.BOLD, width=190),
+            ], spacing=10)
+            types_section: ft.Control = ft.Column([header, *type_rows], spacing=8)
+        else:
+            types_section = ft.Text(
+                "Aucun type de document connu pour l'instant "
+                "(créez un modèle ou générez un document).",
+                color=MUTED, size=12)
+
         return self._card(ft.Column([
             intro,
             ft.Row([dd,
@@ -2461,6 +2539,10 @@ class CrmApp:
                                   on_click=lambda e: self.show_parametrage("printer"))],
                    vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ft.Text(note, size=12, color=MUTED),
+            ft.Divider(height=1, color=BORDER),
+            types_title,
+            types_intro,
+            types_section,
             ft.Row([save_btn, test_btn], spacing=10),
         ], spacing=14))
 
@@ -3739,9 +3821,13 @@ class CrmApp:
                 repo.log_audit(self.conn, "document_genere",
                                f"#{doc.id} {doc.type} (patient #{p.id})")
                 if do_print:
-                    printing.print_file(Path(doc.file_path or ""), printer)
+                    cfg = print_settings.get_settings_for(self.conn, doc.type)
+                    paper, color = cfg["paper"], cfg["color"]
+                    printing.print_file(Path(doc.file_path or ""), printer,
+                                        paper=paper, color=color)
                     repo.log_audit(self.conn, "document_imprime",
-                                   f"#{doc.id} {doc.type} -> {printer}")
+                                   f"#{doc.id} {doc.type} -> {printer}"
+                                   f"{_print_audit_suffix(paper, color)}")
                 self._close_dialog()
                 self._toast(f"Document généré et envoyé à « {printer} »." if do_print
                             else "Document généré.")
@@ -3949,10 +4035,13 @@ class CrmApp:
             self.show_parametrage("printer")
             return
 
+        cfg = print_settings.get_settings_for(self.conn, d.type)
+        paper, color = cfg["paper"], cfg["color"]
+
         def work():
-            printing.print_file(Path(path), printer)
+            printing.print_file(Path(path), printer, paper=paper, color=color)
             repo.log_audit(self.conn, "document_imprime",
-                           f"#{d.id} {d.type} -> {printer}")
+                           f"#{d.id} {d.type} -> {printer}{_print_audit_suffix(paper, color)}")
             self._toast(f"Envoyé à l'imprimante « {printer} ».")
 
         self._run_busy(e.control, None, work)
