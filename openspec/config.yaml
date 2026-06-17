@@ -1,0 +1,31 @@
+schema: spec-driven
+
+# Contexte projet (injecté dans l'IA lors de la création d'artefacts)
+context: |
+  Application : outil de bureau Windows pour le cabinet dentaire
+  « Cabinet Dr Aslem Gouiaa ». CRM Flet (desktop + web) + SQLite, adossé à un
+  moteur partagé de génération/mail (Word via COM, Mailjet, PyMuPDF).
+  Stack : Python, Flet, SQLite, win32com (Word COM), PyMuPDF/fitz, Mailjet.
+  Voir CLAUDE.md à la racine pour l'architecture détaillée.
+
+  LANGUE : rédiger tout le CONTENU des artefacts (proposal, design, specs,
+  tasks) en français. Employer le vocabulaire métier français
+  (« notes d'honoraires », « dépenses fournisseurs », « règlement partiel »).
+  EXCEPTION : conserver en anglais les mots-clés structurels et la syntaxe
+  OpenSpec (SHALL, WHEN, THEN, les titres de sections normalisés, les
+  commandes CLI). Ne pas les traduire.
+
+# Règles par artefact
+rules:
+  proposal:
+    - Rédiger le contenu en français.
+    - Conserver les mots-clés structurels OpenSpec en anglais.
+  design:
+    - Rédiger le contenu en français.
+    - Conserver les mots-clés structurels OpenSpec en anglais.
+  spec:
+    - Rédiger le contenu des exigences en français.
+    - Conserver en anglais les mots-clés normatifs (SHALL, WHEN, THEN, etc.).
+  tasks:
+    - Rédiger le contenu en français.
+    - Conserver les mots-clés structurels OpenSpec en anglais.

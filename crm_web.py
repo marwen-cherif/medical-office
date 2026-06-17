@@ -10,6 +10,12 @@ Variables d'environnement optionnelles :
 """
 
 import os
+import sys
+
+# Assure que la racine du projet (dossier de ce script) est sur sys.path, meme
+# avec un Python "embeddable" (fichier ._pth) qui n'ajoute pas le dossier du
+# script automatiquement -- sinon "import crm" echoue (No module named 'crm').
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Active le mode web dans crm.app.run().
 os.environ.setdefault("CRM_WEB", "1")

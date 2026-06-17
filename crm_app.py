@@ -7,7 +7,13 @@ depuis l'exe distribue, sans Python installe). Reutilise crm.reset (confirmation
 comprise) ; passer aussi `--yes` pour ne pas demander de confirmation.
 """
 
+import os
 import sys
+
+# Assure que la racine du projet (dossier de ce script) est sur sys.path, meme
+# avec un Python "embeddable" (fichier ._pth) qui n'ajoute pas le dossier du
+# script automatiquement -- sinon "import crm" echoue (No module named 'crm').
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 if __name__ == "__main__":
     if "--reset" in sys.argv[1:]:
