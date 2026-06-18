@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class SchemaTooNewError(RuntimeError):
@@ -227,6 +227,29 @@ CREATE TABLE IF NOT EXISTS depense_reglements (
 
 CREATE INDEX IF NOT EXISTS idx_depense_reglements_depense ON depense_reglements(depense_id);
 CREATE INDEX IF NOT EXISTS idx_depense_reglements_date ON depense_reglements(date_reglement);
+
+-- v8 : categorisation des modeles de documents. La categorie est un attribut de
+-- MODELE porte par l'application (pas dans le .docx). Evolution PUREMENT ADDITIVE :
+-- ces tables n'existaient pas avant ; `documents` recoit en plus une colonne nullable
+-- `categorie` (snapshot a la generation, cf. _migrate). Voir
+-- openspec/changes/organize-documents-by-category.
+-- Association modele -> categorie courante (cle naturelle = nom du modele).
+-- Absence de ligne = modele sans categorie.
+CREATE TABLE IF NOT EXISTS template_meta (
+    template_name  TEXT PRIMARY KEY,
+    categorie      TEXT,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Attributs visuels et ordre d'affichage par categorie (creee paresseusement
+-- quand une nouvelle categorie apparait, couleur par defaut depuis une palette).
+CREATE TABLE IF NOT EXISTS categories (
+    nom         TEXT PRIMARY KEY,
+    couleur     TEXT,
+    icone       TEXT,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -344,6 +367,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "AND id NOT IN (SELECT depense_id FROM depense_reglements)"
         )
         _meta_set(conn, "reglements_backfill_v7")
+    # v8 : snapshot de la categorie du modele sur chaque document a la generation.
+    # Colonne additive nullable : les documents existants gardent categorie NULL
+    # (ranges a la racine du dossier patient). Aucun backfill destructif.
+    if not _column_exists(conn, "documents", "categorie"):
+        conn.execute("ALTER TABLE documents ADD COLUMN categorie TEXT")
 
 
 def _set_version(conn: sqlite3.Connection) -> None:

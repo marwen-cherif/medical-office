@@ -93,16 +93,29 @@ The CRM keeps its state in **`data/cabinet.db`** and reuses the `src/` engine
   on open: `connect()` refuses a DB newer than the app (anti-downgrade, raises
   `SchemaTooNewError`) and writes a labeled pre-migration snapshot when upgrading. Bump
   `SCHEMA_VERSION` and add a migration step when changing the schema.
-- `crm/repo.py` — dataclasses + CRUD (patients, documents, paiements, template fields).
-  Patients get a stable `id`; `slugify` + name matching detects likely duplicates so the
-  user can reuse an existing record (homonym handling is user-confirmed).
+- `crm/repo.py` — dataclasses + CRUD (patients, documents, paiements, template fields,
+  catégories). Patients get a stable `id`; `slugify` + name matching detects likely
+  duplicates so the user can reuse an existing record (homonym handling is user-confirmed).
 - `crm/generator.py` — bridge to the `src/` engine: builds the replacement tags for a
-  patient/template, renders a document, writes to `output/`, records the `documents` row,
-  and sends email.
+  patient/template, renders a document, writes to `output/` (dans le sous-dossier de
+  catégorie du modèle si présent, `output/<patient>/<slug(categorie)>/`, sinon à la racine
+  du dossier patient), records the `documents` row, and sends email.
 - `crm/templates.py` — manages the `templates/` folder (one `.docx` per document type),
   opening them in Word for editing. Template `<TAG>`s are auto-detected via
   `src.doc_filler.extract_placeholders`; tags in `AUTO_PATIENT_TAGS` (NOM, PRENOM, EMAIL,
   TELEPHONE, ADRESSE, DATE_NAISSANCE) are filled from the patient, the rest are prompted.
+  `rename_template` ne déplace que le fichier ; l'appelant reporte la catégorie via
+  `repo.rename_template_meta` (sinon elle serait orphelinée).
+- **Catégories de modèles (v8)** — la catégorie est un **attribut de modèle porté par
+  l'application** (texte libre saisi dans les dialogues « Nouveau / Renommer le modèle »
+  avec suggestions), **pas une balise du `.docx`**. Trois points de persistance :
+  `template_meta(template_name → categorie)` (catégorie courante d'un modèle, absence de
+  ligne = sans catégorie), `categories(nom, couleur, icone, sort_order)` (créée
+  paresseusement, couleur par défaut depuis une palette ; renommable globalement via
+  `repo.rename_category`, qui répercute sur les modèles et, en option, sur les documents
+  déjà générés), et `documents.categorie` (snapshot figé à la génération — stable même si
+  la catégorie du modèle change). UI : modèles et documents de la fiche patient sont
+  regroupés par catégorie (couleur/icône + compteur).
 - `crm/printing.py` — impression directe des documents générés (JPG/PDF) vers une
   imprimante Windows via GDI (pywin32 `win32print`/`win32ui`, déjà embarqué pour Word) :
   pixelise le PDF avec `fitz`, met l'image à l'échelle de la page avec Pillow
