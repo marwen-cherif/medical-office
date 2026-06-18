@@ -295,7 +295,17 @@ def render_document(conn: sqlite3.Connection, document: Document) -> Document:
         except (ValueError, TypeError):
             variables = {}
 
-    out_path = patient_dir(patient) / build_filename(
+    # Categorie (attribut du modele) : range le fichier dans un sous-dossier dedie
+    # et fige le libelle sur le document (snapshot). Sans categorie => racine du
+    # dossier patient (comportement historique). Le dossier utilise le slug (sur),
+    # la colonne garde le libelle brut (lisible).
+    categorie = repo.get_template_category(conn, template.name)
+    document.categorie = categorie
+    base_dir = patient_dir(patient)
+    if categorie:
+        base_dir = base_dir / _slug(categorie)
+        base_dir.mkdir(parents=True, exist_ok=True)
+    out_path = base_dir / build_filename(
         patient, document.type, acte_date, ext, doc_id=document.id
     )
     repl = _patient_replacements(patient)
@@ -326,6 +336,51 @@ def render_document(conn: sqlite3.Connection, document: Document) -> Document:
     document.message_erreur = None
     repo.update_document(conn, document)
     return document
+
+
+def move_documents_to_category(
+    conn: sqlite3.Connection,
+    documents: list[Document],
+    nouvelle_categorie: str,
+) -> int:
+    """Deplace best-effort les fichiers de documents reclasses vers le sous-dossier
+    de leur nouvelle categorie, et met a jour `file_path`/`categorie` en base.
+
+    Appelee APRES commit de `repo.rename_category(..., reclasser_documents=True)`
+    (qui a deja repercute `documents.categorie` en base et renvoie les documents
+    concernes avec leur ancien `file_path`). Les erreurs d'I/O sont non bloquantes
+    et journalisees (audit) : un fichier verrouille/absent n'interrompt pas le lot.
+    Renvoie le nombre de fichiers effectivement deplaces.
+    """
+    slug = _slug(nouvelle_categorie)
+    moved = 0
+    for d in documents:
+        if not d.file_path:
+            continue
+        src = Path(d.file_path)
+        if not src.exists():
+            continue
+        patient = repo.get_patient(conn, d.patient_id)
+        if patient is None:
+            continue
+        try:
+            dest_dir = patient_dir(patient) / slug
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / src.name
+            if dest == src:
+                continue
+            shutil.move(str(src), str(dest))
+            d.file_path = str(dest)
+            d.categorie = nouvelle_categorie
+            repo.update_document(conn, d)
+            moved += 1
+        except OSError as exc:
+            repo.log_audit(
+                conn, "categorie_fichier_non_deplace",
+                f"#{d.id} -> {slug} : {exc}",
+            )
+            continue
+    return moved
 
 
 def send_document(

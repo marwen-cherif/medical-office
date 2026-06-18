@@ -87,6 +87,7 @@ class Document:
     variables: Optional[str] = None  # JSON des valeurs de variables saisies
     mailjet_opened_at: Optional[str] = None   # 1re ouverture (tracking Mailjet)
     mailjet_clicked_at: Optional[str] = None  # 1er clic (tracking Mailjet)
+    categorie: Optional[str] = None  # snapshot de la categorie du modele (v8)
 
 
 @dataclass
@@ -328,6 +329,7 @@ def _row_to_document(row: sqlite3.Row) -> Document:
                            if "mailjet_opened_at" in row.keys() else None),
         mailjet_clicked_at=(row["mailjet_clicked_at"]
                             if "mailjet_clicked_at" in row.keys() else None),
+        categorie=row["categorie"] if "categorie" in row.keys() else None,
     )
 
 
@@ -337,13 +339,13 @@ def create_document(conn: sqlite3.Connection, d: Document) -> Document:
            (patient_id, type, template, acte, montant, acte_date, file_path,
             output_format, statut, date_generation, date_envoi, email,
             mailjet_message_id, mailjet_status, date_refresh_status, message_erreur,
-            variables)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            variables, categorie)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             d.patient_id, d.type, d.template, d.acte, d.montant, d.acte_date,
             d.file_path, d.output_format, d.statut, d.date_generation, d.date_envoi,
             d.email, d.mailjet_message_id, d.mailjet_status, d.date_refresh_status,
-            d.message_erreur, d.variables,
+            d.message_erreur, d.variables, d.categorie,
         ),
     )
     conn.commit()
@@ -357,14 +359,14 @@ def update_document(conn: sqlite3.Connection, d: Document) -> None:
              type=?, template=?, acte=?, montant=?, acte_date=?, file_path=?,
              output_format=?, statut=?, date_generation=?, date_envoi=?, email=?,
              mailjet_message_id=?, mailjet_status=?, date_refresh_status=?, message_erreur=?,
-             variables=?, mailjet_opened_at=?, mailjet_clicked_at=?
+             variables=?, mailjet_opened_at=?, mailjet_clicked_at=?, categorie=?
            WHERE id=?""",
         (
             d.type, d.template, d.acte, d.montant, d.acte_date, d.file_path,
             d.output_format, d.statut, d.date_generation, d.date_envoi, d.email,
             d.mailjet_message_id, d.mailjet_status, d.date_refresh_status,
             d.message_erreur, d.variables, d.mailjet_opened_at, d.mailjet_clicked_at,
-            d.id,
+            d.categorie, d.id,
         ),
     )
     conn.commit()
@@ -991,6 +993,199 @@ def replace_template_fields(
             (template_name, f.tag, f.label, f.type, f.default_value, order),
         )
     conn.commit()
+
+
+# --- Categories de modeles (v8) -----------------------------------------------
+# La categorie est un attribut de MODELE (texte libre, saisi dans l'app, pas dans
+# le .docx) ; voir openspec/changes/organize-documents-by-category. Trois points de
+# persistance : `template_meta` (modele -> categorie courante), `categories`
+# (couleur/icone/ordre par categorie, creee paresseusement) et `documents.categorie`
+# (snapshot fige a la generation, gere par create/update_document ci-dessus).
+
+# Palette par defaut attribuee cycliquement aux nouvelles categories (cf. _card/UI :
+# couleurs lisibles sur fond clair). Cosmetique, modifiable ensuite via upsert_category.
+_CATEGORY_PALETTE = (
+    "#10357F", "#0C8B82", "#B45309", "#1E7E45",
+    "#B5271B", "#6D28D9", "#0E7490", "#A16207",
+)
+
+
+@dataclass
+class Category:
+    nom: str
+    couleur: Optional[str] = None
+    icone: Optional[str] = None
+    sort_order: int = 0
+
+
+def _row_to_category(row: sqlite3.Row) -> Category:
+    return Category(
+        nom=row["nom"],
+        couleur=row["couleur"],
+        icone=row["icone"],
+        sort_order=row["sort_order"],
+    )
+
+
+def list_categories(conn: sqlite3.Connection) -> list[Category]:
+    """Toutes les categories connues (suggestions + regroupement), triees."""
+    rows = conn.execute(
+        "SELECT * FROM categories ORDER BY sort_order, nom"
+    ).fetchall()
+    return [_row_to_category(r) for r in rows]
+
+
+def get_category(conn: sqlite3.Connection, nom: str) -> Optional[Category]:
+    row = conn.execute(
+        "SELECT * FROM categories WHERE nom = ?", ((nom or "").strip(),)
+    ).fetchone()
+    return _row_to_category(row) if row else None
+
+
+def _default_category_color(conn: sqlite3.Connection) -> str:
+    """Couleur par defaut d'une nouvelle categorie (cyclique sur la palette)."""
+    n = conn.execute("SELECT COUNT(*) AS n FROM categories").fetchone()["n"]
+    return _CATEGORY_PALETTE[int(n) % len(_CATEGORY_PALETTE)]
+
+
+def upsert_category(conn: sqlite3.Connection, cat: Category) -> Category:
+    """Cree (avec couleur par defaut si absente) ou met a jour une categorie.
+
+    Creation paresseuse : appelee chaque fois qu'un nom de categorie nouveau
+    apparait. Sur une categorie existante, couleur/icone ne sont ecrasees que si
+    explicitement fournies (non None) — ne pas perdre la couleur en re-confirmant
+    simplement l'existence du nom.
+    """
+    nom = (cat.nom or "").strip()
+    if not nom:
+        raise ValueError("Le nom d'une categorie ne peut pas etre vide.")
+    existing = get_category(conn, nom)
+    if existing is None:
+        couleur = cat.couleur or _default_category_color(conn)
+        conn.execute(
+            "INSERT INTO categories (nom, couleur, icone, sort_order) VALUES (?,?,?,?)",
+            (nom, couleur, cat.icone, cat.sort_order or 0),
+        )
+    else:
+        conn.execute(
+            "UPDATE categories SET couleur = COALESCE(?, couleur), "
+            "icone = COALESCE(?, icone), sort_order = ? WHERE nom = ?",
+            (cat.couleur, cat.icone, cat.sort_order or existing.sort_order, nom),
+        )
+    conn.commit()
+    return get_category(conn, nom)  # type: ignore[return-value]
+
+
+def get_template_category(conn: sqlite3.Connection, template_name: str) -> Optional[str]:
+    """Categorie courante d'un modele, ou None s'il n'en a pas."""
+    row = conn.execute(
+        "SELECT categorie FROM template_meta WHERE template_name = ?",
+        (template_name,),
+    ).fetchone()
+    cat = row["categorie"] if row else None
+    return cat if (cat or "").strip() else None
+
+
+def set_template_category(
+    conn: sqlite3.Connection, template_name: str, categorie: Optional[str]
+) -> None:
+    """Associe (ou dissocie) une categorie a un modele.
+
+    `categorie` vide/None => suppression de la ligne `template_meta` (modele sans
+    categorie). Sinon : upsert de la ligne et creation paresseuse de la categorie.
+    """
+    cat = (categorie or "").strip()
+    if not cat:
+        conn.execute(
+            "DELETE FROM template_meta WHERE template_name = ?", (template_name,)
+        )
+        conn.commit()
+        return
+    upsert_category(conn, Category(nom=cat))
+    conn.execute(
+        "INSERT INTO template_meta (template_name, categorie) VALUES (?, ?) "
+        "ON CONFLICT(template_name) DO UPDATE SET categorie = excluded.categorie",
+        (template_name, cat),
+    )
+    conn.commit()
+
+
+def rename_template_meta(
+    conn: sqlite3.Connection, ancien_nom: str, nouveau_nom: str
+) -> None:
+    """Reporte la ligne `template_meta` lors du renommage d'un modele.
+
+    Evite d'orpheliner la categorie du modele renomme. `template_fields` reste,
+    lui, orphelin (limitation existante non corrigee ici).
+    """
+    if ancien_nom == nouveau_nom:
+        return
+    row = conn.execute(
+        "SELECT categorie FROM template_meta WHERE template_name = ?", (ancien_nom,)
+    ).fetchone()
+    if row is None:
+        return
+    conn.execute("DELETE FROM template_meta WHERE template_name = ?", (ancien_nom,))
+    conn.execute(
+        "INSERT INTO template_meta (template_name, categorie) VALUES (?, ?) "
+        "ON CONFLICT(template_name) DO UPDATE SET categorie = excluded.categorie",
+        (nouveau_nom, row["categorie"]),
+    )
+    conn.commit()
+
+
+def rename_category(
+    conn: sqlite3.Connection,
+    ancien: str,
+    nouveau: str,
+    *,
+    reclasser_documents: bool = False,
+) -> list[Document]:
+    """Renomme une categorie partout (transactionnel).
+
+    - renomme la ligne `categories` (couleur/icone conservees ; fusion si la cible
+      existe deja) ;
+    - met a jour tous les `template_meta` portant l'ancien nom ;
+    - si `reclasser_documents` : met aussi a jour `documents.categorie`.
+
+    Renvoie la liste des documents reclasses (avec leur `file_path` AVANT mise a
+    jour) pour que l'appelant deplace leurs fichiers HORS transaction (cf.
+    `generator.move_documents_to_category`). Liste vide si `reclasser_documents`
+    est faux.
+    """
+    ancien = (ancien or "").strip()
+    nouveau = (nouveau or "").strip()
+    if not nouveau:
+        raise ValueError("Le nouveau nom de categorie ne peut pas etre vide.")
+    if ancien == nouveau:
+        return []
+    reclasses: list[Document] = []
+    with conn:  # transaction : commit a la sortie, rollback si exception
+        if reclasser_documents:
+            rows = conn.execute(
+                "SELECT * FROM documents WHERE categorie = ?", (ancien,)
+            ).fetchall()
+            reclasses = [_row_to_document(r) for r in rows]
+        target = conn.execute(
+            "SELECT nom FROM categories WHERE nom = ?", (nouveau,)
+        ).fetchone()
+        if target is None:
+            conn.execute(
+                "UPDATE categories SET nom = ? WHERE nom = ?", (nouveau, ancien)
+            )
+        else:
+            # La cible porte deja sa couleur/icone : on retire l'ancienne ligne.
+            conn.execute("DELETE FROM categories WHERE nom = ?", (ancien,))
+        conn.execute(
+            "UPDATE template_meta SET categorie = ? WHERE categorie = ?",
+            (nouveau, ancien),
+        )
+        if reclasser_documents:
+            conn.execute(
+                "UPDATE documents SET categorie = ? WHERE categorie = ?",
+                (nouveau, ancien),
+            )
+    return reclasses
 
 
 # --- Jobs (traitement par lot) ------------------------------------------------

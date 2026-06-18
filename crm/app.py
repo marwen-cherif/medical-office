@@ -1785,10 +1785,7 @@ class CrmApp:
             _kv("Notes", p.notes or "—"),
         ], spacing=6))
 
-        docs_col = ft.Column(
-            [self._doc_row(d) for d in docs] or [ft.Text("Aucun document.", color=MUTED)],
-            spacing=8,
-        )
+        docs_col = self._grouped_docs_column(docs)
         paies_col = ft.Column(
             [self._paie_row(pa) for pa in paies] or [ft.Text("Aucun paiement.", color=MUTED)],
             spacing=8,
@@ -1835,6 +1832,47 @@ class CrmApp:
             self._card(paies_col),
             paies_pager,
         )
+
+    def _grouped_docs_column(self, docs: list[Document]) -> ft.Control:
+        """Documents de la fiche regroupes par catégorie en sections repliables.
+
+        Sections `ExpansionTile` SANS bordure : `shape`/`collapsed_shape` fournis
+        (side=None) neutralisent les liserés haut/bas que Flutter dessine par
+        defaut. Le padding du titre et celui des lignes sont alignes (8 px) pour
+        que l'icône dossier de catégorie et l'icône des documents partagent le même
+        bord. Catégories connues d'abord, inconnues ensuite, « Sans catégorie » en
+        dernier ; ordre récent-d'abord conservé. Une seule catégorie => liste à plat.
+        """
+        if not docs:
+            return ft.Column([ft.Text("Aucun document.", color=MUTED)], spacing=8)
+        order = [c.nom for c in repo.list_categories(self.conn)]
+        groups: dict[str | None, list] = {}
+        for d in docs:
+            groups.setdefault(d.categorie or None, []).append(d)
+
+        def sort_key(nom):
+            if not nom:
+                return (2, "")
+            return (0, order.index(nom)) if nom in order else (1, nom.lower())
+
+        if len(groups) == 1:
+            only = next(iter(groups.values()))
+            return ft.Column([self._doc_row(d) for d in only], spacing=8)
+        no_border = ft.RoundedRectangleBorder(radius=8)
+        sections: list[ft.Control] = []
+        for nom in sorted(groups.keys(), key=sort_key):
+            items = groups[nom]
+            sections.append(ft.ExpansionTile(
+                title=self._cat_pastille(nom, len(items)),
+                controls=[ft.Container(
+                    ft.Column([self._doc_row(d) for d in items], spacing=8),
+                    padding=ft.Padding.only(left=8, right=8, bottom=8))],
+                shape=no_border, collapsed_shape=no_border,
+                tile_padding=ft.Padding.symmetric(horizontal=8),
+                controls_padding=ft.Padding.all(0),
+                expanded=True, maintain_state=True,
+            ))
+        return ft.Column(sections, spacing=6)
 
     def _doc_row(self, d: Document) -> ft.Control:
         label, color = _STATUT_LABELS.get(d.statut, (d.statut, MUTED))
@@ -2353,7 +2391,11 @@ class CrmApp:
             body = [
                 ft.Text("Chaque modèle est un fichier Word. Balises : <NOM>, <PRENOM>, <DATE>, <ACTE>, <MONTANT>…",
                         color=MUTED, size=13),
-                ft.Row([self.tpl_search]),
+                ft.Row([self.tpl_search,
+                        self._btn("Renommer une catégorie",
+                                  lambda e: self._rename_category_dialog(),
+                                  icon=ft.Icons.LABEL_OUTLINE, primary=False, busy=False)],
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 self.tpl_results,
                 self.tpl_pager,
             ]
@@ -2550,6 +2592,26 @@ class CrmApp:
     def show_templates(self) -> None:
         self.show_parametrage("templates")
 
+    def _template_row(self, t: templates.Template) -> ft.Control:
+        """Ligne d'un modele dans la liste (icône, nom, fichier, actions)."""
+        return ft.Row([
+            ft.Icon(ft.Icons.DESCRIPTION, color=NAVY),
+            ft.Column([
+                ft.Text(t.label, weight=ft.FontWeight.W_600, color=TEXT),
+                ft.Text(t.path.name, size=12, color=MUTED),
+            ], spacing=2, expand=True),
+            self._btn("Éditer dans Word", lambda e, tt=t: self._edit_template(tt),
+                      icon=ft.Icons.OPEN_IN_NEW, primary=False),
+            ft.IconButton(ft.Icons.TUNE, tooltip="Configurer les variables",
+                          icon_color=NAVY, on_click=lambda e, tt=t: self._template_fields_dialog(tt)),
+            ft.IconButton(ft.Icons.SELL_OUTLINED, tooltip="Catégorie",
+                          icon_color=NAVY, on_click=lambda e, tt=t: self._set_template_category_dialog(tt)),
+            ft.IconButton(ft.Icons.DRIVE_FILE_RENAME_OUTLINE, tooltip="Renommer",
+                          icon_color=NAVY, on_click=lambda e, tt=t: self._rename_template_dialog(tt)),
+            ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Supprimer", icon_color=RED,
+                          on_click=lambda e, tt=t: self._delete_template_dialog(tt)),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
     def _refresh_templates(self) -> None:
         q = (self.tpl_search.value or "").strip().lower()
         all_tpls = templates.list_templates()
@@ -2559,25 +2621,27 @@ class CrmApp:
         self.tpl_page = self._clamp_page(self.tpl_page, total)
         start = self.tpl_page * PAGE_SIZE
         tpls = all_tpls[start:start + PAGE_SIZE]
-        rows = []
+
+        # Categorie de chaque modele de la page, puis regroupement par categorie
+        # (ordre des categories connues, puis inconnues, « Sans catégorie » en dernier).
+        cat_of = {t.name: repo.get_template_category(self.conn, t.name) for t in tpls}
+        order = [c.nom for c in repo.list_categories(self.conn)]
+        groups: dict[str | None, list] = {}
         for t in tpls:
-            rows.append(ft.Row([
-                ft.Icon(ft.Icons.DESCRIPTION, color=NAVY),
-                ft.Column([
-                    ft.Text(t.label, weight=ft.FontWeight.W_600, color=TEXT),
-                    ft.Text(t.path.name, size=12, color=MUTED),
-                ], spacing=2, expand=True),
-                self._btn("Éditer dans Word", lambda e, tt=t: self._edit_template(tt),
-                          icon=ft.Icons.OPEN_IN_NEW, primary=False),
-                ft.IconButton(ft.Icons.TUNE, tooltip="Configurer les variables",
-                              icon_color=NAVY, on_click=lambda e, tt=t: self._template_fields_dialog(tt)),
-                ft.IconButton(ft.Icons.DRIVE_FILE_RENAME_OUTLINE, tooltip="Renommer",
-                              icon_color=NAVY, on_click=lambda e, tt=t: self._rename_template_dialog(tt)),
-                ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Supprimer", icon_color=RED,
-                              on_click=lambda e, tt=t: self._delete_template_dialog(tt)),
-            ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
-        if rows:
-            liste = ft.Column(rows, spacing=10)
+            groups.setdefault(cat_of[t.name], []).append(t)
+
+        def sort_key(nom):
+            if nom is None:
+                return (2, "")
+            return (0, order.index(nom)) if nom in order else (1, nom.lower())
+
+        blocks: list[ft.Control] = []
+        for nom in sorted(groups.keys(), key=sort_key):
+            items = groups[nom]
+            blocks.append(self._cat_pastille(nom, len(items)))
+            blocks.append(ft.Column([self._template_row(t) for t in items], spacing=10))
+        if blocks:
+            liste = ft.Column(blocks, spacing=12)
         elif q:
             liste = ft.Text("Aucun modèle ne correspond à votre recherche.", color=MUTED)
         else:
@@ -3915,8 +3979,63 @@ class CrmApp:
         )
         self._show_dialog(dlg)
 
+    # --- Categorie de modele : champ libre + suggestions ----------------------
+    def _cat_color(self, nom: str | None) -> str:
+        """Couleur d'une categorie (depuis `categories`), ou gris si aucune/inconnue."""
+        if not nom:
+            return MUTED
+        c = repo.get_category(self.conn, nom)
+        return c.couleur if (c and c.couleur) else NAVY
+
+    def _cat_pastille(self, nom: str | None, count: int | None = None) -> ft.Control:
+        """En-tete visuel d'une categorie : pastille couleur + icone + nom (+ compteur)."""
+        col = self._cat_color(nom)
+        label = nom or "Sans catégorie"
+        children = [
+            ft.Icon(ft.Icons.FOLDER if nom else ft.Icons.FOLDER_OPEN, color=col, size=18),
+            ft.Text(label, weight=ft.FontWeight.BOLD, color=TEXT),
+        ]
+        if count is not None:
+            children.append(ft.Container(
+                ft.Text(str(count), size=11, color=col),
+                bgcolor=ft.Colors.with_opacity(0.14, col),
+                padding=ft.Padding.symmetric(vertical=2, horizontal=8),
+                border_radius=20,
+            ))
+        return ft.Row(children, spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def _category_input(self, current: str | None = None) -> tuple[ft.Control, ft.TextField]:
+        """Champ catégorie : texte libre + suggestions cliquables (catégories connues).
+
+        Renvoie (contrôle à insérer dans le dialogue, TextField dont `.value` porte
+        la saisie). La valeur reste arbitraire ; cliquer une suggestion la remplit.
+        """
+        tf = ft.TextField(label="Catégorie (facultatif)", value=current or "",
+                          hint_text="ex. Radiologie, Ordonnances")
+        cats = repo.list_categories(self.conn)
+        body: list[ft.Control] = [tf]
+        if cats:
+            chips: list[ft.Control] = []
+            for c in cats:
+                col = c.couleur or NAVY
+
+                def pick(e, name=c.nom):
+                    tf.value = name
+                    self.page.update()
+
+                chips.append(ft.Container(
+                    ft.Text(c.nom, size=12, color=col),
+                    bgcolor=ft.Colors.with_opacity(0.12, col),
+                    padding=ft.Padding.symmetric(vertical=4, horizontal=10),
+                    border_radius=20, ink=True, on_click=pick,
+                ))
+            body.append(ft.Text("Suggestions :", size=11, color=MUTED))
+            body.append(ft.Row(chips, wrap=True, spacing=6, run_spacing=6))
+        return ft.Column(body, tight=True, spacing=6), tf
+
     def _new_template_dialog(self) -> None:
         name = ft.TextField(label="Nom du modèle (ex. devis, recu)", autofocus=True)
+        cat_ctrl, cat_tf = self._category_input()
         status = ft.Text("", color=RED, size=12)
 
         def on_create(e):
@@ -3924,6 +4043,8 @@ class CrmApp:
                 t = templates.create_template(name.value or "")
             except Exception as exc:  # noqa: BLE001
                 status.value = str(exc); self.page.update(); return
+            # Categorie (facultative) portee par le modele, pas par le .docx.
+            repo.set_template_category(self.conn, t.name, cat_tf.value)
             self._close_dialog()
             self._toast("Modèle créé. Ouverture dans Word…")
             templates.open_in_word(t)
@@ -3932,7 +4053,7 @@ class CrmApp:
         dlg = ft.AlertDialog(
             modal=True,
             title=ft.Text("Nouveau modèle"),
-            content=ft.Container(ft.Column([name, status], tight=True, spacing=10), width=360),
+            content=ft.Container(ft.Column([name, cat_ctrl, status], tight=True, spacing=10), width=360),
             actions=[
                 ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
                 self._btn("Créer et ouvrir", on_create, busy=False),
@@ -3950,15 +4071,26 @@ class CrmApp:
 
     def _rename_template_dialog(self, t: templates.Template) -> None:
         name = ft.TextField(label="Nouveau nom du modèle", value=t.name, autofocus=True)
+        current_cat = repo.get_template_category(self.conn, t.name)
+        cat_ctrl, cat_tf = self._category_input(current_cat)
         status = ft.Text("", color=RED, size=12)
 
         def on_rename(e):
-            if not (name.value or "").strip():
+            new_name = (name.value or "").strip()
+            if not new_name:
                 status.value = "Le nom ne peut pas être vide."; self.page.update(); return
             try:
-                templates.rename_template(t, name.value)
+                # Ne renomme le .docx QUE si le nom a reellement change : sinon
+                # `_safe_name` re-normaliserait un nom deja non canonique (espace,
+                # accent) et renommerait le fichier a tort en cassant les documents
+                # et la categorie qui le referencent par son nom actuel.
+                new_t = templates.rename_template(t, new_name) if new_name != t.name else t
             except Exception as exc:  # noqa: BLE001
                 status.value = str(exc); self.page.update(); return
+            # Reporte la categorie de l'ancien nom (anti-orphelin) puis applique la
+            # valeur eventuellement editee dans le champ.
+            repo.rename_template_meta(self.conn, t.name, new_t.name)
+            repo.set_template_category(self.conn, new_t.name, cat_tf.value)
             self._close_dialog()
             self._toast("Modèle renommé.")
             self.show_templates()
@@ -3966,10 +4098,106 @@ class CrmApp:
         dlg = ft.AlertDialog(
             modal=True,
             title=ft.Text(f"Renommer « {t.label} »"),
-            content=ft.Container(ft.Column([name, status], tight=True, spacing=10), width=360),
+            content=ft.Container(ft.Column([name, cat_ctrl, status], tight=True, spacing=10), width=360),
             actions=[
                 ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
                 self._btn("Renommer", on_rename, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _set_template_category_dialog(self, t: templates.Template) -> None:
+        """Assigne/retire la catégorie d'un modèle SANS le renommer.
+
+        Cle = nom de fichier exact du modele (`t.name`), pour que la generation
+        (`get_template_category`) et le regroupement la retrouvent. Champ vide =
+        modele sans categorie.
+        """
+        current = repo.get_template_category(self.conn, t.name)
+        cat_ctrl, cat_tf = self._category_input(current)
+        status = ft.Text("", color=RED, size=12)
+
+        def on_save(e):
+            repo.set_template_category(self.conn, t.name, cat_tf.value)
+            self._close_dialog()
+            self._toast("Catégorie mise à jour.")
+            self.show_templates()
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Catégorie de « {t.label} »"),
+            content=ft.Container(ft.Column(
+                [ft.Text("Range les documents générés dans un sous-dossier dédié et "
+                         "regroupe modèles et documents. Laisser vide = sans catégorie.",
+                         size=12, color=MUTED),
+                 cat_ctrl, status],
+                tight=True, spacing=10), width=360),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Enregistrer", on_save, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _rename_category_dialog(self) -> None:
+        """Renomme une catégorie partout (modèles, et en option documents générés)."""
+        cats = repo.list_categories(self.conn)
+        if not cats:
+            self._toast("Aucune catégorie à renommer.", ok=False)
+            return
+        # Pas d'expand=True ici : dans une Column verticale, expand etire le Dropdown
+        # EN HAUTEUR et gonfle le dialogue. La largeur est geree par STRETCH (cf. content).
+        old_dd = ft.Dropdown(
+            label="Catégorie à renommer", value=cats[0].nom,
+            color=TEXT, text_style=ft.TextStyle(color=TEXT),
+            options=[ft.dropdown.Option(c.nom) for c in cats])
+        new_tf = ft.TextField(label="Nouveau nom", autofocus=True)
+        # Label court (les libellés de Checkbox Flet ne se replient pas et débordent) ;
+        # l'explication va dans une ligne grise qui, elle, se replie dans la largeur.
+        reclass = ft.Checkbox(label="Reclasser les documents existants", value=False)
+        reclass_hint = ft.Text(
+            "Déplace aussi les fichiers déjà générés vers le nouveau sous-dossier.",
+            size=11, color=MUTED)
+        status = ft.Text("", color=RED, size=12)
+
+        def on_rename(e=None):
+            old = old_dd.value or ""
+            new = (new_tf.value or "").strip()
+            if not new:
+                status.value = "Le nouveau nom ne peut pas être vide."
+                self.page.update(); return
+
+            def work():
+                reclasses = repo.rename_category(
+                    self.conn, old, new, reclasser_documents=reclass.value)
+                moved = 0
+                if reclass.value and reclasses:
+                    moved = generator.move_documents_to_category(self.conn, reclasses, new)
+                repo.log_audit(
+                    self.conn, "categorie_renommee",
+                    f"{old} -> {new} (reclasser={reclass.value}, {moved} fichier(s))")
+                self._close_dialog()
+                msg = f"Catégorie « {old} » renommée en « {new} »."
+                if reclass.value:
+                    msg += f" {moved} fichier(s) déplacé(s)."
+                self._toast(msg)
+                self.show_templates()
+
+            self._run_busy(rename_btn, None, work)
+
+        rename_btn = self._btn("Renommer", on_rename, busy=False)
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Renommer une catégorie"),
+            content=ft.Container(ft.Column(
+                [old_dd, new_tf,
+                 ft.Column([reclass, reclass_hint], tight=True, spacing=2),
+                 status],
+                tight=True, spacing=10,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH), width=380),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                rename_btn,
             ],
         )
         self._show_dialog(dlg)

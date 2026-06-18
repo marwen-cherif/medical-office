@@ -61,7 +61,12 @@ def create_template(name: str, copy_from: Path | None = None) -> Template:
 
 
 def rename_template(template: Template, new_name: str) -> Template:
-    """Renomme un modele. Leve FileExistsError si la cible existe deja."""
+    """Renomme le fichier .docx d'un modele. Leve FileExistsError si la cible existe.
+
+    Ne touche pas la base : l'appelant DOIT reporter la categorie du modele
+    (`repo.rename_template_meta(conn, ancien, nouveau)`) pour ne pas l'orpheliner.
+    `template_fields` reste, lui, orphelin (limitation existante, hors perimetre).
+    """
     safe = _safe_name(new_name)
     if safe == template.name:
         return template
