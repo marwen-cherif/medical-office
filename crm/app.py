@@ -576,6 +576,40 @@ class CrmApp:
             )
         )
 
+    def _kv_copy(self, key: str, value: str | None) -> ft.Control:
+        """Comme `_kv` mais la valeur se copie dans le presse-papiers au clic.
+
+        Utilisé pour l'email et le téléphone (fiches patient et prestataire) :
+        un clic copie la valeur et affiche un toast de confirmation. Si la
+        valeur est vide, on retombe sur l'affichage simple non cliquable.
+        """
+        if not value:
+            return _kv(key, "—")
+
+        def _copy(e):
+            self.page.run_task(self.page.clipboard.set, value)
+            self._toast(f"« {value} » copié dans le presse-papiers.")
+
+        val = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Text(value, color=TEXT),
+                    ft.Icon(ft.Icons.CONTENT_COPY, size=15, color=MUTED),
+                ],
+                spacing=6,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            on_click=_copy,
+            tooltip="Cliquer pour copier",
+            ink=True,
+            border_radius=6,
+            padding=ft.Padding.symmetric(vertical=2, horizontal=6),
+        )
+        return ft.Row([
+            ft.Text(key, color=MUTED, width=150),
+            val,
+        ])
+
     def _show_dialog(self, dlg: ft.Control, submit=None, shortcuts=None) -> None:
         """Ouvre un AlertDialog en memorisant l'action de son bouton primaire.
 
@@ -1778,8 +1812,8 @@ class CrmApp:
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
         infos = self._card(ft.Column([
-            _kv("Email", p.email or "—"),
-            _kv("Téléphone", p.telephone or "—"),
+            self._kv_copy("Email", p.email),
+            self._kv_copy("Téléphone", p.telephone),
             _kv("Date de naissance", _iso_to_fr(p.date_naissance) or "—"),
             _kv("Adresse", p.adresse or "—"),
             _kv("Notes", p.notes or "—"),
@@ -3240,8 +3274,8 @@ class CrmApp:
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
         infos = self._card(ft.Column([
-            _kv("Email", p.email or "—"),
-            _kv("Téléphone", p.telephone or "—"),
+            self._kv_copy("Email", p.email),
+            self._kv_copy("Téléphone", p.telephone),
             _kv("Adresse", p.adresse or "—"),
             _kv("Notes", p.notes or "—"),
         ], spacing=6))
