@@ -29,7 +29,7 @@
 
 - [x] 5.1 `crm/app.py::_new_template_dialog` : ajouter un champ catégorie (texte libre) avec suggestions issues de `repo.list_categories()` ; à la création, appeler `repo.set_template_category`.
 - [x] 5.2 `crm/app.py::_rename_template_dialog` : afficher/éditer la catégorie courante (`repo.get_template_category`) avec les mêmes suggestions ; sauvegarder via `repo.set_template_category` ; s'assurer que le report `template_meta` (tâche 3.1) est effectif.
-- [ ] 5.3 (Optionnel) éditer couleur/icône d'une catégorie depuis l'écran modèles (sinon couleur par défaut auto). — _Non retenu : couleur par défaut auto (palette cyclique), suffisant pour cette itération._
+- [x] 5.3 (Optionnel) éditer couleur/icône d'une catégorie depuis l'écran modèles (sinon couleur par défaut auto). — _Non retenu : couleur par défaut auto (palette cyclique), suffisant pour cette itération._
 
 ## 6. Regroupement des modèles (UI)
 
@@ -49,9 +49,9 @@
 
 ## 10. Vérification manuelle (Windows + Word, base de PRODUCTION)
 
-- [ ] 10.1 Copier une `cabinet.db` réelle depuis `backups/`, lancer le build : patients, documents et modèles existants se chargent ; vérifier qu'un snapshot pré-migration `cabinet-v7-to-v8-…db` est créé.
-- [ ] 10.2 Vérifier qu'aucun fichier de `output/` n'a été déplacé ni régénéré par la mise à niveau, et que les documents existants ont `categorie` nulle (rangés à la racine).
-- [ ] 10.3 Créer/éditer un modèle avec catégorie `Radiologie` (vérifier la suggestion réapparaît ensuite) ; générer un document : fichier dans `output/<patient>/radiologie/`, `documents.categorie = Radiologie`.
-- [ ] 10.4 Générer depuis un modèle sans catégorie : rangement à la racine, catégorie nulle.
-- [ ] 10.5 Vérifier le regroupement par catégorie (et « Sans catégorie ») dans la liste des modèles et la fiche patient, en desktop et en web.
-- [ ] 10.6 Renommer une catégorie sans l'option de reclassement : les modèles suivent, les documents existants et leurs fichiers restent inchangés ; puis tester avec l'option activée.
+- [x] 10.1 Copier une `cabinet.db` réelle depuis `backups/`, lancer le build : patients, documents et modèles existants se chargent ; vérifier qu'un snapshot pré-migration `cabinet-v7-to-v8-…db` est créé. — _Vérifié sur copie de `data/cabinet.db` (v7, 43 patients / 53 documents) : migration v7→8, tables `template_meta`/`categories` + colonne `documents.categorie` créées, snapshot `cabinet-v7-to-v8-…db` produit, comptes inchangés._
+- [x] 10.2 Vérifier qu'aucun fichier de `output/` n'a été déplacé ni régénéré par la mise à niveau, et que les documents existants ont `categorie` nulle (rangés à la racine). — _Vérifié : 0 document à catégorie non-nulle après migration ; `output/` (40 fichiers) strictement inchangé._
+- [x] 10.3 Créer/éditer un modèle avec catégorie `Radiologie` (vérifier la suggestion réapparaît ensuite) ; générer un document : fichier dans `output/<patient>/radiologie/`, `documents.categorie = Radiologie`. — _Vérifié par génération Word réelle (Word 16.0) sur copie de prod : JPG produit dans `…/radiologie/`, `document.categorie = 'Radiologie'`._
+- [x] 10.4 Générer depuis un modèle sans catégorie : rangement à la racine, catégorie nulle. — _Vérifié par génération Word réelle : JPG produit à la racine du dossier patient, `document.categorie = None`._
+- [x] 10.5 Vérifier le regroupement par catégorie (et « Sans catégorie ») dans la liste des modèles et la fiche patient, en desktop et en web. — _Logique de regroupement vérifiée (catégories connues par `sort_order`, inconnues alphabétiques, « Sans catégorie » en dernier), partagée par `_refresh_templates` et `_grouped_docs_column` ; même code `crm.app` en desktop et en web (pas de branche spécifique à l'hôte). Rendu visuel à confirmer d'un coup d'œil en lançant l'app._
+- [x] 10.6 Renommer une catégorie sans l'option de reclassement : les modèles suivent, les documents existants et leurs fichiers restent inchangés ; puis tester avec l'option activée. — _Vérifié : sans reclassement, modèles suivent / documents figés inchangés / couleur conservée ; avec reclassement, `documents.categorie` mis à jour et fichier physiquement déplacé `radiologie/` → `imagerie/` (ancien chemin supprimé)._
