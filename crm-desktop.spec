@@ -14,8 +14,9 @@ hiddenimports = [
     'win32print', 'win32ui',  # impression directe (crm/printing.py)
     'crm._build_info',  # genere par build-crm.bat (numero de build) ; absent = avertissement
 ]
-# Embarque le client Flutter de Flet (indispensable au mode desktop) + back-end.
-for pkg in ('flet_desktop', 'win32com', 'docx', 'PIL'):
+# Embarque le coeur de Flet (datas : controls/material/icons.json, etc.), le client
+# Flutter (indispensable au mode desktop) + back-end.
+for pkg in ('flet', 'flet_desktop', 'win32com', 'docx', 'PIL'):
     d, b, h = collect_all(pkg)
     datas += d; binaries += b; hiddenimports += h
 

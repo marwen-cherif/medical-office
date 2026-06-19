@@ -24,7 +24,7 @@ echo.
 echo === Build 1/2 : application DESKTOP (Cabinet-CRM.exe) ===
 pyinstaller --noconfirm --clean crm-desktop.spec
 if errorlevel 1 (
-    echo Erreur PyInstaller (desktop).
+    echo Erreur PyInstaller ^(desktop^).
     pause
     exit /b 1
 )
@@ -33,7 +33,7 @@ echo.
 echo === Build 2/2 : application WEB (Cabinet-CRM-Web.exe) ===
 pyinstaller --noconfirm --clean crm-web.spec
 if errorlevel 1 (
-    echo Erreur PyInstaller (web).
+    echo Erreur PyInstaller ^(web^).
     pause
     exit /b 1
 )
