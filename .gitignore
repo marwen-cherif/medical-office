@@ -31,6 +31,9 @@ config.ini
 # Reglages locaux Claude Code (specifiques a la machine)
 .claude/settings.local.json
 
+# Worktrees internes de Claude Code (repertoire de travail, ne pas versionner)
+.claude/worktrees/
+
 # Modeles utilisateur (garder le dossier, pas les .docx perso)
 templates/*.docx
 
