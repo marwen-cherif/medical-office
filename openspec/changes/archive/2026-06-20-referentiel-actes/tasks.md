@@ -43,7 +43,7 @@
 > update prix, get_acte, delete, et `_fmt_prix(1800) == "1 800,00"`).
 > Restent ci-dessous les vérifications qui exigent un clic dans l'UI et/ou Word.
 
-- [ ] 4.1 Créer plusieurs actes, vérifier le tri, la recherche insensible aux accents et la pagination au-delà d'une page. _(Logique repo vérifiée ; reste le click-through UI.)_
-- [ ] 4.2 Éditer un prix et vérifier l'affichage formaté ; vérifier le refus d'un libellé vide et l'avertissement de doublon. _(Logique repo + `_fmt_prix` vérifiées ; reste l'affichage et le double-clic de confirmation dans le dialogue.)_
-- [ ] 4.3 Désactiver puis réactiver un acte ; vérifier qu'un acte inactif est exclu de la liste de saisie par défaut et visible via « inclure les inactifs ». _(Logique repo vérifiée ; reste la bascule UI.)_
-- [ ] 4.4 Lancer la nouvelle build sur une **copie d'une base `cabinet.db` de production** : vérifier le chargement intact des patients/documents/paiements, la création de la table `actes` (vide) et la présence du snapshot pré-migration.
+- [x] 4.1 Créer plusieurs actes, vérifier le tri, la recherche insensible aux accents et la pagination au-delà d'une page. _(Logique repo + click-through UI vérifiés.)_
+- [x] 4.2 Éditer un prix et vérifier l'affichage formaté ; vérifier le refus d'un libellé vide et l'avertissement de doublon. _(Logique repo + `_fmt_prix` + dialogue vérifiés.)_
+- [x] 4.3 Désactiver puis réactiver un acte ; vérifier qu'un acte inactif est exclu de la liste de saisie par défaut et visible via « inclure les inactifs ». _(Vérifié en UI.)_
+- [x] 4.4 Lancer la nouvelle build sur une **copie d'une base `cabinet.db` de production** : vérifier le chargement intact des patients/documents/paiements, la création de la table `actes` (vide) et la présence du snapshot pré-migration. _(Vérifié sur copie de prod.)_
