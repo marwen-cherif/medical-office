@@ -58,6 +58,17 @@ def _print_audit_suffix(paper: str | None, color: str | None) -> str:
     return f" ({', '.join(parts)})" if parts else ""
 
 
+def _fmt_prix(value: float | None) -> str:
+    """Prix au format francais d'affichage : espace pour les milliers, virgule
+    decimale, 2 decimales (ex. 1800 -> « 1 800,00 »).
+
+    Note : `src.doc_filler.format_montant` (utilise dans les modeles Word) emploie
+    3 decimales ; ici l'affichage CRM des montants est a 2 decimales (cf. paiements/
+    depenses), on garde donc la meme convention pour le referentiel d'actes.
+    """
+    return f"{(value or 0):,.2f}".replace(",", " ").replace(".", ",")
+
+
 _STATUT_LABELS = {
     "brouillon": ("Brouillon", TEAL_DARK),
     "genere": ("Généré", MUTED),
@@ -313,6 +324,11 @@ class CrmApp:
         self.mail_search = self._search_field(
             "Rechercher un modèle…", lambda e: self._reset_and("mail"))
         self.mail_page = 0
+        # Referentiel d'actes (catalogue tarife)
+        self.actes_search = self._search_field(
+            "Rechercher un acte…", lambda e: self._reset_and("actes"))
+        self.actes_page = 0
+        self.actes_inclure_inactifs = False
         # Travaux : onglet actif du sous-menu (Documents / liste des jobs).
         self.travaux_tab = "documents"
         # Sous-vue DOCUMENTS : liste des lignes de documents (jointes au patient).
@@ -366,6 +382,8 @@ class CrmApp:
         self.tpl_pager = ft.Container()
         self.mail_results = ft.Container()
         self.mail_pager = ft.Container()
+        self.actes_results = ft.Container()
+        self.actes_pager = ft.Container()
         self.jobs_results = ft.Container()
         self.jobs_pager = ft.Container()
         self.job_detail_container = ft.Container()
@@ -725,6 +743,8 @@ class CrmApp:
             self._new_template_dialog()
         elif self.current_view == "mail":
             self._mail_template_dialog()
+        elif self.current_view == "actes":
+            self._acte_dialog()
         elif self.current_view == "patient_detail" and self.current_patient:
             self._generate_dialog(self.current_patient)
         elif self.current_view == "prestataire_detail" and self.current_prestataire:
@@ -752,6 +772,7 @@ class CrmApp:
             "documents": self.doc_search,
             "templates": self.tpl_search,
             "mail": self.mail_search,
+            "actes": self.actes_search,
         }.get(self.current_view)
         if field is None:
             return
@@ -780,6 +801,9 @@ class CrmApp:
         elif self.current_view == "mail":
             self.mail_page += delta
             self._refresh_mail_templates()
+        elif self.current_view == "actes":
+            self.actes_page += delta
+            self._refresh_actes()
         elif self.current_view == "documents":
             self.doc_page += delta
             self._refresh_documents()
@@ -836,6 +860,9 @@ class CrmApp:
         elif view == "mail":
             self.mail_page = 0
             self._refresh_mail_templates()
+        elif view == "actes":
+            self.actes_page = 0
+            self._refresh_actes()
         elif view == "documents":
             self.doc_page = 0
             self._refresh_documents()
@@ -2436,6 +2463,22 @@ class CrmApp:
         elif self.param_tab == "printer":
             action = None
             body = [self._printer_settings_card()]
+        elif self.param_tab == "actes":
+            action = self._btn("Nouvel acte", lambda e: self._acte_dialog(),
+                               icon=ft.Icons.ADD, shortcut=SC_NEW, busy=False)
+            inactifs_toggle = ft.Checkbox(
+                label="Inclure les inactifs", value=self.actes_inclure_inactifs,
+                on_change=lambda e: self._toggle_actes_inactifs(e.control.value))
+            body = [
+                ft.Text("Catalogue d'actes tarifés (libellé + prix), réutilisé pour "
+                        "pré-remplir des montants. Retirer un acte le désactive "
+                        "(il disparaît des listes de saisie) sans le supprimer.",
+                        color=MUTED, size=13),
+                ft.Row([self.actes_search, inactifs_toggle],
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                self.actes_results,
+                self.actes_pager,
+            ]
         else:
             action = self._btn("Nouveau modèle", lambda e: self._mail_template_dialog(),
                                icon=ft.Icons.ADD, shortcut=SC_NEW, busy=False)
@@ -2451,6 +2494,8 @@ class CrmApp:
             self._refresh_templates()
         elif self.param_tab == "mail":
             self._refresh_mail_templates()
+        elif self.param_tab == "actes":
+            self._refresh_actes()
 
     def _param_submenu(self) -> ft.Control:
         """Sous-menu a trois onglets de la page Parametrage."""
@@ -2469,6 +2514,7 @@ class CrmApp:
         return ft.Row([
             tab_btn("templates", "Modèles de documents", ft.Icons.DESCRIPTION),
             tab_btn("mail", "Modèles d'email", ft.Icons.MARK_EMAIL_READ),
+            tab_btn("actes", "Actes", ft.Icons.SELL_OUTLINED),
             tab_btn("printer", "Imprimante", ft.Icons.PRINT),
         ], spacing=10)
 
@@ -2859,6 +2905,157 @@ class CrmApp:
         repo.delete_mail_template(self.conn, t.id)
         self._toast("Modèle supprimé.")
         self._refresh_mail_templates()
+
+    # --- Sous-vue ACTES (referentiel tarife) ----------------------------------
+    def _toggle_actes_inactifs(self, value: bool) -> None:
+        """Bascule « inclure les inactifs » : remet en 1re page et rafraichit."""
+        self.actes_inclure_inactifs = bool(value)
+        self.actes_page = 0
+        self._refresh_actes()
+
+    def _refresh_actes(self) -> None:
+        search = self.actes_search.value or ""
+        actifs_seulement = not self.actes_inclure_inactifs
+        total = repo.count_actes(self.conn, search, actifs_seulement)
+        self.actes_page = self._clamp_page(self.actes_page, total)
+        actes = repo.list_actes(
+            self.conn, search, actifs_seulement,
+            limit=PAGE_SIZE, offset=self.actes_page * PAGE_SIZE)
+        rows = [self._acte_row(a) for a in actes]
+        if rows:
+            liste = ft.Column(rows, spacing=8)
+        elif search.strip():
+            liste = ft.Text("Aucun acte ne correspond à votre recherche.", color=MUTED)
+        else:
+            liste = ft.Text(
+                "Aucun acte. Ajoutez-en un avec le bouton ci-dessus.", color=MUTED)
+
+        def on_page(idx):
+            self.actes_page = idx
+            self._refresh_actes()
+
+        self.actes_results.content = self._card(liste)
+        self.actes_pager.content = self._pagination(self.actes_page, total, on_page)
+        self.page.update()
+
+    def _acte_row(self, a: "repo.Acte") -> ft.Control:
+        """Ligne d'un acte : libellé (+ code), prix formaté, badge « inactif »,
+        actions (modifier, désactiver/réactiver).
+
+        Le retrait est la désactivation NON destructive (icône œil), réversible :
+        un acte inactif disparaît des listes de saisie mais reste en base. Aucune
+        suppression dure n'est exposée ici (cohérent avec la philosophie de
+        préservation des données ; `repo.delete_acte` reste disponible pour le
+        `reset` ou une future purge gardée des actes jamais utilisés)."""
+        sub = f"Code : {a.code}" if a.code else "Sans code"
+        badge: list[ft.Control] = []
+        if not a.actif:
+            badge.append(ft.Container(
+                ft.Text("Inactif", size=11, color=MUTED),
+                bgcolor=ft.Colors.with_opacity(0.12, MUTED),
+                padding=ft.Padding.symmetric(vertical=3, horizontal=8), border_radius=20))
+        actions: list[ft.Control] = [
+            ft.IconButton(ft.Icons.EDIT, tooltip="Modifier", icon_color=NAVY,
+                          on_click=lambda e, aa=a: self._acte_dialog(aa)),
+        ]
+        if a.actif:
+            actions.append(ft.IconButton(
+                ft.Icons.VISIBILITY_OFF_OUTLINED,
+                tooltip="Désactiver (retirer des listes de saisie)", icon_color=AMBER,
+                on_click=lambda e, aa=a: self._set_acte_actif(aa, False)))
+        else:
+            actions.append(ft.IconButton(
+                ft.Icons.VISIBILITY_OUTLINED, tooltip="Réactiver", icon_color=GREEN,
+                on_click=lambda e, aa=a: self._set_acte_actif(aa, True)))
+        return ft.Row([
+            ft.Icon(ft.Icons.SELL_OUTLINED, color=NAVY),
+            ft.Column([
+                ft.Text(a.libelle, weight=ft.FontWeight.W_600, color=TEXT),
+                ft.Text(sub, size=12, color=MUTED),
+            ], spacing=2, expand=True),
+            ft.Text(_fmt_prix(a.prix), color=TEXT, weight=ft.FontWeight.W_600,
+                    width=120, text_align=ft.TextAlign.RIGHT),
+            *badge, *actions,
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def _set_acte_actif(self, a: "repo.Acte", actif: bool) -> None:
+        repo.set_acte_actif(self.conn, a.id, actif)
+        repo.log_audit(self.conn, "acte_reactive" if actif else "acte_desactive",
+                       f"#{a.id} {a.libelle}")
+        self._toast("Acte réactivé." if actif
+                    else "Acte désactivé (retiré des listes de saisie).")
+        self._refresh_actes()
+
+    def _acte_dialog(self, a: "repo.Acte | None" = None) -> None:
+        is_edit = a is not None
+        libelle = ft.TextField(label="Libellé (ex. Détartrage)",
+                               value=a.libelle if a else "", autofocus=True)
+        prix = ft.TextField(label="Prix", value=(f"{a.prix:.2f}" if a else "0"),
+                            keyboard_type=ft.KeyboardType.NUMBER)
+        code = ft.TextField(label="Code (facultatif)",
+                            value=(a.code or "") if a else "")
+        status = ft.Text("", color=RED, size=12)
+        warn = ft.Text("", color=AMBER, size=12)
+        # Doublon de libelle : le 1er enregistrement sur un libelle actif deja
+        # present avertit (non bloquant) ; un 2e clic confirme (cf. spec).
+        pending = {"confirm": False}
+
+        def on_save(e=None):
+            lib = (libelle.value or "").strip()
+            if not lib:
+                status.value = "Le libellé est obligatoire."; warn.value = ""
+                self.page.update(); return
+            try:
+                prix_val = float((prix.value or "0").replace(",", "."))
+            except ValueError:
+                status.value = "Prix invalide."; warn.value = ""
+                self.page.update(); return
+            if prix_val < 0:
+                status.value = "Le prix doit être positif ou nul."; warn.value = ""
+                self.page.update(); return
+            dup = repo.find_acte_by_libelle(
+                self.conn, lib, exclude_id=a.id if a else None)
+            if dup is not None and not pending["confirm"]:
+                pending["confirm"] = True
+                status.value = ""
+                warn.value = (f"Un acte actif « {dup.libelle} » existe déjà. "
+                              "Cliquez à nouveau sur Enregistrer pour confirmer.")
+                self.page.update(); return
+            if is_edit:
+                a.libelle = lib; a.prix = prix_val; a.code = code.value or None
+                repo.update_acte(self.conn, a)
+                repo.log_audit(self.conn, "acte_modifie",
+                               f"#{a.id} {lib} ({prix_val:.2f})")
+            else:
+                created = repo.create_acte(self.conn, repo.Acte(
+                    id=None, libelle=lib, prix=prix_val, code=code.value or None))
+                repo.log_audit(self.conn, "acte_cree",
+                               f"#{created.id} {lib} ({prix_val:.2f})")
+            self._close_dialog()
+            self._toast("Acte enregistré.")
+            self._refresh_actes()
+
+        # Modifier le libelle apres l'avertissement annule la re-confirmation
+        # (on ne veut pas confirmer un doublon qui n'en est plus un).
+        def on_libelle_change(e=None):
+            if pending["confirm"]:
+                pending["confirm"] = False
+                warn.value = ""
+                self.page.update()
+        libelle.on_change = on_libelle_change
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Modifier l'acte" if is_edit else "Nouvel acte"),
+            content=ft.Container(
+                ft.Column([libelle, prix, code, warn, status], tight=True, spacing=12),
+                width=400),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Enregistrer", on_save, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
 
     # --- Vue TRAVAUX (Documents + liste des jobs) -----------------------------
     def show_travaux(self, tab: str | None = None) -> None:

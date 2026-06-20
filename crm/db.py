@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class SchemaTooNewError(RuntimeError):
@@ -250,6 +250,28 @@ CREATE TABLE IF NOT EXISTS categories (
     sort_order  INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- v9 : referentiel d'actes tarifes (libelle + prix). Source de prix reutilisable
+-- pour pre-remplir des montants ailleurs (plans de traitement, facturation
+-- multi-lignes). Evolution PUREMENT ADDITIVE : table neuve creee par _SCHEMA ;
+-- aucune donnee existante (documents/paiements) touchee. Retrait NON destructif
+-- via `actif` (l'acte disparait des listes de saisie mais reste en base, pour ne
+-- pas casser un eventuel snapshot historique). `slug_libelle` = recherche
+-- insensible aux accents (meme approche que patients/prestataires). Voir
+-- openspec/changes/referentiel-actes.
+CREATE TABLE IF NOT EXISTS actes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    libelle       TEXT NOT NULL,
+    slug_libelle  TEXT NOT NULL,
+    prix          REAL NOT NULL DEFAULT 0,
+    code          TEXT,
+    actif         INTEGER NOT NULL DEFAULT 1,
+    sort_order    INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_actes_slug ON actes(slug_libelle);
+CREATE INDEX IF NOT EXISTS idx_actes_actif ON actes(actif);
 """
 
 
@@ -372,6 +394,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # (ranges a la racine du dossier patient). Aucun backfill destructif.
     if not _column_exists(conn, "documents", "categorie"):
         conn.execute("ALTER TABLE documents ADD COLUMN categorie TEXT")
+    # v9 : referentiel d'actes. Aucune transformation ici : la table `actes` est
+    # neuve et entierement creee par _SCHEMA (CREATE TABLE IF NOT EXISTS). Le bump
+    # de SCHEMA_VERSION 8 -> 9 declenche a lui seul le snapshot pre-migration dans
+    # connect() pour toute base ouverte en v8 (cf. _snapshot_before_migration).
 
 
 def _set_version(conn: sqlite3.Connection) -> None:

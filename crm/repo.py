@@ -1188,6 +1188,163 @@ def rename_category(
     return reclasses
 
 
+# --- Referentiel d'actes (v9) -------------------------------------------------
+# Catalogue d'actes tarifes (libelle + prix) : source de prix reutilisable pour
+# pre-remplir des montants ailleurs (plans de traitement, facturation multi-lignes).
+# Cle technique `id` (et NON le libelle, contrairement a `categories`) : un libelle
+# peut etre edite, mais un referencement historique doit rester stable. Retrait NON
+# destructif via `actif`. La CONSOMMATION (snapshot du prix par les appelants) est
+# hors perimetre ici : ce module n'expose que la lecture. Voir
+# openspec/changes/referentiel-actes.
+
+@dataclass
+class Acte:
+    id: Optional[int]
+    libelle: str
+    prix: float = 0.0
+    code: Optional[str] = None
+    actif: bool = True
+    sort_order: int = 0
+
+
+def _row_to_acte(row: sqlite3.Row) -> Acte:
+    return Acte(
+        id=row["id"],
+        libelle=row["libelle"],
+        prix=row["prix"],
+        code=row["code"],
+        actif=bool(row["actif"]),
+        sort_order=row["sort_order"],
+    )
+
+
+def create_acte(conn: sqlite3.Connection, a: Acte) -> Acte:
+    """Cree un acte. Libelle obligatoire (non vide), prix >= 0, actif par defaut."""
+    libelle = (a.libelle or "").strip()
+    if not libelle:
+        raise ValueError("Le libelle d'un acte est obligatoire.")
+    if a.prix is None or a.prix < 0:
+        raise ValueError("Le prix d'un acte doit etre positif ou nul.")
+    cur = conn.execute(
+        """INSERT INTO actes (libelle, slug_libelle, prix, code, actif, sort_order)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (libelle, slugify(libelle), float(a.prix), (a.code or None),
+         int(a.actif), a.sort_order or 0),
+    )
+    conn.commit()
+    a.id = cur.lastrowid
+    a.libelle = libelle
+    return a
+
+
+def update_acte(conn: sqlite3.Connection, a: Acte) -> None:
+    """Met a jour libelle/slug/prix/code/ordre. Le changement de prix n'affecte que
+    les usages FUTURs : un montant deja recopie ailleurs (snapshot) n'est pas touche."""
+    libelle = (a.libelle or "").strip()
+    if not libelle:
+        raise ValueError("Le libelle d'un acte est obligatoire.")
+    if a.prix is None or a.prix < 0:
+        raise ValueError("Le prix d'un acte doit etre positif ou nul.")
+    conn.execute(
+        """UPDATE actes SET libelle = ?, slug_libelle = ?, prix = ?, code = ?,
+             sort_order = ? WHERE id = ?""",
+        (libelle, slugify(libelle), float(a.prix), (a.code or None),
+         a.sort_order or 0, a.id),
+    )
+    conn.commit()
+
+
+def set_acte_actif(conn: sqlite3.Connection, acte_id: int, actif: bool) -> None:
+    """Active/desactive un acte (retrait NON destructif). Un acte inactif disparait
+    des listes de saisie par defaut mais reste en base et peut etre reactive."""
+    conn.execute("UPDATE actes SET actif = ? WHERE id = ?", (int(actif), acte_id))
+    conn.commit()
+
+
+def delete_acte(conn: sqlite3.Connection, acte_id: int) -> None:
+    """Suppression DURE, reservee a un acte jamais utilise (decision de l'appelant).
+    Le retrait courant passe par set_acte_actif (desactivation), non destructif."""
+    conn.execute("DELETE FROM actes WHERE id = ?", (acte_id,))
+    conn.commit()
+
+
+def get_acte(conn: sqlite3.Connection, acte_id: int) -> Optional[Acte]:
+    """Lookup d'un acte par id : contrat de lecture pour le pre-remplissage.
+
+    Un consommateur (etape de plan, ligne de facture) lit l'acte et recopie son
+    couple (libelle, prix) au moment de l'usage ; ce module ne pre-remplit rien.
+    """
+    row = conn.execute("SELECT * FROM actes WHERE id = ?", (acte_id,)).fetchone()
+    return _row_to_acte(row) if row else None
+
+
+def find_acte_by_libelle(
+    conn: sqlite3.Connection, libelle: str, exclude_id: Optional[int] = None
+) -> Optional[Acte]:
+    """Acte ACTIF au libelle identique (insensible accents/casse), s'il existe.
+
+    Alimente l'avertissement NON bloquant de doublon a la creation/edition.
+    `exclude_id` ignore l'acte en cours d'edition (pour ne pas s'auto-signaler).
+    """
+    slug = slugify(libelle)
+    if not slug:
+        return None
+    sql = "SELECT * FROM actes WHERE slug_libelle = ? AND actif = 1"
+    params: list[Any] = [slug]
+    if exclude_id is not None:
+        sql += " AND id <> ?"
+        params.append(exclude_id)
+    sql += " ORDER BY id LIMIT 1"
+    row = conn.execute(sql, params).fetchone()
+    return _row_to_acte(row) if row else None
+
+
+def _acte_filter_clause(search: str, actifs_seulement: bool) -> tuple[str, list[Any]]:
+    """Clause WHERE (et parametres) pour la liste des actes.
+
+    `search` cherche le libelle, insensible aux accents (slug + LIKE, comme
+    patients/documents). `actifs_seulement` exclut les actes desactives.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    if actifs_seulement:
+        clauses.append("actif = 1")
+    if search.strip():
+        clauses.append("slug_libelle LIKE ?")
+        params.append(f"%{slugify(search)}%")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
+def list_actes(
+    conn: sqlite3.Connection,
+    search: str = "",
+    actifs_seulement: bool = True,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[Acte]:
+    """Liste paginee/filtree des actes (recherche libelle insensible accents).
+
+    Contrat de lecture reutilisable : un consommateur y choisit un acte dont il
+    recopie (snapshot) le couple (libelle, prix). Tri `sort_order, slug_libelle`.
+    """
+    where, params = _acte_filter_clause(search, actifs_seulement)
+    sql = f"SELECT * FROM actes{where} ORDER BY sort_order, slug_libelle"
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    rows = conn.execute(sql, params).fetchall()
+    return [_row_to_acte(r) for r in rows]
+
+
+def count_actes(
+    conn: sqlite3.Connection, search: str = "", actifs_seulement: bool = True
+) -> int:
+    where, params = _acte_filter_clause(search, actifs_seulement)
+    row = conn.execute(f"SELECT COUNT(*) AS n FROM actes{where}", params).fetchone()
+    return int(row["n"])
+
+
 # --- Jobs (traitement par lot) ------------------------------------------------
 
 def _row_to_job(row: sqlite3.Row) -> Job:
