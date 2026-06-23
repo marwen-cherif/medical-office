@@ -9,6 +9,7 @@ from __future__ import annotations
 import calendar
 import json
 import math
+import re
 import sqlite3
 import sys
 import threading
@@ -2645,9 +2646,99 @@ class CrmApp:
             chip, self._actions_menu(actions, tooltip="Actions de l'acte"),
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
+    def _odontogramme(self, *, is_selected, on_toggle,
+                      denture: str = "adulte") -> types.SimpleNamespace:
+        """Odontogramme cliquable (capability `selection-dents`).
+
+        Grille de dents FDI en croix (maxillaire en haut, mandibulaire en bas ;
+        côté DROIT du patient à gauche de l'écran — vue « face au patient »),
+        avec bascule denture adulte (permanentes) / enfant (temporaires).
+        Composant 100 % Flet : rendu et clics identiques en desktop et en web.
+
+        Paramètres :
+          is_selected(num) -> bool : la dent `num` est-elle retenue ?
+          on_toggle(num)           : bascule la dent `num` (appelé au clic).
+          denture                  : « adulte » | « enfant » affichée au départ.
+
+        La SÉLECTION reste portée par l'appelant (source de vérité unique) ; ce
+        composant n'en est qu'une vue. Renvoie un handle : `.control`,
+        `.refresh()` (re-rend selon la sélection) et `.set_denture(d)`."""
+        state = {"denture": denture if denture in ("adulte", "enfant") else "adulte"}
+        grid = ft.Column([], tight=True, spacing=4)
+
+        def _tooth(num: str) -> ft.Control:
+            sel = is_selected(num)
+            # Le numéro FDI reste TOUJOURS visible (sélectionnée ou non) ; la
+            # sélection se distingue par le fond NAVY et le texte blanc.
+            return ft.Container(
+                ft.Text(num, size=11, text_align=ft.TextAlign.CENTER,
+                        weight=ft.FontWeight.BOLD, color=SURFACE if sel else NAVY),
+                width=30, height=30, alignment=ft.Alignment.CENTER,
+                border_radius=6, ink=True,
+                bgcolor=NAVY if sel else ft.Colors.with_opacity(0.08, NAVY),
+                border=ft.Border.all(1, TEAL_DARK if sel else BORDER),
+                tooltip=f"Dent {num}",
+                on_click=lambda e, n=num: on_toggle(n))
+
+        def _arcade(nums: list[str]) -> ft.Row:
+            # Petit espace central marquant la ligne médiane entre les deux côtés.
+            cells: list[ft.Control] = []
+            half = len(nums) // 2
+            for i, n in enumerate(nums):
+                if i == half:
+                    cells.append(ft.Container(width=10))
+                cells.append(_tooth(n))
+            return ft.Row(cells, spacing=2, tight=True,
+                          alignment=ft.MainAxisAlignment.CENTER)
+
+        def refresh(e=None):
+            q = (repo.DENTS_TEMPORAIRES if state["denture"] == "enfant"
+                 else repo.DENTS_PERMANENTES)
+            qd = (5, 6, 7, 8) if state["denture"] == "enfant" else (1, 2, 3, 4)
+            # Haut : quadrant droit (inversé, 8→1 vers la médiane) puis gauche ;
+            # Bas : quadrant droit (inversé) puis gauche.
+            top = list(reversed(q[qd[0]])) + list(q[qd[1]])
+            bottom = list(reversed(q[qd[3]])) + list(q[qd[2]])
+            grid.controls = [_arcade(top), _arcade(bottom)]
+            self.page.update()
+
+        btn_adulte = ft.TextButton("Adulte", on_click=lambda e: set_denture("adulte"))
+        btn_enfant = ft.TextButton("Enfant", on_click=lambda e: set_denture("enfant"))
+
+        def _render_switch():
+            for b, key in ((btn_adulte, "adulte"), (btn_enfant, "enfant")):
+                on = state["denture"] == key
+                b.style = ft.ButtonStyle(
+                    bgcolor=NAVY if on else ft.Colors.with_opacity(0.06, NAVY),
+                    color=SURFACE if on else NAVY)
+
+        def set_denture(d: str):
+            if d in ("adulte", "enfant") and d != state["denture"]:
+                state["denture"] = d
+                _render_switch()
+                refresh()
+
+        _render_switch()
+        refresh()
+        control = ft.Container(
+            ft.Column([
+                ft.Row([
+                    ft.Text("Schéma dentaire", size=12, color=MUTED,
+                            weight=ft.FontWeight.BOLD),
+                    ft.Container(expand=True), btn_adulte, btn_enfant,
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                grid,
+            ], tight=True, spacing=6),
+            padding=8, border_radius=8, border=ft.Border.all(1, BORDER),
+            bgcolor=ft.Colors.with_opacity(0.4, BG))
+        return types.SimpleNamespace(
+            control=control, refresh=refresh, set_denture=set_denture,
+            denture=lambda: state["denture"])
+
     def _acte_card(self, *, pres: "repo.Prestation | None" = None,
                    actes: "list[repo.Acte] | None" = None,
                    on_change=None, on_remove=None,
+                   date_naissance: "str | None" = None,
                    removable: bool = True) -> types.SimpleNamespace:
         """Composant reutilisable « carte acte » (3.4) : selecteur referentiel qui
         pre-remplit libelle+prix (modifiables), date, dents (chips) et note. Sert le
@@ -2697,40 +2788,57 @@ class CrmApp:
         note = ft.TextField(label="Note (optionnelle)", value=(pres.note if pres else ""),
                             multiline=True, min_lines=1, max_lines=3)
 
+        # `dents_list` = SOURCE DE VÉRITÉ unique de la sélection ; le champ (ajout)
+        # et l'odontogramme (affichage + sélection) en sont les deux vues. Pas de
+        # chips dans le formulaire : la sélection est lue/modifiée sur le schéma.
         dents_list = [d for d in repo.normalize_dents(pres.dents if pres else "").split(", ")
                       if d]
-        chips_row = ft.Row([], wrap=True, spacing=6, run_spacing=6)
         dent_input = ft.TextField(
             label="Dents (FDI)", expand=True,
-            hint_text="une ou plusieurs, séparées par des virgules — ex. 26, 27")
+            hint_text="dictez ou tapez plusieurs dents, puis Entrée pour les ajouter")
 
-        def render_chips():
-            chips: list[ft.Control] = []
-            for d in list(dents_list):
-                chips.append(ft.Container(
-                    ft.Row([
-                        ft.Text(d, size=12, color=TEAL_DARK),
-                        ft.IconButton(ft.Icons.CLOSE, icon_size=14, icon_color=TEAL_DARK,
-                                      tooltip="Retirer",
-                                      on_click=lambda e, val=d: (dents_list.remove(val)
-                                                                 if val in dents_list else None,
-                                                                 render_chips())),
-                    ], tight=True, spacing=0),
-                    bgcolor=ft.Colors.with_opacity(0.14, TEAL_DARK),
-                    padding=ft.Padding.only(left=10, right=2, top=0, bottom=0),
-                    border_radius=14))
-            chips_row.controls = chips
-            self.page.update()
+        # Odontogramme : denture par défaut dérivée de l'âge (adulte si naissance
+        # inconnue) ; clic = toggle de la dent dans `dents_list`.
+        odonto = self._odontogramme(
+            is_selected=lambda n: n in dents_list,
+            on_toggle=lambda n: toggle_dent(n),
+            denture=repo.denture_par_defaut(date_naissance))
 
-        def add_dent(e=None):
-            for d in [x.strip() for x in repo.normalize_dents(dent_input.value).split(",")
-                      if x.strip()]:
-                if d not in dents_list:
-                    dents_list.append(d)
+        def sync():
+            """Re-rend l'odontogramme depuis `dents_list`."""
+            odonto.refresh()
+
+        def toggle_dent(num: str):
+            if num in dents_list:
+                dents_list.remove(num)
+            else:
+                dents_list.append(num)
+            sync()
+
+        def add_dents_from_input(e=None):
+            """Ajoute en bloc toutes les dents saisies/dictées dans le champ.
+
+            On dicte ou tape plusieurs numéros enchaînés (séparés par espace,
+            virgule, point-virgule ou saut de ligne) puis Entrée les ajoute tous
+            d'un coup et vide le champ. Déclenché aussi par le bouton « + » et la
+            perte de focus (filet de sécurité), jamais au fil de la frappe."""
+            raw = (dent_input.value or "").strip()
+            if not raw:
+                return
+            tokens = [t for t in re.split(r"[,\s;]+", raw) if t]
             dent_input.value = ""
-            render_chips()
-        dent_input.on_submit = add_dent
-        render_chips()
+            added = False
+            for t in tokens:
+                if t not in dents_list:
+                    dents_list.append(t)
+                    added = True
+            if added:
+                sync()                # re-surligne les dents sur l'odontogramme
+            else:
+                self.page.update()    # vide le champ même si tout était doublon
+
+        dent_input.on_blur = add_dents_from_input
+        dent_input.on_submit = add_dents_from_input
 
         del_btn = (ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=RED,
                                  tooltip="Retirer cet acte",
@@ -2743,9 +2851,10 @@ class CrmApp:
             date_row,
             ft.Row([dent_input,
                     ft.IconButton(ft.Icons.ADD, icon_color=NAVY,
-                                  tooltip="Ajouter la dent", on_click=add_dent)],
+                                  tooltip="Ajouter les dents saisies",
+                                  on_click=add_dents_from_input)],
                    spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            chips_row,
+            odonto.control,
             note,
         ], tight=True, spacing=8), padding=12)
 
@@ -2806,7 +2915,8 @@ class CrmApp:
 
         def add_card(pres=None):
             h = self._acte_card(pres=pres, actes=actes,
-                                on_change=recompute, on_remove=remove_card)
+                                on_change=recompute, on_remove=remove_card,
+                                date_naissance=p.date_naissance)
             cards.append(h)
             cards_col.controls = [c.control for c in cards]
             recompute()
@@ -2907,7 +3017,8 @@ class CrmApp:
         is_edit = pres is not None
         actes = repo.list_actes(self.conn)
         plans = repo.list_plans(self.conn, p.id)
-        card = self._acte_card(pres=pres, actes=actes, removable=False)
+        card = self._acte_card(pres=pres, actes=actes, removable=False,
+                               date_naissance=p.date_naissance)
         init_plan = (str(pres.plan_id) if (pres and pres.plan_id)
                      else (str(plan_id) if plan_id else ""))
         plan_dd = ft.Dropdown(
