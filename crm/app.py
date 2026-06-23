@@ -13,6 +13,7 @@ import sqlite3
 import sys
 import threading
 import time
+import types
 from datetime import date, datetime
 from pathlib import Path
 from typing import Callable
@@ -43,6 +44,16 @@ AMBER = "#B45309"       # ambre fonce (succes partiel d'un job)
 # Cle `meta` memorisant l'imprimante cible choisie dans Parametrage > Imprimante.
 PRINTER_KEY = "printer_name"
 
+# Cle `meta` memorisant la categorie de modeles dediee aux NOTES D'HONORAIRES
+# (choisie dans Parametrage > Modeles). Le bouton « Note d'honoraires » de la fiche
+# patient ne propose que les modeles de cette categorie ; la generation generique
+# « Generer un document » l'exclut.
+NOTE_CAT_KEY = "note_honoraire_categorie"
+# Categorie par defaut si le reglage n'est pas defini : convention « Notes
+# d'honoraires ». Ainsi, ranger un modele dans une categorie ainsi nommee suffit,
+# sans configuration prealable (le reglage permet d'en choisir une autre).
+NOTE_CAT_DEFAULT = "Notes d'honoraires"
+
 # Reglages d'impression par type (format papier / couleur). Libelles d'affichage
 # (dropdowns Parametrage) et libelles courts pour l'audit `document_imprime`.
 # `None` = « Defaut imprimante » (repli neutre, cf. crm/print_settings.py).
@@ -67,6 +78,15 @@ def _fmt_prix(value: float | None) -> str:
     depenses), on garde donc la meme convention pour le referentiel d'actes.
     """
     return f"{(value or 0):,.2f}".replace(",", " ").replace(".", ",")
+
+
+def _cat_eq(a: str | None, b: str | None) -> bool:
+    """Egalite de categorie tolerante (espaces de bord + casse ignores).
+
+    La categorie cible des notes d'honoraires (reglage) et celle portee par un
+    modele viennent de saisies libres distinctes : on compare sans se faire piéger
+    par « Notes d'honoraires » vs « notes d'honoraires  »."""
+    return (a or "").strip().casefold() == (b or "").strip().casefold()
 
 
 _STATUT_LABELS = {
@@ -111,6 +131,39 @@ _DEPENSE_STATUT_LABELS = {
     "regle_partiellement": ("Réglé partiellement", AMBER),
     "regle": ("Réglé", GREEN),
 }
+
+# Journal d'audit -> présentation de l'onglet Historique de la fiche patient :
+# type d'action -> (catégorie de filtre, icône, libellé lisible). La catégorie
+# alimente les filtres (Fiche / Plans / Actes / Documents / Règlements) ; un type
+# absent retombe sur la catégorie « autre » et _humanize() (anciennes lignes).
+_AUDIT_META = {
+    "fiche_creee": ("fiche", ft.Icons.PERSON_ADD, "Fiche créée"),
+    "fiche_modifiee": ("fiche", ft.Icons.EDIT, "Fiche modifiée"),
+    "plan_cree": ("plans", ft.Icons.ADD_CHART, "Plan créé"),
+    "plan_modifie": ("plans", ft.Icons.EDIT_NOTE, "Plan modifié"),
+    "plan_supprime": ("plans", ft.Icons.DELETE_OUTLINE, "Plan supprimé"),
+    "acte_ajoute": ("actes", ft.Icons.ADD, "Acte ajouté"),
+    "acte_modifie": ("actes", ft.Icons.EDIT, "Acte modifié"),
+    "acte_supprime": ("actes", ft.Icons.DELETE_OUTLINE, "Acte supprimé"),
+    "acte_regle": ("reglements", ft.Icons.PAYMENTS, "Acte réglé"),
+    "reglement_cascade": ("reglements", ft.Icons.PAYMENTS, "Règlement réparti"),
+    "paiement_encaisse": ("reglements", ft.Icons.CHECK_CIRCLE, "Paiement encaissé"),
+    "paiement_annule": ("reglements", ft.Icons.CANCEL, "Paiement annulé"),
+    "document_genere": ("documents", ft.Icons.DESCRIPTION, "Document généré"),
+    "note_honoraires_generee": ("documents", ft.Icons.RECEIPT_LONG,
+                                "Note d'honoraires générée"),
+    "document_envoye": ("documents", ft.Icons.SEND, "Document envoyé"),
+    "document_imprime": ("documents", ft.Icons.PRINT, "Document imprimé"),
+    "brouillon_cree": ("documents", ft.Icons.NOTE_ADD, "Brouillon créé"),
+    "brouillon_modifie": ("documents", ft.Icons.EDIT, "Brouillon modifié"),
+    "brouillon_supprime": ("documents", ft.Icons.DELETE_OUTLINE, "Brouillon supprimé"),
+}
+
+# Filtres de l'onglet Historique (clé de catégorie -> libellé du chip).
+_AUDIT_FILTERS = (
+    ("tous", "Tous"), ("fiche", "Fiche"), ("plans", "Plans"),
+    ("actes", "Actes"), ("documents", "Documents"), ("reglements", "Règlements"),
+)
 
 # Formats acceptes en saisie manuelle d'une date (le 1er sert aussi a l'affichage).
 _DATE_FORMATS_FR = ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d")
@@ -244,6 +297,12 @@ class CrmApp:
         # a 0 quand on ouvre un autre patient.
         self.detail_docs_page = 0
         self.detail_paie_page = 0
+        # Onglet actif de la fiche patient (0=Plans&actes, 1=Documents,
+        # 2=Reglements, 3=Historique) et filtre de l'onglet Historique : conserves
+        # entre deux rendus de la MEME fiche (pagination, auto-polling), remis a
+        # zero a l'ouverture d'un autre patient.
+        self.detail_tab = 0
+        self.detail_hist_filter = "tous"
 
         # --- Recherche, filtres et pagination (etat persistant entre les rendus) ---
         # Patients
@@ -272,7 +331,7 @@ class CrmApp:
             border_color=BORDER, focused_border_color=NAVY,
             on_select=lambda e: self._reset_and("paiements"),
             options=[
-                ft.dropdown.Option(key="en_attente", text="En attente"),
+                ft.dropdown.Option(key="en_attente", text="À recouvrer"),
                 ft.dropdown.Option(key="encaisse", text="Encaissés"),
                 ft.dropdown.Option(key="tous", text="Tous"),
             ],
@@ -1352,8 +1411,11 @@ class CrmApp:
         df = _date_iso(self.dash_date_from)
         dt = _date_iso(self.dash_date_to)
 
-        ca = repo.total_paiements(self.conn, statut="encaisse", date_from=df, date_to=dt)
-        encours = repo.total_paiements(self.conn, statut="en_attente", date_from=df, date_to=dt)
+        # Tresorerie patient COMBINEE (notes + actes), cf. plans-de-traitement D7 :
+        #  - encaisse = paiements encaisses + reglements d'actes (par date) ;
+        #  - a recouvrer = paiements en attente + actes au reste positif.
+        ca = repo.total_encaisse(self.conn, date_from=df, date_to=dt)
+        encours = repo.total_creances(self.conn, date_from=df, date_to=dt)
         nb_enc = repo.count_paiements(self.conn, statut="encaisse", date_from=df, date_to=dt)
 
         nb_doc = repo.count_documents(self.conn, None, df, dt)
@@ -1412,11 +1474,16 @@ class CrmApp:
 
         audit = repo.list_audit(self.conn, limit=12, date_from=df, date_to=dt)
         if audit:
-            audit_rows = [ft.Row([
-                ft.Text(ts, size=12, color=MUTED, width=150),
-                ft.Text(_humanize(action), color=TEXT, width=180),
-                ft.Text(detail, size=12, color=MUTED, expand=True),
-            ], vertical_alignment=ft.CrossAxisAlignment.CENTER) for ts, action, detail in audit]
+            # Detail desormais structure (JSON) : on le rend lisible via la meme
+            # description que l'onglet Historique (tolerant aux anciennes lignes).
+            audit_rows = []
+            for ts, action, detail in audit:
+                _cat, _icon, title, sublines = self._describe_audit(action, detail)
+                audit_rows.append(ft.Row([
+                    ft.Text(ts, size=12, color=MUTED, width=150),
+                    ft.Text(title, color=TEXT, width=220),
+                    ft.Text(" · ".join(sublines), size=12, color=MUTED, expand=True),
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
         else:
             audit_rows = [ft.Text("Aucune activité sur la période.", color=MUTED)]
         activite = self._card(ft.Column(audit_rows, spacing=6))
@@ -1811,46 +1878,28 @@ class CrmApp:
         p = repo.get_patient(conn, patient_id)
         if not p:
             return self.show_patients()
-        # Ouverture d'un AUTRE patient : on repart a la 1re page de chaque section.
+        # Ouverture d'un AUTRE patient : on repart a la 1re page de chaque section,
+        # au 1er onglet et sans filtre d'historique.
         if not self.current_patient or self.current_patient.id != patient_id:
             self.detail_docs_page = 0
             self.detail_paie_page = 0
+            self.detail_tab = 0
+            self.detail_hist_filter = "tous"
         self.current_view = "patient_detail"  # Echap revient a la liste des patients
         self.current_patient = p
 
         # Pagination cote SQL (LIMIT/OFFSET) : la fiche reste rapide meme avec
         # un long historique de documents/paiements.
         docs_total = repo.count_documents_for_patient(conn, patient_id)
-        paies_total = repo.count_paiements_for_patient(conn, patient_id)
+        enc_total = repo.count_encaissements_patient(conn, patient_id)
         self.detail_docs_page = self._clamp_page(self.detail_docs_page, docs_total)
-        self.detail_paie_page = self._clamp_page(self.detail_paie_page, paies_total)
+        self.detail_paie_page = self._clamp_page(self.detail_paie_page, enc_total)
         docs = repo.list_documents(
             conn, patient_id, limit=PAGE_SIZE, offset=self.detail_docs_page * PAGE_SIZE)
-        paies = repo.list_paiements(
+        encs = repo.list_encaissements_patient(
             conn, patient_id, limit=PAGE_SIZE, offset=self.detail_paie_page * PAGE_SIZE)
+        solde_du, solde_enc, solde_reste = repo.solde_patient(conn, patient_id)
         has_sent = repo.patient_has_sent_document(conn, patient_id)
-
-        header = ft.Row([
-            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: self.show_patients()),
-            ft.Text(p.display, size=24, weight=ft.FontWeight.BOLD, color=TEXT),
-            ft.Container(expand=True),
-            self._btn("Modifier", lambda e: self._patient_dialog(p), icon=ft.Icons.EDIT,
-                      primary=False, shortcut=SC_EDIT, busy=False),
-        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
-
-        infos = self._card(ft.Column([
-            self._kv_copy("Email", p.email),
-            self._kv_copy("Téléphone", p.telephone),
-            _kv("Date de naissance", _iso_to_fr(p.date_naissance) or "—"),
-            _kv("Adresse", p.adresse or "—"),
-            _kv("Notes", p.notes or "—"),
-        ], spacing=6))
-
-        docs_col = self._grouped_docs_column(docs)
-        paies_col = ft.Column(
-            [self._paie_row(pa) for pa in paies] or [ft.Text("Aucun paiement.", color=MUTED)],
-            spacing=8,
-        )
 
         def on_docs_page(idx):
             self.detail_docs_page = idx
@@ -1861,15 +1910,56 @@ class CrmApp:
             self.show_patient_detail(patient_id)
 
         # Barre de pagination affichee seulement si l'historique depasse une page,
-        # pour garder la fiche epuree quand il y a peu d'elements.
+        # pour garder l'onglet epure quand il y a peu d'elements.
         docs_pager = (self._pagination(self.detail_docs_page, docs_total, on_docs_page)
                       if docs_total > PAGE_SIZE else ft.Container())
-        paies_pager = (self._pagination(self.detail_paie_page, paies_total, on_paies_page)
-                       if paies_total > PAGE_SIZE else ft.Container())
+        regl_pager = (self._pagination(self.detail_paie_page, enc_total, on_paies_page)
+                      if enc_total > PAGE_SIZE else ft.Container())
 
+        # --- Colonne d'identite (figee a gauche) ------------------------------
+        # Compacte : retour, nom, coordonnees (email/tel cliquables = copie),
+        # naissance/adresse/notes, montants cles Du/Reste, et bouton Modifier.
+        # STRETCH : les cartes (infos, montants) occupent 100% de la largeur de la
+        # colonne d'identite. Le bouton retour est enveloppe dans une Row pour
+        # rester a gauche a sa taille naturelle (sinon STRETCH l'etirerait aussi).
+        identity = ft.Column([
+            ft.Row([
+                ft.IconButton(ft.Icons.ARROW_BACK, tooltip="Retour à la liste",
+                              icon_color=NAVY,
+                              on_click=lambda e: self.show_patients()),
+            ]),
+            # Nom + bouton « Modifier » sur la meme ligne : le nom prend la place
+            # disponible (expand), le bouton reste a sa taille naturelle a droite.
+            ft.Row([
+                ft.Text(p.display, size=20, weight=ft.FontWeight.BOLD, color=TEXT,
+                        selectable=True, expand=True),
+                self._btn("Modifier", lambda e: self._patient_dialog(p),
+                          icon=ft.Icons.EDIT, primary=False, shortcut=SC_EDIT,
+                          busy=False),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            self._card(ft.Column([
+                self._id_field("Email", p.email, copyable=True),
+                self._id_field("Téléphone", p.telephone, copyable=True),
+                self._id_field("Date de naissance", _iso_to_fr(p.date_naissance)),
+                self._id_field("Adresse", p.adresse),
+                self._id_field("Notes", p.notes),
+            ], spacing=10)),
+            self._money_summary([
+                ("Dû", solde_du, TEXT),
+                ("Reste", solde_reste, AMBER),
+            ]),
+        ], spacing=14, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+
+        # --- Onglet « Plans & actes » -----------------------------------------
+        plans_tab = ft.Column(self._plans_actes_section(p, conn),
+                              spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
+
+        # --- Onglet « Documents » ---------------------------------------------
         docs_title = [
             ft.Text("Documents", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
             ft.Container(expand=True),
+            self._btn("Note d'honoraires", lambda e: self._note_dialog(p),
+                      icon=ft.Icons.RECEIPT_LONG, primary=False, busy=False),
             self._btn("Générer un document", lambda e: self._generate_dialog(p),
                       icon=ft.Icons.NOTE_ADD, primary=False, shortcut=SC_NEW, busy=False),
         ]
@@ -1878,21 +1968,261 @@ class CrmApp:
                 self._btn("Rafraîchir les statuts",
                           lambda e, pid=patient_id: self._refresh_patient_mail_statuses(e, pid),
                           icon=ft.Icons.REFRESH, primary=False, busy=False))
-        self._set_body(
-            header,
-            infos,
+        docs_tab = ft.Column([
+            # Row normale (PAS wrap=True) : l'espaceur `Container(expand=True)` de
+            # docs_title est un enfant Flex, incompatible avec un Wrap Flutter
+            # (wrap+expand => echec de rendu, onglet gris). Meme idiome que
+            # l'en-tete « Plans & actes ».
             ft.Row(docs_title, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            self._card(docs_col),
+            self._card(self._grouped_docs_column(docs)),
             docs_pager,
-            ft.Row([
-                ft.Text("Paiements", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
-                ft.Container(expand=True),
-                self._btn("Ajouter un paiement", lambda e: self._paiement_dialog(p),
-                          icon=ft.Icons.ADD, primary=False, busy=False),
+        ], spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
+
+        # --- Onglet « Règlements » --------------------------------------------
+        regl_tab = ft.Column([
+            self._money_summary([
+                ("Dû", solde_du, TEXT),
+                ("Encaissé", solde_enc, GREEN),
+                ("Reste à recouvrer", solde_reste, AMBER),
             ]),
-            self._card(paies_col),
-            paies_pager,
+            self._card(ft.Column(
+                [self._encaissement_row(en) for en in encs]
+                or [ft.Text("Aucun règlement encaissé.", color=MUTED)],
+                spacing=8)),
+            regl_pager,
+        ], spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
+
+        # --- Onglet « Historique » --------------------------------------------
+        hist_tab = self._historique_tab(patient_id, conn)
+
+        # API Tabs (Flet récent) : un TabBar (en-têtes) + un TabBarView (contenus),
+        # de même longueur, dans la `content` du Tabs. `selected_index`/`on_change`
+        # pilotent l'onglet actif (mémorisé dans self.detail_tab).
+        tab_defs = [
+            ("Plans & actes", ft.Icons.MEDICAL_SERVICES, plans_tab),
+            ("Documents", ft.Icons.DESCRIPTION, docs_tab),
+            ("Règlements", ft.Icons.PAYMENTS, regl_tab),
+            ("Historique", ft.Icons.HISTORY, hist_tab),
+        ]
+
+        def on_tab_change(e):
+            try:
+                self.detail_tab = int(e.data)
+            except (TypeError, ValueError):
+                self.detail_tab = e.control.selected_index
+
+        tabs = ft.Tabs(
+            length=len(tab_defs),
+            selected_index=self.detail_tab,
+            animation_duration=200,
+            on_change=on_tab_change,
+            expand=True,
+            content=ft.Column([
+                ft.TabBar(tabs=[ft.Tab(label=lbl, icon=ic)
+                                for lbl, ic, _c in tab_defs]),
+                ft.TabBarView(
+                    controls=[ft.Container(c, padding=ft.Padding.only(top=12))
+                              for _l, _i, c in tab_defs],
+                    expand=True),
+            ], expand=True, spacing=0),
         )
+
+        # Mise en page : identite figee a gauche + onglets a droite. Sur fenetre
+        # etroite (mode web notamment), l'identite repasse AU-DESSUS des onglets
+        # (degradation gracieuse). On pilote la hauteur sans le scroll global de
+        # _set_body : chaque onglet scrolle independamment, l'identite reste figee.
+        narrow = bool(self.page.width and self.page.width < 860)
+        if narrow:
+            # Identite a hauteur naturelle au-dessus, onglets remplissant le reste.
+            layout = ft.Column([identity, tabs], spacing=12, expand=True)
+        else:
+            # Identite figee a gauche (largeur fixe, scrollable si tres longue,
+            # hauteur bornee par STRETCH), onglets a droite.
+            layout = ft.Row(
+                [ft.Container(
+                    ft.Column([identity], scroll=ft.ScrollMode.AUTO), width=300),
+                 ft.Container(tabs, expand=True)],
+                spacing=18, expand=True,
+                vertical_alignment=ft.CrossAxisAlignment.STRETCH)
+        self.body.content = layout
+        self.page.update()
+
+    def _id_field(self, label: str, value: str | None,
+                  copyable: bool = False) -> ft.Control:
+        """Champ compact (libellé au-dessus de la valeur) de la colonne d'identité
+        de la fiche patient. `copyable` rend la valeur cliquable (copie dans le
+        presse-papiers), comme l'email/le téléphone."""
+        lbl = ft.Text(label, size=11, color=MUTED)
+        if not value:
+            return ft.Column([lbl, ft.Text("—", color=MUTED)], spacing=1)
+        if copyable:
+            def _copy(e, v=value):
+                self.page.run_task(self.page.clipboard.set, v)
+                self._toast(f"« {v} » copié dans le presse-papiers.")
+            val: ft.Control = ft.Container(
+                content=ft.Row(
+                    [ft.Text(value, color=TEXT, expand=True),
+                     ft.Icon(ft.Icons.CONTENT_COPY, size=14, color=MUTED)],
+                    spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                on_click=_copy, tooltip="Cliquer pour copier", ink=True,
+                border_radius=6, padding=ft.Padding.symmetric(vertical=2, horizontal=4))
+        else:
+            val = ft.Text(value, color=TEXT, selectable=True)
+        return ft.Column([lbl, val], spacing=1)
+
+    def _historique_tab(self, patient_id: int,
+                        conn: sqlite3.Connection) -> ft.Control:
+        """Onglet « Historique » : flux antichronologique des événements de la
+        fiche (journal d'audit par patient), groupé par jour, filtrable par
+        catégorie, avec détail avant→après des mises à jour. Le filtre re-remplit
+        la liste en mémoire sans recharger toute la fiche."""
+        LIMIT = 200
+        events = repo.list_audit_patient(conn, patient_id, limit=LIMIT)
+        liste = ft.Column(
+            self._historique_rows(events, self.detail_hist_filter, LIMIT),
+            spacing=4, scroll=ft.ScrollMode.AUTO, expand=True)
+
+        def build_chips() -> list[ft.Control]:
+            chips: list[ft.Control] = []
+            for key, lbl in _AUDIT_FILTERS:
+                active = self.detail_hist_filter == key
+                chips.append(ft.Container(
+                    ft.Text(lbl, size=12, color=SURFACE if active else NAVY),
+                    bgcolor=NAVY if active else ft.Colors.with_opacity(0.08, NAVY),
+                    padding=ft.Padding.symmetric(vertical=6, horizontal=12),
+                    border_radius=20, ink=True,
+                    on_click=lambda e, k=key: on_filter(k)))
+            return chips
+
+        def on_filter(key: str) -> None:
+            self.detail_hist_filter = key
+            chips_row.controls = build_chips()
+            liste.controls = self._historique_rows(events, key, LIMIT)
+            self.page.update()
+
+        chips_row = ft.Row(build_chips(), wrap=True, spacing=8, run_spacing=8)
+        return ft.Column([chips_row, liste], spacing=12, expand=True)
+
+    def _historique_rows(self, events: list[tuple[str, str, str]],
+                         filtre: str, limit: int) -> list[ft.Control]:
+        """Lignes de l'onglet Historique : entrées (icône + heure + libellé +
+        sous-lignes) groupées par jour, filtrées par catégorie."""
+        rows: list[ft.Control] = []
+        current_day = None
+        shown = 0
+        for ts, action, detail in events:
+            cat, icon, title, sublines = self._describe_audit(action, detail)
+            if filtre != "tous" and cat != filtre:
+                continue
+            shown += 1
+            day = self._jour_label(ts)
+            if day != current_day:
+                current_day = day
+                rows.append(ft.Container(
+                    ft.Text(day, size=12, weight=ft.FontWeight.BOLD, color=MUTED),
+                    padding=ft.Padding.only(top=8 if rows else 0, bottom=2)))
+            entry: list[ft.Control] = [ft.Row([
+                ft.Icon(icon, size=18, color=TEAL_DARK),
+                ft.Text(self._heure_label(ts), size=12, color=MUTED, width=44),
+                ft.Text(title, color=TEXT, expand=True),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8)]
+            for sl in sublines:
+                entry.append(ft.Row([
+                    ft.Container(width=70),
+                    ft.Text(sl, size=12, color=MUTED, expand=True),
+                ], spacing=0))
+            rows.append(ft.Container(ft.Column(entry, spacing=2),
+                                     padding=ft.Padding.symmetric(vertical=2)))
+        if not shown:
+            return [ft.Text("Aucun historique.", color=MUTED)]
+        if len(events) >= limit:
+            rows.append(ft.Text(
+                f"Affichage limité aux {limit} événements les plus récents.",
+                size=11, color=MUTED, italic=True))
+        return rows
+
+    def _describe_audit(self, action: str, detail_raw: str):
+        """(catégorie, icône, titre, sous-lignes) d'un événement du journal.
+        Tolère un detail JSON (lignes récentes) ou texte libre/absent (anciennes
+        lignes : titre humanisé + détail brut en sous-ligne)."""
+        cat, icon, base = _AUDIT_META.get(
+            action, ("autre", ft.Icons.CIRCLE, _humanize(action)))
+        data = repo.parse_audit_detail(detail_raw)
+        title = base
+        sublines: list[str] = []
+        if isinstance(data, dict):
+            if action == "fiche_modifiee":
+                for label, couple in (data.get("champs") or {}).items():
+                    av = couple[0] if isinstance(couple, (list, tuple)) and couple else None
+                    ap = (couple[1] if isinstance(couple, (list, tuple))
+                          and len(couple) > 1 else None)
+                    sublines.append(
+                        f"{label} : {_audit_val(av)} → {_audit_val(ap)}")
+            elif action in ("plan_cree", "plan_modifie", "plan_supprime"):
+                if data.get("titre"):
+                    title = f"{base} « {data['titre']} »"
+                if data.get("actes"):
+                    sublines.append(f"{data['actes']} acte(s)")
+            elif action in ("acte_ajoute", "acte_modifie", "acte_supprime"):
+                if data.get("libelle"):
+                    title = f"{base} — {data['libelle']}"
+                if data.get("dents"):
+                    sublines.append(f"Dent(s) : {data['dents']}")
+            elif action == "acte_regle":
+                if data.get("libelle"):
+                    title = f"{base} — {data['libelle']}"
+                sub = _audit_montant(data.get("montant"))
+                if data.get("mode"):
+                    sub += f" · {_MODE_LABELS.get(data['mode'], data['mode'])}"
+                sublines.append(sub)
+            elif action == "reglement_cascade":
+                sub = _audit_montant(data.get("montant"))
+                if data.get("mode"):
+                    sub += f" · {_MODE_LABELS.get(data['mode'], data['mode'])}"
+                if data.get("lignes"):
+                    sub += f" · {data['lignes']} créance(s)"
+                sublines.append(sub)
+            elif action in ("paiement_encaisse", "paiement_annule"):
+                sub = _audit_montant(data.get("montant"))
+                if data.get("mode"):
+                    sub += f" · {_MODE_LABELS.get(data['mode'], data['mode'])}"
+                if data.get("libelle"):
+                    sub += f" · {data['libelle']}"
+                sublines.append(sub)
+            elif action in ("document_genere", "note_honoraires_generee",
+                            "brouillon_cree", "brouillon_modifie"):
+                modele = data.get("modele") or data.get("type")
+                if modele:
+                    title = f"{base} — {modele}"
+            elif action == "document_envoye":
+                if data.get("email"):
+                    sublines.append(f"→ {data['email']}")
+                elif data.get("type"):
+                    title = f"{base} — {data['type']}"
+            elif action in ("document_imprime", "brouillon_supprime"):
+                t = data.get("type") or data.get("modele")
+                if t:
+                    title = f"{base} — {t}"
+        elif isinstance(data, str) and data:
+            sublines.append(data)  # ancienne ligne au detail texte libre
+        return cat, icon, title, sublines
+
+    def _jour_label(self, ts: str) -> str:
+        """Libellé de jour pour le regroupement : « Aujourd'hui » / « Hier » / date."""
+        try:
+            d = date.fromisoformat(ts[:10])
+        except ValueError:
+            return ts[:10] or "—"
+        delta = (date.today() - d).days
+        if delta == 0:
+            return "Aujourd'hui"
+        if delta == 1:
+            return "Hier"
+        return _iso_to_fr(d.isoformat())
+
+    def _heure_label(self, ts: str) -> str:
+        """Heure HH:MM extraite d'un horodatage « AAAA-MM-JJ HH:MM:SS »."""
+        return ts[11:16] if len(ts) >= 16 else ""
 
     def _grouped_docs_column(self, docs: list[Document]) -> ft.Control:
         """Documents de la fiche regroupes par catégorie en sections repliables.
@@ -1991,7 +2321,8 @@ class CrmApp:
         def work():
             generator.render_document(self.conn, d)
             repo.log_audit(self.conn, "document_genere",
-                           f"#{d.id} {d.type} (patient #{d.patient_id})")
+                           {"document_id": d.id, "type": d.type, "modele": d.template},
+                           patient_id=d.patient_id)
             self._toast("Document généré.")
             self._after_doc_change()
 
@@ -2006,7 +2337,8 @@ class CrmApp:
                 pass  # fichier verrouille/absent : on supprime quand meme l'enregistrement
             repo.delete_document(self.conn, d.id)
             repo.log_audit(self.conn, "brouillon_supprime",
-                           f"#{d.id} {d.type} (patient #{d.patient_id})")
+                           {"document_id": d.id, "type": d.type},
+                           patient_id=d.patient_id)
             self._close_dialog()
             self._toast("Brouillon supprimé.")
             if self.current_patient:
@@ -2125,6 +2457,769 @@ class CrmApp:
             chip, *right,
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
+    def _encaissement_row(self, en: "repo.Encaissement") -> ft.Control:
+        """Ligne de l'historique UNIFIÉ des règlements : versement d'acte ou note
+        encaissée, ce qui a réellement été encaissé (synchronisé avec les actes)."""
+        is_acte = en.nature == "acte"
+        icon = ft.Icons.MEDICAL_SERVICES if is_acte else ft.Icons.DESCRIPTION
+        tag = "Acte" if is_acte else "Note"
+        sub = f"{tag} · {_MODE_LABELS.get(en.mode, 'mode non précisé')}"
+        if en.date:
+            sub += f" · {_iso_to_fr(en.date)}"
+        return ft.Row([
+            ft.Text(f"{en.montant:.2f}", weight=ft.FontWeight.W_600, color=GREEN, width=90),
+            ft.Icon(icon, size=16, color=TEAL_DARK),
+            ft.Column([
+                ft.Text(en.libelle, weight=ft.FontWeight.W_600, color=TEXT),
+                ft.Text(sub, size=12, color=MUTED),
+            ], spacing=2, expand=True),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    # --- Plans de traitement & actes realises (fiche patient) -----------------
+    def _dents_badges(self, dents: str | None) -> list[ft.Control]:
+        """Petits badges turquoise « 26 » a partir d'une chaine « 26, 27 »."""
+        out: list[ft.Control] = []
+        for d in (dents or "").split(","):
+            d = d.strip()
+            if d:
+                out.append(ft.Container(
+                    ft.Text(d, size=11, color=TEAL_DARK),
+                    bgcolor=ft.Colors.with_opacity(0.14, TEAL_DARK),
+                    padding=ft.Padding.symmetric(vertical=2, horizontal=8),
+                    border_radius=12))
+        return out
+
+    def _plans_actes_section(self, p: Patient,
+                             conn: sqlite3.Connection) -> list[ft.Control]:
+        """Section « Plans & actes » de la fiche patient : créances regroupées au
+        même endroit — notes en attente, actes isolés, puis chaque plan en section
+        repliable (3.1). Le bouton « Régler » (cascade globale) apparaît dès qu'une
+        créance reste à recouvrer. Renvoie [titre, carte]."""
+        plans = repo.list_plans(conn, p.id)
+        isoles = repo.list_prestations(conn, p.id, plan_id=None)
+        notes_attente = [pa for pa in repo.list_paiements(conn, p.id)
+                         if pa.statut == "en_attente"]
+        actes_a_regler = repo.list_prestations_a_regler(conn, p.id)
+        actions = [
+            ft.Container(expand=True),
+            self._btn("Plan", lambda e: self._plan_dialog(p),
+                      icon=ft.Icons.ADD_CHART, primary=False, busy=False),
+            self._btn("Acte", lambda e: self._prestation_dialog(p),
+                      icon=ft.Icons.ADD, primary=False, busy=False),
+        ]
+        if actes_a_regler:
+            actions.append(self._btn(
+                "Régler", lambda e: self._regler_dialog(p, back="fiche"),
+                icon=ft.Icons.PAYMENTS, primary=False, busy=False))
+        title = ft.Row(
+            [ft.Text("Plans & actes", size=18, weight=ft.FontWeight.BOLD, color=TEXT)]
+            + actions, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+        body: list[ft.Control] = []
+        if notes_attente:
+            body.append(ft.Text("Notes en attente", size=12, color=MUTED))
+            body.append(ft.Column([self._paie_row(pa) for pa in notes_attente],
+                                   spacing=8))
+        if isoles:
+            body.append(ft.Text("Actes isolés", size=12, color=MUTED))
+            body.append(ft.Column([self._prestation_row(x) for x in isoles], spacing=8))
+        for plan in plans:
+            body.append(self._plan_tile(p, plan, conn))
+        if not body:
+            body = [ft.Text("Aucun plan ni acte. Cliquez « Plan » ou « Acte ».",
+                            color=MUTED)]
+        return [title, self._card(ft.Column(body, spacing=12))]
+
+    def _actions_menu(self, actions: list[tuple], tooltip: str = "Actions") -> ft.Control:
+        """Regroupe les actions d'une ligne (acte / plan) dans un menu déroulant :
+        un clic ouvre le menu, puis on choisit l'action. Allège les lignes en
+        remplaçant les boutons d'action en ligne. `actions` est une liste de
+        tuples `(icône, libellé, on_click, couleur)` ; l'ordre est conservé."""
+        items = [
+            ft.PopupMenuItem(
+                content=ft.Row(
+                    [ft.Icon(icon, color=color, size=18),
+                     ft.Text(label, color=TEXT)],
+                    spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                on_click=on_click)
+            for icon, label, on_click, color in actions
+        ]
+        return ft.PopupMenuButton(
+            items=items, icon=ft.Icons.MORE_VERT, icon_color=NAVY, tooltip=tooltip)
+
+    def _plan_tile(self, p: Patient, plan: "repo.PlanTraitement",
+                   conn: sqlite3.Connection) -> ft.Control:
+        """Un plan en section repliable : titre + totaux derives + barre de
+        progression d'ensemble + actions, et ses actes en corps (3.3)."""
+        prests = repo.list_prestations(conn, p.id, plan_id=plan.id)
+        du, enc, reste = repo.plan_totaux(conn, plan.id)
+        v = (enc / du) if du > 0 else 0.0
+        header = ft.Row([
+            ft.Column([
+                ft.Text(plan.titre, weight=ft.FontWeight.BOLD, color=TEXT),
+                ft.Text(f"dû {du:.2f} · encaissé {enc:.2f} · reste {reste:.2f}",
+                        size=12, color=MUTED),
+            ], spacing=2, expand=True),
+            self._actions_menu([
+                (ft.Icons.ADD, "Ajouter un acte",
+                 lambda e, pl=plan: self._prestation_dialog(p, plan_id=pl.id), NAVY),
+                (ft.Icons.EDIT, "Modifier le plan",
+                 lambda e, pl=plan: self._plan_dialog(p, plan=pl), NAVY),
+                (ft.Icons.DELETE_OUTLINE, "Supprimer le plan",
+                 lambda e, pl=plan: self._supprimer_plan(p, pl), RED),
+            ], tooltip="Actions du plan"),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        title = ft.Column([
+            header,
+            ft.ProgressBar(value=v, color=GREEN,
+                           bgcolor=ft.Colors.with_opacity(0.15, NAVY)),
+        ], spacing=6)
+        inner = ([self._prestation_row(x, in_plan=True) for x in prests]
+                 or [ft.Text("Aucun acte dans ce plan.", color=MUTED)])
+        if plan.notes:
+            inner.insert(0, ft.Text(plan.notes, size=12, color=MUTED, italic=True))
+        no_border = ft.RoundedRectangleBorder(radius=8)
+        return ft.ExpansionTile(
+            title=title,
+            controls=[ft.Container(
+                ft.Column(inner, spacing=8),
+                padding=ft.Padding.only(left=8, right=8, bottom=8))],
+            shape=no_border, collapsed_shape=no_border,
+            tile_padding=ft.Padding.symmetric(horizontal=8),
+            controls_padding=ft.Padding.all(0),
+            expanded=True, maintain_state=True,
+        )
+
+    def _prestation_row(self, pres: "repo.Prestation",
+                        in_plan: bool = False) -> ft.Control:
+        """Ligne d'un acte : montant, libelle, dents, date, note ; si facturable,
+        barre de progression + reste + chip de statut + bouton Régler ; sinon badge
+        « non facturable » (3.2)."""
+        if pres.facturable:
+            left = ft.Column([
+                ft.Text(f"{pres.montant:.2f}", weight=ft.FontWeight.W_600, color=TEXT),
+                ft.Text(f"réglé {pres.montant_regle:.2f} · reste {pres.reste:.2f}",
+                        size=11, color=MUTED),
+            ], spacing=2, width=150)
+            label, color = _DEPENSE_STATUT_LABELS.get(pres.statut, (pres.statut, MUTED))
+        else:
+            left = ft.Column([
+                ft.Text(f"{pres.montant:.2f}", weight=ft.FontWeight.W_600, color=MUTED),
+                ft.Text("acte non facturé", size=11, color=MUTED),
+            ], spacing=2, width=150)
+            label, color = ("Non facturable", MUTED)
+        chip = ft.Container(
+            ft.Text(label, size=12, color=color),
+            bgcolor=ft.Colors.with_opacity(0.12, color),
+            padding=ft.Padding.symmetric(vertical=4, horizontal=10), border_radius=20)
+
+        titre_row = ft.Row(
+            [ft.Text(pres.libelle, weight=ft.FontWeight.W_600, color=TEXT)]
+            + self._dents_badges(pres.dents),
+            spacing=6, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        mid: list[ft.Control] = [titre_row]
+        if pres.facturable:
+            v = (pres.montant_regle / pres.montant) if pres.montant else 0.0
+            mid.append(ft.ProgressBar(value=v, color=GREEN,
+                                      bgcolor=ft.Colors.with_opacity(0.15, NAVY)))
+        if pres.date_acte:
+            mid.append(ft.Text(f"Date : {_iso_to_fr(pres.date_acte)}", size=12, color=MUTED))
+        if pres.note:
+            mid.append(ft.Text(pres.note, size=12, color=MUTED, italic=True))
+
+        actions: list[tuple] = []
+        if pres.facturable and pres.reste > 1e-9:
+            actions.append((
+                ft.Icons.PAYMENTS, "Régler cet acte",
+                lambda e, pr=pres: self._payer_acte_dialog(pr.id, back="fiche"), GREEN))
+        actions.append((
+            ft.Icons.EDIT, "Modifier l'acte",
+            lambda e, pr=pres: self._prestation_dialog(self.current_patient, pres=pr),
+            NAVY))
+        actions.append((
+            ft.Icons.DELETE_OUTLINE, "Supprimer l'acte",
+            lambda e, pr=pres: self._supprimer_prestation(pr), RED))
+        return ft.Row([
+            left,
+            ft.Column(mid, spacing=4, expand=True),
+            chip, self._actions_menu(actions, tooltip="Actions de l'acte"),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def _acte_card(self, *, pres: "repo.Prestation | None" = None,
+                   actes: "list[repo.Acte] | None" = None,
+                   on_change=None, on_remove=None,
+                   removable: bool = True) -> types.SimpleNamespace:
+        """Composant reutilisable « carte acte » (3.4) : selecteur referentiel qui
+        pre-remplit libelle+prix (modifiables), date, dents (chips) et note. Sert le
+        dialogue d'acte isole ET le composer de plan (cartes empilees).
+
+        Renvoie un handle (SimpleNamespace) : `.control` (UI), `.read()` (dict valide
+        ou ValueError), `.montant()` (prix courant pour le total en direct),
+        `.blank()` (carte neuve vide a ignorer), `.pres_id`."""
+        if actes is None:
+            actes = repo.list_actes(self.conn)
+        state = {"acte_id": (pres.acte_id if pres else None)}
+
+        libelle = ft.TextField(label="Libellé *",
+                               value=(pres.libelle if pres else ""), expand=True)
+        prix = ft.TextField(label="Prix", value=(f"{pres.montant:.2f}" if pres else "0"),
+                            keyboard_type=ft.KeyboardType.NUMBER, width=130)
+
+        def _changed(e=None):
+            if on_change:
+                on_change()
+        prix.on_change = _changed
+        libelle.on_change = lambda e: (state.__setitem__("acte_id", None))
+
+        ref_dd = ft.Dropdown(
+            label="Pré-remplir depuis le référentiel",
+            color=TEXT, text_style=ft.TextStyle(color=TEXT),
+            options=[ft.dropdown.Option(key="", text="— Acte libre —")]
+            + [ft.dropdown.Option(key=str(a.id), text=f"{a.libelle} · {_fmt_prix(a.prix)}")
+               for a in actes],
+            value="",
+        )
+
+        def on_ref(e):
+            if not ref_dd.value:
+                return
+            a = next((x for x in actes if str(x.id) == ref_dd.value), None)
+            if a:
+                libelle.value = a.libelle
+                prix.value = f"{a.prix:.2f}"
+                state["acte_id"] = a.id
+                self.page.update()
+                _changed()
+        ref_dd.on_select = on_ref
+
+        date_row, date_field = self._date_field(
+            "Date (réalisée ou prévue)", (pres.date_acte if pres else ""))
+        note = ft.TextField(label="Note (optionnelle)", value=(pres.note if pres else ""),
+                            multiline=True, min_lines=1, max_lines=3)
+
+        dents_list = [d for d in repo.normalize_dents(pres.dents if pres else "").split(", ")
+                      if d]
+        chips_row = ft.Row([], wrap=True, spacing=6, run_spacing=6)
+        dent_input = ft.TextField(
+            label="Dents (FDI)", expand=True,
+            hint_text="une ou plusieurs, séparées par des virgules — ex. 26, 27")
+
+        def render_chips():
+            chips: list[ft.Control] = []
+            for d in list(dents_list):
+                chips.append(ft.Container(
+                    ft.Row([
+                        ft.Text(d, size=12, color=TEAL_DARK),
+                        ft.IconButton(ft.Icons.CLOSE, icon_size=14, icon_color=TEAL_DARK,
+                                      tooltip="Retirer",
+                                      on_click=lambda e, val=d: (dents_list.remove(val)
+                                                                 if val in dents_list else None,
+                                                                 render_chips())),
+                    ], tight=True, spacing=0),
+                    bgcolor=ft.Colors.with_opacity(0.14, TEAL_DARK),
+                    padding=ft.Padding.only(left=10, right=2, top=0, bottom=0),
+                    border_radius=14))
+            chips_row.controls = chips
+            self.page.update()
+
+        def add_dent(e=None):
+            for d in [x.strip() for x in repo.normalize_dents(dent_input.value).split(",")
+                      if x.strip()]:
+                if d not in dents_list:
+                    dents_list.append(d)
+            dent_input.value = ""
+            render_chips()
+        dent_input.on_submit = add_dent
+        render_chips()
+
+        del_btn = (ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=RED,
+                                 tooltip="Retirer cet acte",
+                                 on_click=lambda e: on_remove(handle))
+                   if (removable and on_remove) else ft.Container())
+        control = self._card(ft.Column([
+            ft.Row([ref_dd, del_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Row([libelle, prix], spacing=8,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            date_row,
+            ft.Row([dent_input,
+                    ft.IconButton(ft.Icons.ADD, icon_color=NAVY,
+                                  tooltip="Ajouter la dent", on_click=add_dent)],
+                   spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            chips_row,
+            note,
+        ], tight=True, spacing=8), padding=12)
+
+        def read() -> dict:
+            lib = (libelle.value or "").strip()
+            if not lib:
+                raise ValueError("Le libellé d'un acte est obligatoire.")
+            try:
+                m = float((prix.value or "0").replace(",", "."))
+            except ValueError:
+                raise ValueError(f"Prix invalide pour « {lib} ».")
+            if m < 0:
+                raise ValueError(f"Le prix de « {lib} » doit être positif ou nul.")
+            di, ok = _fr_to_iso(date_field.value)
+            if not ok:
+                raise ValueError(f"Date invalide pour « {lib} » (JJ/MM/AAAA).")
+            return {"acte_id": state["acte_id"], "libelle": lib, "montant": m,
+                    "date_acte": di or None, "dents": ", ".join(dents_list),
+                    "note": (note.value or "").strip() or None}
+
+        def montant() -> float:
+            try:
+                return float((prix.value or "0").replace(",", "."))
+            except ValueError:
+                return 0.0
+
+        handle = types.SimpleNamespace(
+            control=control, read=read, montant=montant,
+            blank=lambda: (pres is None and not (libelle.value or "").strip()),
+            pres_id=(pres.id if pres else None))
+        return handle
+
+    def _plan_dialog(self, p: Patient, plan: "repo.PlanTraitement | None" = None) -> None:
+        """Composer de plan (3.5) : titre + notes + pile de cartes d'actes, total dû
+        en direct, un seul bouton « + Acte ». Sert création et édition."""
+        is_edit = plan is not None
+        actes = repo.list_actes(self.conn)
+        titre = ft.TextField(label="Titre du plan *",
+                             value=(plan.titre if plan else ""), autofocus=True)
+        notes = ft.TextField(label="Notes (optionnelles)",
+                             value=(plan.notes if plan else ""),
+                             multiline=True, min_lines=1, max_lines=3)
+        cards: list[types.SimpleNamespace] = []
+        cards_col = ft.Column([], tight=True, spacing=10)
+        total_txt = ft.Text("Total dû : 0.00", weight=ft.FontWeight.BOLD, color=TEXT)
+        status = ft.Text("", color=RED, size=12)
+
+        def recompute():
+            tot = sum(c.montant() for c in cards)
+            total_txt.value = f"Total dû : {tot:.2f}"
+            self.page.update()
+
+        def remove_card(h):
+            if h in cards:
+                cards.remove(h)
+                cards_col.controls = [c.control for c in cards]
+                recompute()
+
+        def add_card(pres=None):
+            h = self._acte_card(pres=pres, actes=actes,
+                                on_change=recompute, on_remove=remove_card)
+            cards.append(h)
+            cards_col.controls = [c.control for c in cards]
+            recompute()
+
+        if is_edit:
+            for pres in repo.list_prestations(self.conn, p.id, plan_id=plan.id):
+                add_card(pres)
+        if not cards:
+            add_card()
+
+        def on_save(e=None):
+            t = (titre.value or "").strip()
+            if not t:
+                status.value = "Le titre du plan est obligatoire."
+                self.page.update(); return
+            process = [c for c in cards if not c.blank()]
+            if not process:
+                status.value = "Ajoutez au moins un acte (libellé requis)."
+                self.page.update(); return
+            try:
+                data = [c.read() for c in process]
+            except ValueError as ex:
+                status.value = str(ex); self.page.update(); return
+            try:
+                if is_edit:
+                    existing = {x.id: x for x in repo.list_prestations(
+                        self.conn, p.id, plan_id=plan.id)}
+                    kept = {c.pres_id for c in process if c.pres_id}
+                    removed = [pid for pid in existing if pid not in kept]
+                    bloques = [existing[pid].libelle for pid in removed
+                               if repo.prestation_has_reglements(self.conn, pid)]
+                    if bloques:
+                        status.value = ("Acte réglé non supprimable : "
+                                        + ", ".join(bloques) + ". Soldez/annulez-le d'abord.")
+                        self.page.update(); return
+                    repo.update_plan(self.conn, plan.id, t, notes.value or None)
+                    for c, d in zip(process, data):
+                        if c.pres_id:
+                            repo.update_prestation(
+                                self.conn, c.pres_id, libelle=d["libelle"],
+                                montant=d["montant"], plan_id=plan.id,
+                                acte_id=d["acte_id"], date_acte=d["date_acte"],
+                                dents=d["dents"], note=d["note"])
+                        else:
+                            repo.create_prestation(
+                                self.conn, p.id, d["libelle"], d["montant"],
+                                plan_id=plan.id, acte_id=d["acte_id"],
+                                date_acte=d["date_acte"], dents=d["dents"], note=d["note"])
+                    for pid in removed:
+                        repo.delete_prestation(self.conn, pid)
+                    repo.log_audit(self.conn, "plan_modifie",
+                                   {"plan_id": plan.id, "titre": t,
+                                    "actes": len(process)}, patient_id=p.id)
+                else:
+                    newplan = repo.create_plan(self.conn, p.id, t, notes.value or None)
+                    for d in data:
+                        repo.create_prestation(
+                            self.conn, p.id, d["libelle"], d["montant"],
+                            plan_id=newplan.id, acte_id=d["acte_id"],
+                            date_acte=d["date_acte"], dents=d["dents"], note=d["note"])
+                    repo.log_audit(self.conn, "plan_cree",
+                                   {"plan_id": newplan.id, "titre": t,
+                                    "actes": len(data)}, patient_id=p.id)
+            except ValueError as ex:
+                status.value = f"Échec : {ex}"; self.page.update(); return
+            self._close_dialog()
+            self._toast("Plan enregistré.")
+            self.show_patient_detail(p.id)
+
+        add_btn = self._btn("Ajouter un acte", lambda e: add_card(),
+                            icon=ft.Icons.ADD, primary=False, busy=False)
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Modifier le plan" if is_edit else "Nouveau plan"),
+            content=ft.Container(
+                ft.Column([
+                    titre, notes,
+                    ft.Divider(height=1, color=BORDER),
+                    ft.Row([ft.Text("Actes", weight=ft.FontWeight.BOLD, color=TEXT),
+                            ft.Container(expand=True), total_txt],
+                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    cards_col,
+                    add_btn,
+                    status,
+                ], tight=True, spacing=12, scroll=ft.ScrollMode.AUTO),
+                width=580, height=560),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Enregistrer", on_save, icon=ft.Icons.SAVE, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _prestation_dialog(self, p: Patient, pres: "repo.Prestation | None" = None,
+                           plan_id: int | None = None) -> None:
+        """Dialogue d'un acte isolé ou rattaché (3.6) : une carte d'acte + sélecteur
+        de plan (« aucun » par défaut)."""
+        is_edit = pres is not None
+        actes = repo.list_actes(self.conn)
+        plans = repo.list_plans(self.conn, p.id)
+        card = self._acte_card(pres=pres, actes=actes, removable=False)
+        init_plan = (str(pres.plan_id) if (pres and pres.plan_id)
+                     else (str(plan_id) if plan_id else ""))
+        plan_dd = ft.Dropdown(
+            label="Plan (optionnel)", value=init_plan,
+            color=TEXT, text_style=ft.TextStyle(color=TEXT),
+            options=[ft.dropdown.Option(key="", text="— Aucun (acte isolé) —")]
+            + [ft.dropdown.Option(key=str(pl.id), text=pl.titre) for pl in plans],
+        )
+        status = ft.Text("", color=RED, size=12)
+
+        def on_save(e=None):
+            try:
+                d = card.read()
+            except ValueError as ex:
+                status.value = str(ex); self.page.update(); return
+            sel_plan = int(plan_dd.value) if plan_dd.value else None
+            try:
+                if is_edit:
+                    repo.update_prestation(
+                        self.conn, pres.id, libelle=d["libelle"], montant=d["montant"],
+                        plan_id=sel_plan, acte_id=d["acte_id"], date_acte=d["date_acte"],
+                        dents=d["dents"], note=d["note"])
+                    repo.log_audit(self.conn, "acte_modifie",
+                                   {"prestation_id": pres.id, "libelle": d["libelle"],
+                                    "montant": d["montant"], "dents": d["dents"]},
+                                   patient_id=p.id)
+                else:
+                    created = repo.create_prestation(
+                        self.conn, p.id, d["libelle"], d["montant"],
+                        plan_id=sel_plan, acte_id=d["acte_id"], date_acte=d["date_acte"],
+                        dents=d["dents"], note=d["note"])
+                    repo.log_audit(self.conn, "acte_ajoute",
+                                   {"prestation_id": created.id, "libelle": d["libelle"],
+                                    "montant": d["montant"], "dents": d["dents"]},
+                                   patient_id=p.id)
+            except ValueError as ex:
+                status.value = f"Échec : {ex}"; self.page.update(); return
+            self._close_dialog()
+            self._toast("Acte enregistré.")
+            self.show_patient_detail(p.id)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Modifier l'acte" if is_edit else "Nouvel acte"),
+            content=ft.Container(
+                ft.Column([plan_dd, card.control, status],
+                          tight=True, spacing=12, scroll=ft.ScrollMode.AUTO),
+                width=580, height=540),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Enregistrer", on_save, icon=ft.Icons.SAVE, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _supprimer_prestation(self, pres: "repo.Prestation") -> None:
+        """Supprime un acte (3.8). Refus si des règlements existent (garde D8)."""
+        if repo.prestation_has_reglements(self.conn, pres.id):
+            self._toast("Acte réglé : soldez/annulez-le d'abord. Suppression impossible.",
+                        ok=False)
+            return
+
+        def confirm(e):
+            try:
+                repo.delete_prestation(self.conn, pres.id)
+            except ValueError as ex:
+                self._close_dialog(); self._toast(str(ex), ok=False); return
+            repo.log_audit(self.conn, "acte_supprime",
+                           {"prestation_id": pres.id, "libelle": pres.libelle},
+                           patient_id=pres.patient_id)
+            self._close_dialog()
+            self._toast("Acte supprimé.")
+            self.show_patient_detail(pres.patient_id)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Supprimer l'acte"),
+            content=ft.Text(f"Supprimer définitivement l'acte « {pres.libelle} » "
+                            f"({pres.montant:.2f}) ?"),
+            actions=[
+                ft.TextButton("Retour", on_click=lambda e: self._close_dialog()),
+                self._btn("Supprimer", confirm, icon=ft.Icons.DELETE_OUTLINE, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _supprimer_plan(self, p: Patient, plan: "repo.PlanTraitement") -> None:
+        """Supprime un plan (3.8). Ses actes sont DÉTACHÉS (deviennent isolés) ;
+        aucun règlement n'est perdu (garde D8)."""
+        n = len(repo.list_prestations(self.conn, p.id, plan_id=plan.id))
+
+        def confirm(e):
+            repo.delete_plan(self.conn, plan.id)
+            repo.log_audit(self.conn, "plan_supprime",
+                           {"plan_id": plan.id, "titre": plan.titre}, patient_id=p.id)
+            self._close_dialog()
+            self._toast("Plan supprimé (actes conservés en isolés).")
+            self.show_patient_detail(p.id)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Supprimer le plan"),
+            content=ft.Text(
+                f"Supprimer le plan « {plan.titre} » ? "
+                f"Ses {n} acte(s) deviennent des actes isolés du patient "
+                "(aucun règlement n'est perdu)."),
+            actions=[
+                ft.TextButton("Retour", on_click=lambda e: self._close_dialog()),
+                self._btn("Supprimer le plan", confirm,
+                          icon=ft.Icons.DELETE_OUTLINE, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _regler_dialog(self, p: Patient, back: str = "fiche") -> None:
+        """Règlement GLOBAL en cascade (D9 révisé) : on saisit UN montant reçu, qui
+        est réparti automatiquement sur les ACTES non soldés du patient, du plus
+        ancien au plus récent, en PAIEMENT PARTIEL (le dernier acte atteint reste
+        partiel). Un aperçu se met à jour en direct.
+
+        Les notes d'honoraires sont binaires (pas de paiement partiel possible) : on
+        les EXCLUT de la cascade pour ne jamais bloquer un reliquat — elles se règlent
+        séparément via leur bouton « Encaisser » dans « Notes en attente »."""
+        creances = repo.creances_patient(self.conn, p.id, include_notes=False)
+        if not creances:
+            self._toast("Aucun acte à régler.", ok=False)
+            return
+        total_reste = sum(c.reste for c in creances)
+        montant = ft.TextField(label="Montant reçu", value=f"{total_reste:.2f}",
+                               keyboard_type=ft.KeyboardType.NUMBER, autofocus=True)
+        mode = ft.RadioGroup(
+            value="especes",
+            content=ft.Column(
+                [ft.Radio(value=k, label=val) for k, val in _MODE_LABELS.items()],
+                tight=True, spacing=2))
+        date_row, date_field = self._date_field(
+            "Date du règlement", date.today().isoformat())
+        warn = ft.Text("", color=AMBER, size=12)
+        preview = ft.Column([], tight=True, spacing=4)
+        reste_txt = ft.Text("", weight=ft.FontWeight.BOLD)
+
+        def compute():
+            try:
+                amt = float((montant.value or "0").replace(",", "."))
+            except ValueError:
+                amt = 0.0
+            remaining = max(0.0, amt)
+            rows: list[ft.Control] = []
+            for c in creances:
+                if c.nature == "acte":
+                    pay = min(remaining, c.reste)
+                else:  # note binaire : soldée seulement si le reliquat la couvre
+                    pay = c.reste if c.reste <= remaining + 1e-9 else 0.0
+                remaining -= pay
+                solde = pay >= c.reste - 1e-9 and pay > 0
+                tag = ("soldé" if solde else (f"+{pay:.2f}" if pay > 0 else "—"))
+                tcolor = GREEN if solde else (AMBER if pay > 0 else MUTED)
+                rows.append(ft.Row([
+                    ft.Icon(ft.Icons.MEDICAL_SERVICES if c.nature == "acte"
+                            else ft.Icons.DESCRIPTION, size=14, color=MUTED),
+                    ft.Text(c.libelle, color=TEXT, expand=True),
+                    ft.Text(f"reste {c.reste:.2f}", size=12, color=MUTED, width=110),
+                    ft.Text(tag, size=12, color=tcolor, width=80,
+                            text_align=ft.TextAlign.RIGHT),
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+            preview.controls = rows
+            # Reste à payer APRÈS le règlement = total à recouvrer − part réellement allouée.
+            alloue = max(0.0, amt) - remaining
+            reste_apres = max(0.0, total_reste - alloue)
+            reste_txt.value = f"Reste à payer après règlement : {reste_apres:.2f}"
+            reste_txt.color = GREEN if reste_apres <= 1e-9 else AMBER
+            warn.value = (f"{remaining:.2f} non affecté (montant supérieur aux créances)."
+                          if remaining > 1e-9 else "")
+            warn.color = AMBER
+            self.page.update()
+
+        montant.on_change = lambda e: compute()
+        compute()
+
+        def confirm(e):
+            try:
+                amt = float((montant.value or "0").replace(",", "."))
+            except ValueError:
+                warn.value = "Montant invalide."; warn.color = RED
+                self.page.update(); return
+            if amt <= 0:
+                warn.value = "Le montant doit être strictement supérieur à 0."
+                warn.color = RED; self.page.update(); return
+            if not mode.value:
+                warn.value = "Sélectionnez un mode."; warn.color = RED
+                self.page.update(); return
+            di, ok = _fr_to_iso(date_field.value)
+            if not ok:
+                warn.value = "Date invalide (JJ/MM/AAAA)."; warn.color = RED
+                self.page.update(); return
+            res = repo.regler_creances(
+                self.conn, p.id, amt, mode=mode.value, date_reglement=di or None,
+                include_notes=False)
+            repo.log_audit(
+                self.conn, "reglement_cascade",
+                {"montant": res['alloue'], "mode": mode.value,
+                 "lignes": len(res['lignes']), "reste": res['reste']},
+                patient_id=p.id)
+            self._close_dialog()
+            msg = f"{res['alloue']:.2f} réparti sur {len(res['lignes'])} créance(s)."
+            if res['reste'] > 1e-9:
+                msg += f" {res['reste']:.2f} non affecté."
+            self._toast(msg)
+            if back == "paiements":
+                self.show_paiements()
+            else:
+                self.show_patient_detail(p.id)
+
+        montant.on_submit = confirm
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Régler — {p.display}"),
+            content=ft.Container(
+                ft.Column([
+                    ft.Text(f"Total à recouvrer : {total_reste:.2f}",
+                            weight=ft.FontWeight.BOLD, color=AMBER),
+                    montant,
+                    ft.Text("Mode de règlement", weight=ft.FontWeight.BOLD,
+                            color=TEXT, size=12),
+                    mode, date_row,
+                    ft.Divider(height=1, color=BORDER),
+                    ft.Text("Répartition (du plus ancien au plus récent)",
+                            size=12, color=MUTED),
+                    preview,
+                    ft.Divider(height=1, color=BORDER),
+                    reste_txt, warn,
+                ], tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=480, height=540),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Régler", confirm, icon=ft.Icons.PAYMENTS, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
+    def _payer_acte_dialog(self, prestation_id: int, back: str = "fiche") -> None:
+        """Versement sur UN acte précis (partiel ou solde) — action par ligne et
+        depuis l'écran Finances. Garde « versement > reste »."""
+        pres = repo.get_prestation(self.conn, prestation_id)
+        if pres is None or not pres.facturable:
+            self._toast("Acte introuvable ou non facturable.", ok=False)
+            return
+        versement = ft.TextField(
+            label="Montant versé", value=f"{pres.reste:.2f}",
+            keyboard_type=ft.KeyboardType.NUMBER, autofocus=True)
+        mode = ft.RadioGroup(
+            value="especes",
+            content=ft.Column(
+                [ft.Radio(value=k, label=val) for k, val in _MODE_LABELS.items()],
+                tight=True, spacing=2))
+        date_row, date_field = self._date_field(
+            "Date du règlement", date.today().isoformat())
+        warn = ft.Text("", color=RED, size=12)
+
+        def confirm(e):
+            try:
+                val = float((versement.value or "0").replace(",", "."))
+            except ValueError:
+                warn.value = "Montant invalide."; self.page.update(); return
+            if val <= 0:
+                warn.value = "Le versement doit être strictement supérieur à 0."
+                self.page.update(); return
+            if val > pres.reste + 1e-9:
+                warn.value = f"Le versement dépasse le reste ({pres.reste:.2f})."
+                self.page.update(); return
+            if not mode.value:
+                warn.value = "Sélectionnez un mode."; self.page.update(); return
+            di, ok = _fr_to_iso(date_field.value)
+            if not ok:
+                warn.value = "Date invalide (JJ/MM/AAAA)."; self.page.update(); return
+            new = repo.add_prestation_reglement(
+                self.conn, pres.id, val, mode=mode.value, date_reglement=di or None)
+            repo.log_audit(
+                self.conn, "acte_regle",
+                {"prestation_id": pres.id, "libelle": pres.libelle, "montant": val,
+                 "mode": mode.value, "statut": new.statut},
+                patient_id=pres.patient_id)
+            self._close_dialog()
+            self._toast("Acte soldé." if new.statut == "regle"
+                        else "Règlement enregistré.")
+            if back == "paiements":
+                self.show_paiements()
+            elif self.current_patient:
+                self.show_patient_detail(self.current_patient.id)
+        versement.on_submit = confirm
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Régler — {pres.libelle}"),
+            content=ft.Container(
+                ft.Column([
+                    ft.Text(f"Total dû : {pres.montant:.2f}", color=MUTED),
+                    ft.Text(f"Déjà réglé : {pres.montant_regle:.2f}", color=MUTED),
+                    ft.Text(f"Reste à payer : {pres.reste:.2f}",
+                            weight=ft.FontWeight.BOLD, color=AMBER),
+                    versement,
+                    ft.Text("Mode de règlement", weight=ft.FontWeight.BOLD, color=TEXT),
+                    mode, date_row, warn,
+                ], tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=360, height=440),
+            actions=[
+                ft.TextButton("Annuler", on_click=lambda e: self._close_dialog()),
+                self._btn("Régler", confirm, icon=ft.Icons.CHECK_CIRCLE, busy=False),
+            ],
+        )
+        self._show_dialog(dlg)
+
     # --- Vue FINANCES (Paiements + Depenses) ----------------------------------
     def show_finances(self, tab: str | None = None) -> None:
         """Page Finances a deux sous-vues : Paiements (entrees) et Depenses (sorties).
@@ -2175,66 +3270,120 @@ class CrmApp:
         )
         self._refresh_paiements()
 
+    def _paie_finance_row(self, pa: Paiement, pt: Patient) -> ft.Control:
+        """Ligne « paiement » de l'écran Finances (note d'honoraires)."""
+        encaisse = pa.statut == "encaisse"
+        chip_color = GREEN if encaisse else NAVY
+        chip = ft.Container(
+            ft.Text("Encaissé" if encaisse else "En attente", size=12, color=chip_color),
+            bgcolor=ft.Colors.with_opacity(0.12, chip_color),
+            padding=ft.Padding.symmetric(vertical=4, horizontal=10), border_radius=20,
+        )
+        actions = [
+            ft.TextButton("Ouvrir la fiche",
+                          on_click=lambda e, pid=pt.id: self.show_patient_detail(pid)),
+        ]
+        if not encaisse:
+            actions.append(ft.IconButton(
+                ft.Icons.CHECK_CIRCLE, tooltip="Marquer encaissé", icon_color=GREEN,
+                on_click=lambda e, pp=pa: self._encaisser(pp, back_to_paiements=True)))
+            actions.append(ft.IconButton(
+                ft.Icons.CANCEL, tooltip="Annuler le paiement", icon_color=RED,
+                on_click=lambda e, pp=pa: self._annuler_paiement(pp, back_to_paiements=True)))
+        if encaisse:
+            date_info = f"Encaissé le {_iso_to_fr(pa.date_encaissement) or '—'}"
+            date_info += f" · {_MODE_LABELS.get(pa.mode, 'mode non précisé')}"
+        else:
+            date_info = f"Échéance : {_iso_to_fr(pa.date_echeance) or '—'}"
+        return ft.Row([
+            ft.Text(f"{pa.montant:.2f}", weight=ft.FontWeight.W_600, color=TEXT, width=90),
+            ft.Column([
+                ft.Text(pt.display, weight=ft.FontWeight.W_600, color=TEXT),
+                ft.Text(date_info, size=12, color=MUTED),
+            ], spacing=2, expand=True),
+            chip, *actions,
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def _creance_row(self, c: "repo.Creance") -> ft.Control:
+        """Ligne unifiée « à recouvrer » : note (encaisser) ou acte (régler), selon
+        sa nature, avec le reste à recouvrer en tête (D7 / 4.2)."""
+        if c.nature == "acte":
+            chip_color = AMBER if c.statut == "regle_partiellement" else NAVY
+            chip_label = ("Acte · réglé part." if c.statut == "regle_partiellement"
+                          else "Acte")
+            sub = c.libelle + (f" · {_iso_to_fr(c.date)}" if c.date else "")
+            action = ft.IconButton(
+                ft.Icons.PAYMENTS, tooltip="Régler l'acte", icon_color=GREEN,
+                on_click=lambda e, sid=c.source_id: self._payer_acte_dialog(
+                    sid, back="paiements"))
+        else:
+            chip_color, chip_label = NAVY, "Note"
+            sub = c.libelle + (f" · échéance {_iso_to_fr(c.date)}" if c.date else "")
+            pa = Paiement(id=c.source_id, patient_id=c.patient.id, montant=c.montant,
+                          statut="en_attente", notes=c.libelle)
+            action = ft.IconButton(
+                ft.Icons.CHECK_CIRCLE, tooltip="Encaisser", icon_color=GREEN,
+                on_click=lambda e, pp=pa: self._encaisser(pp, back_to_paiements=True))
+        chip = ft.Container(
+            ft.Text(chip_label, size=12, color=chip_color),
+            bgcolor=ft.Colors.with_opacity(0.12, chip_color),
+            padding=ft.Padding.symmetric(vertical=4, horizontal=10), border_radius=20)
+        return ft.Row([
+            ft.Text(f"{c.reste:.2f}", weight=ft.FontWeight.W_600, color=TEXT, width=90),
+            ft.Column([
+                ft.Text(c.patient.display, weight=ft.FontWeight.W_600, color=TEXT),
+                ft.Text(sub, size=12, color=MUTED),
+            ], spacing=2, expand=True),
+            chip,
+            ft.TextButton("Ouvrir la fiche",
+                          on_click=lambda e, pid=c.patient.id: self.show_patient_detail(pid)),
+            action,
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
     def _refresh_paiements(self) -> None:
         search = self.paie_search.value or ""
         statut = self.paie_statut.value or "en_attente"
         date_from = _date_iso(self.paie_date_from)
         date_to = _date_iso(self.paie_date_to)
-        count = repo.count_paiements(self.conn, search, statut, date_from, date_to)
-        somme = repo.total_paiements(self.conn, search, statut, date_from, date_to)
-        self.paie_page = self._clamp_page(self.paie_page, count)
-        items = repo.list_paiements_filtered(
-            self.conn, search, statut,
-            limit=PAGE_SIZE, offset=self.paie_page * PAGE_SIZE,
-            date_from=date_from, date_to=date_to,
-        )
-        rows = []
-        for pa, pt in items:
-            encaisse = pa.statut == "encaisse"
-            chip_color = GREEN if encaisse else NAVY
-            chip = ft.Container(
-                ft.Text("Encaissé" if encaisse else "En attente", size=12, color=chip_color),
-                bgcolor=ft.Colors.with_opacity(0.12, chip_color),
-                padding=ft.Padding.symmetric(vertical=4, horizontal=10), border_radius=20,
-            )
-            actions = [
-                ft.TextButton("Ouvrir la fiche",
-                              on_click=lambda e, pid=pt.id: self.show_patient_detail(pid)),
-            ]
-            if not encaisse:
-                actions.append(ft.IconButton(
-                    ft.Icons.CHECK_CIRCLE, tooltip="Marquer encaissé", icon_color=GREEN,
-                    on_click=lambda e, pp=pa: self._encaisser(pp, back_to_paiements=True)))
-                actions.append(ft.IconButton(
-                    ft.Icons.CANCEL, tooltip="Annuler le paiement", icon_color=RED,
-                    on_click=lambda e, pp=pa: self._annuler_paiement(pp, back_to_paiements=True)))
-            if encaisse:
-                date_info = f"Encaissé le {_iso_to_fr(pa.date_encaissement) or '—'}"
-                date_info += f" · {_MODE_LABELS.get(pa.mode, 'mode non précisé')}"
-            else:
-                date_info = f"Échéance : {_iso_to_fr(pa.date_echeance) or '—'}"
-            rows.append(ft.Row([
-                ft.Text(f"{pa.montant:.2f}", weight=ft.FontWeight.W_600, color=TEXT, width=90),
-                ft.Column([
-                    ft.Text(pt.display, weight=ft.FontWeight.W_600, color=TEXT),
-                    ft.Text(date_info, size=12, color=MUTED),
-                ], spacing=2, expand=True),
-                chip, *actions,
-            ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
-        if rows:
-            liste = ft.Column(rows, spacing=8)
-        elif search.strip():
-            liste = ft.Text("Aucun paiement ne correspond à votre recherche.", color=MUTED)
-        elif date_from.strip() or date_to.strip():
-            liste = ft.Text("Aucun paiement sur la période sélectionnée.", color=MUTED)
-        else:
-            liste = ft.Text("Aucun paiement.", color=MUTED)
 
-        total_label = {
-            "en_attente": "Total en attente d'encaissement",
-            "encaisse": "Total encaissé",
-            "tous": "Total (tous statuts)",
-        }.get(statut, "Total")
+        if statut == "en_attente":
+            # Vue UNIFIEE des creances (D7) : notes en attente + actes au reste positif.
+            count = repo.count_creances(self.conn, search, date_from, date_to)
+            somme = repo.total_creances(self.conn, search, date_from, date_to)
+            self.paie_page = self._clamp_page(self.paie_page, count)
+            items = repo.list_creances(
+                self.conn, search, date_from, date_to,
+                limit=PAGE_SIZE, offset=self.paie_page * PAGE_SIZE)
+            rows = [self._creance_row(c) for c in items]
+            total_label = "Total à recouvrer (notes + actes)"
+            empty = ("Aucune créance ne correspond à votre recherche."
+                     if search.strip() else
+                     "Aucune créance sur la période sélectionnée."
+                     if (date_from.strip() or date_to.strip()) else
+                     "Aucune créance à recouvrer.")
+        else:
+            count = repo.count_paiements(self.conn, search, statut, date_from, date_to)
+            if statut == "encaisse":
+                # Total tresorerie : paiements encaisses + reglements d'actes (D7 / 4.3).
+                somme = repo.total_encaisse(self.conn, date_from, date_to)
+                total_label = "Total encaissé (paiements + actes)"
+            else:
+                somme = repo.total_paiements(self.conn, search, statut, date_from, date_to)
+                total_label = "Total (tous statuts)"
+            self.paie_page = self._clamp_page(self.paie_page, count)
+            items = repo.list_paiements_filtered(
+                self.conn, search, statut,
+                limit=PAGE_SIZE, offset=self.paie_page * PAGE_SIZE,
+                date_from=date_from, date_to=date_to,
+            )
+            rows = [self._paie_finance_row(pa, pt) for pa, pt in items]
+            empty = ("Aucun paiement ne correspond à votre recherche."
+                     if search.strip() else
+                     "Aucun paiement sur la période sélectionnée."
+                     if (date_from.strip() or date_to.strip()) else
+                     "Aucun paiement.")
+
+        liste = ft.Column(rows, spacing=8) if rows else ft.Text(empty, color=MUTED)
 
         def on_page(idx):
             self.paie_page = idx
@@ -2452,6 +3601,7 @@ class CrmApp:
             body = [
                 ft.Text("Chaque modèle est un fichier Word. Balises : <NOM>, <PRENOM>, <DATE>, <ACTE>, <MONTANT>…",
                         color=MUTED, size=13),
+                self._note_category_selector(),
                 ft.Row([self.tpl_search,
                         self._btn("Renommer une catégorie",
                                   lambda e: self._rename_category_dialog(),
@@ -3918,14 +5068,16 @@ class CrmApp:
             if is_edit:
                 for k, v in data.items():
                     setattr(p, k, v)
-                repo.update_patient(self.conn, p)
-                repo.log_audit(self.conn, "patient_modifie", f"#{p.id} {p.display}")
+                changed = repo.update_patient(self.conn, p)
+                repo.log_audit(self.conn, "fiche_modifiee",
+                               {"champs": changed}, patient_id=p.id)
                 self._close_dialog()
                 self._toast("Patient mis à jour.")
                 self.show_patient_detail(p.id)
             else:
                 new = repo.create_patient(self.conn, Patient(id=None, **data))
-                repo.log_audit(self.conn, "patient_cree", f"#{new.id} {new.display}")
+                repo.log_audit(self.conn, "fiche_creee",
+                               {"display": new.display}, patient_id=new.id)
                 self._close_dialog()
                 self._toast("Patient créé.")
                 self.show_patient_detail(new.id)
@@ -3960,10 +5112,37 @@ class CrmApp:
             out.append(TemplateField(template.name, tag, _humanize(tag), _guess_type(tag), ""))
         return out
 
-    def _generate_dialog(self, p: Patient, draft: Document | None = None) -> None:
-        tpls = templates.list_templates()
+    def _generate_dialog(self, p: Patient, draft: Document | None = None,
+                         category: str | None = None) -> None:
+        """Génère un document (brouillon → Word → JPG/PDF). Ne crée **plus aucun
+        paiement** : le suivi du dû passe par les actes (plans-de-traitement D13).
+
+        `category` non nul ⇒ mode « note d'honoraires » : seuls les modèles de cette
+        catégorie sont proposés. Sinon (générique), les modèles de la catégorie des
+        notes d'honoraires sont **exclus** (ils ont leur propre bouton). En édition
+        d'un brouillon, tous les modèles restent listés."""
+        is_note = category is not None
+        note_cat = repo.get_setting(self.conn, NOTE_CAT_KEY) or NOTE_CAT_DEFAULT
+        all_tpls = templates.list_templates()
+        if draft is not None:
+            tpls = all_tpls
+        elif is_note:
+            tpls = [t for t in all_tpls
+                    if _cat_eq(repo.get_template_category(self.conn, t.name), category)]
+        elif note_cat:
+            tpls = [t for t in all_tpls
+                    if not _cat_eq(repo.get_template_category(self.conn, t.name), note_cat)]
+        else:
+            tpls = all_tpls
         if not tpls:
-            self._toast("Aucun modèle disponible. Créez-en un dans « Modèles ».", ok=False)
+            if is_note:
+                self._toast(
+                    f"Aucun modèle n'a la catégorie « {category} ». Dans Paramétrage › "
+                    f"Modèles, cliquez l'icône « Catégorie » d'un modèle de note et "
+                    f"saisissez exactement : {category}", ok=False)
+            else:
+                self._toast("Aucun modèle disponible. Créez-en un dans « Modèles ».",
+                            ok=False)
             return
         # Edition d'un brouillon : pre-remplir depuis les saisies memorisees.
         draft_vars: dict[str, str] = {}
@@ -3984,28 +5163,9 @@ class CrmApp:
         fmt = ft.Dropdown(label="Format", value=(draft.output_format if draft else "jpg"),
                           color=TEXT, text_style=ft.TextStyle(color=TEXT),
                           options=[ft.dropdown.Option("jpg"), ft.dropdown.Option("pdf")])
-        paie_montant = ft.TextField(
-            label="Montant du paiement", value="",
-            keyboard_type=ft.KeyboardType.NUMBER,
-        )
-
-        def on_paie_toggle(e):
-            paie_montant.disabled = not add_paie.value
-            self.page.update()
-
-        add_paie = ft.Checkbox(
-            label="Créer un paiement en attente", value=True, on_change=on_paie_toggle,
-        )
         status = ft.Text("", color=RED, size=12)
         fields_col = ft.Column([], tight=True, spacing=10)
         getters: dict[str, callable] = {}
-
-        def sync_paie_montant():
-            """Pré-remplit le montant du paiement depuis la balise montant du modèle."""
-            for tag, get in getters.items():
-                if tag.upper() in generator._MONTANT_KEYS:
-                    paie_montant.value = (get() or "").strip()
-                    break
 
         def build_fields():
             getters.clear()
@@ -4026,11 +5186,9 @@ class CrmApp:
                     controls.append(tf)
                     getters[f.tag] = (lambda c=tf: c.value)
                 else:
-                    is_montant = f.tag.upper() in generator._MONTANT_KEYS
                     tf = ft.TextField(
                         label=f.label or f.tag, value=init,
                         keyboard_type=ft.KeyboardType.NUMBER if f.type == "number" else None,
-                        on_change=(lambda e: sync_paie_montant()) if is_montant else None,
                     )
                     controls.append(tf)
                     getters[f.tag] = (lambda c=tf: c.value)
@@ -4038,7 +5196,6 @@ class CrmApp:
                 controls.append(ft.Text("Aucune variable à saisir pour ce modèle.",
                                         color=MUTED, size=12))
             fields_col.controls = controls
-            sync_paie_montant()
             self.page.update()
 
         def on_tpl_change(e):
@@ -4049,7 +5206,7 @@ class CrmApp:
         is_edit = draft is not None
 
         def persist() -> Document:
-            """Enregistre/maj le brouillon (+ paiement a la creation) et renvoie le doc.
+            """Enregistre/maj le brouillon et renvoie le doc (AUCUN paiement créé).
 
             Etape rapide commune aux trois actions (brouillon / generer /
             generer+imprimer). Leve en cas d'echec ; l'appelant gere le statut.
@@ -4062,19 +5219,13 @@ class CrmApp:
                 generator.update_draft(
                     self.conn, draft, variables=variables, output_format=fmt.value)
                 repo.log_audit(self.conn, "brouillon_modifie",
-                               f"#{draft.id} {tpl.name} (patient #{p.id})")
+                               {"document_id": draft.id, "modele": tpl.name},
+                               patient_id=p.id)
                 return draft
-            montant_paie = generator.parse_montant_str(paie_montant.value)
             doc = generator.save_draft(
                 self.conn, p, tpl, variables=variables, output_format=fmt.value)
             repo.log_audit(self.conn, "brouillon_cree",
-                           f"#{doc.id} {tpl.name} (patient #{p.id})")
-            montant = montant_paie if montant_paie else doc.montant
-            # Paiement cree uniquement pour un montant strictement positif.
-            if add_paie.value and montant and montant > 0:
-                repo.create_paiement(self.conn, Paiement(
-                    id=None, patient_id=p.id, document_id=doc.id, montant=montant,
-                    statut="en_attente", notes=f"{tpl.label}"))
+                           {"document_id": doc.id, "modele": tpl.name}, patient_id=p.id)
             return doc
 
         def on_save_draft(e=None):
@@ -4113,16 +5264,19 @@ class CrmApp:
             def work():
                 doc = persist()
                 generator.render_document(self.conn, doc)
-                repo.log_audit(self.conn, "document_genere",
-                               f"#{doc.id} {doc.type} (patient #{p.id})")
+                repo.log_audit(
+                    self.conn,
+                    "note_honoraires_generee" if is_note else "document_genere",
+                    {"document_id": doc.id, "type": doc.type, "modele": doc.template},
+                    patient_id=p.id)
                 if do_print:
                     cfg = print_settings.get_settings_for(self.conn, doc.type)
                     paper, color = cfg["paper"], cfg["color"]
                     printing.print_file(Path(doc.file_path or ""), printer,
                                         paper=paper, color=color)
                     repo.log_audit(self.conn, "document_imprime",
-                                   f"#{doc.id} {doc.type} -> {printer}"
-                                   f"{_print_audit_suffix(paper, color)}")
+                                   {"document_id": doc.id, "type": doc.type,
+                                    "imprimante": printer}, patient_id=p.id)
                 self._close_dialog()
                 self._toast(f"Document généré et envoyé à « {printer} »." if do_print
                             else "Document généré.")
@@ -4131,10 +5285,7 @@ class CrmApp:
             self._run_busy(button, status, work)
 
         build_fields()
-        body_controls = [tpl_dd, fields_col, fmt]
-        if not is_edit:  # le paiement n'est cree qu'a la creation du brouillon
-            body_controls += [add_paie, paie_montant]
-        body_controls.append(status)
+        body_controls = [tpl_dd, fields_col, fmt, status]
 
         # Brouillon = action secondaire ; Générer (et imprimer) = actions primaires.
         # Les boutons de generation pilotent eux-memes `_run_busy` (busy=False ici)
@@ -4153,10 +5304,15 @@ class CrmApp:
         btn_gen.on_click = lambda e=None: on_generate(btn_gen, False)
         btn_print.on_click = lambda e=None: on_generate(btn_print, True)
 
+        if is_edit:
+            dlg_title = f"Modifier le brouillon — {p.display}"
+        elif is_note:
+            dlg_title = f"Note d'honoraires — {p.display}"
+        else:
+            dlg_title = f"Nouveau document — {p.display}"
         dlg = ft.AlertDialog(
             modal=True,
-            title=ft.Text(f"Modifier le brouillon — {p.display}" if is_edit
-                          else f"Nouveau brouillon — {p.display}"),
+            title=ft.Text(dlg_title),
             content=ft.Container(
                 ft.Column(body_controls, tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
                 width=460, height=480,
@@ -4172,6 +5328,46 @@ class CrmApp:
             dlg, submit=lambda e=None: on_generate(btn_gen, False),
             shortcuts={"P": lambda e=None: on_generate(btn_print, True),
                        "S": on_save_draft})
+
+    def _note_dialog(self, p: Patient) -> None:
+        """Bouton dédié « Note d'honoraires » : génère depuis les modèles de la
+        catégorie configurée (Paramétrage › Modèles), sans aucun paiement."""
+        cat = repo.get_setting(self.conn, NOTE_CAT_KEY) or NOTE_CAT_DEFAULT
+        self._generate_dialog(p, category=cat)
+
+    def _note_category_selector(self) -> ft.Control:
+        """Carte de Paramétrage › Modèles : choisit la catégorie dédiée aux notes
+        d'honoraires (mémorisée dans `meta`, clé `NOTE_CAT_KEY`)."""
+        cats = repo.list_categories(self.conn)
+        current = repo.get_setting(self.conn, NOTE_CAT_KEY) or ""
+        # Catégorie effective = réglage si défini, sinon la convention par défaut.
+        # On présélectionne la catégorie existante qui lui correspond (tolérant).
+        effective = current or NOTE_CAT_DEFAULT
+        match = next((c.nom for c in cats if _cat_eq(c.nom, effective)), "")
+        dd = ft.Dropdown(
+            label="Notes d'honoraires", width=320,
+            color=TEXT, text_style=ft.TextStyle(color=TEXT),
+            value=match,
+            options=[ft.dropdown.Option(key="", text=f"— Défaut (« {NOTE_CAT_DEFAULT} ») —")]
+            + [ft.dropdown.Option(key=c.nom, text=c.nom) for c in cats],
+            on_select=lambda e: self._set_note_category(e.control.value),
+        )
+        hint = (f"Par défaut « {NOTE_CAT_DEFAULT} ». Les modèles de cette catégorie "
+                "alimentent le bouton « Note d'honoraires » de la fiche patient ; la "
+                "génération générique les exclut.") if cats else (
+            f"Rangez vos modèles de note dans une catégorie « {NOTE_CAT_DEFAULT} » "
+            "(icône Catégorie d'un modèle) : ils alimenteront le bouton "
+            "« Note d'honoraires ».")
+        return self._card(ft.Row([
+            ft.Icon(ft.Icons.RECEIPT_LONG, color=NAVY),
+            dd,
+            ft.Text(hint, size=12, color=MUTED, expand=True),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=12))
+
+    def _set_note_category(self, value: str) -> None:
+        repo.set_setting(self.conn, NOTE_CAT_KEY, value or "")
+        self._toast(f"Notes d'honoraires : catégorie « {value} »." if value
+                    else f"Notes d'honoraires : catégorie par défaut « {NOTE_CAT_DEFAULT} ».")
 
     def _paiement_dialog(self, p: Patient) -> None:
         montant = ft.TextField(label="Montant", value="0", autofocus=True)
@@ -4500,7 +5696,8 @@ class CrmApp:
         def work():
             printing.print_file(Path(path), printer, paper=paper, color=color)
             repo.log_audit(self.conn, "document_imprime",
-                           f"#{d.id} {d.type} -> {printer}{_print_audit_suffix(paper, color)}")
+                           {"document_id": d.id, "type": d.type, "imprimante": printer},
+                           patient_id=d.patient_id)
             self._toast(f"Envoyé à l'imprimante « {printer} ».")
 
         self._run_busy(e.control, None, work)
@@ -4537,8 +5734,9 @@ class CrmApp:
                 generator.send_document(
                     self.conn, d, config, template_id=chosen.mailjet_template_id
                 )
-                repo.log_audit(self.conn, "email_envoye",
-                               f"document #{d.id} → {d.email}")
+                repo.log_audit(self.conn, "document_envoye",
+                               {"document_id": d.id, "type": d.type, "email": d.email},
+                               patient_id=d.patient_id)
                 self._close_dialog()
                 self._toast("Email envoyé.")
                 self._after_doc_change()
@@ -4581,8 +5779,8 @@ class CrmApp:
             repo.mark_paiement_encaisse(self.conn, pa.id, mode=mode.value)
             repo.log_audit(
                 self.conn, "paiement_encaisse",
-                f"#{pa.id} {pa.montant:.2f} · {_MODE_LABELS[mode.value]} "
-                f"(patient #{pa.patient_id})")
+                {"paiement_id": pa.id, "montant": pa.montant, "mode": mode.value,
+                 "libelle": pa.notes}, patient_id=pa.patient_id)
             self._close_dialog()
             self._toast("Paiement encaissé.")
             if back_to_paiements:
@@ -4614,7 +5812,8 @@ class CrmApp:
             repo.delete_paiement(self.conn, pa.id)
             repo.log_audit(
                 self.conn, "paiement_annule",
-                f"#{pa.id} {pa.montant:.2f} (patient #{pa.patient_id})")
+                {"paiement_id": pa.id, "montant": pa.montant, "libelle": pa.notes},
+                patient_id=pa.patient_id)
             self._close_dialog()
             self._toast("Paiement annulé.")
             if back_to_paiements:
@@ -4661,6 +5860,19 @@ def _kv(key: str, value: str) -> ft.Control:
 
 def _humanize(tag: str) -> str:
     return tag.replace("_", " ").strip().capitalize()
+
+
+def _audit_val(v) -> str:
+    """Valeur avant/apres pour l'historique : « — » si vide/absente, sinon texte."""
+    return "—" if v is None or v == "" else str(v)
+
+
+def _audit_montant(v) -> str:
+    """Montant formate (2 decimales) pour l'historique, tolerant si non numerique."""
+    try:
+        return f"{float(v):.2f}"
+    except (TypeError, ValueError):
+        return _audit_val(v)
 
 
 def _guess_type(tag: str) -> str:

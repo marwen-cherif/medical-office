@@ -5,6 +5,8 @@ Expose des dataclasses simples et des fonctions CRUD au-dessus de sqlite3.
 
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 import unicodedata
 from dataclasses import dataclass
@@ -186,7 +188,45 @@ def create_patient(conn: sqlite3.Connection, p: Patient) -> Patient:
     return p
 
 
-def update_patient(conn: sqlite3.Connection, p: Patient) -> None:
+# Champs de la fiche patient suivis dans le journal d'audit (libelle lisible ->
+# attribut de la dataclass). Sert au detail avant/apres (cf. diff_patient).
+_PATIENT_AUDIT_FIELDS = (
+    ("Nom", "nom"),
+    ("Prénom", "prenom"),
+    ("Date de naissance", "date_naissance"),
+    ("Email", "email"),
+    ("Téléphone", "telephone"),
+    ("Adresse", "adresse"),
+    ("Notes", "notes"),
+)
+
+
+def diff_patient(conn: sqlite3.Connection, p: Patient) -> dict[str, list]:
+    """Champs reellement modifies entre la fiche en base et `p` (valeurs entrantes).
+
+    Renvoie {libelle: [avant, apres]} ; un champ inchange est exclu. `nom`/`prenom`
+    sont normalises (strip) comme a l'ecriture pour ne pas signaler un faux
+    changement. Alimente le detail avant/apres du journal (fiche_modifiee).
+    """
+    old = get_patient(conn, p.id)
+    if old is None:
+        return {}
+    changed: dict[str, list] = {}
+    for label, attr in _PATIENT_AUDIT_FIELDS:
+        before = getattr(old, attr)
+        after = getattr(p, attr)
+        if attr in ("nom", "prenom"):
+            after = (after or "").strip()
+        if (before or "") != (after or ""):
+            changed[label] = [before, after]
+    return changed
+
+
+def update_patient(conn: sqlite3.Connection, p: Patient) -> dict[str, list]:
+    """Met a jour une fiche patient et renvoie le diff des champs modifies
+    ({libelle: [avant, apres]}, calcule AVANT l'UPDATE) pour le journal d'audit.
+    Retro-compatible : un appelant qui ignore la valeur de retour fonctionne."""
+    changed = diff_patient(conn, p)
     conn.execute(
         """UPDATE patients SET
              nom = ?, prenom = ?, slug_nom = ?, slug_prenom = ?,
@@ -208,6 +248,7 @@ def update_patient(conn: sqlite3.Connection, p: Patient) -> None:
         ),
     )
     conn.commit()
+    return changed
 
 
 def get_patient(conn: sqlite3.Connection, patient_id: int) -> Optional[Patient]:
@@ -1488,16 +1529,40 @@ def mark_stale_jobs_interrupted(conn: sqlite3.Connection) -> int:
 
 # --- Journal d'audit ----------------------------------------------------------
 
-def log_audit(conn: sqlite3.Connection, action: str, detail: str = "") -> None:
-    """Consigne une action (best-effort : ne jamais faire echouer l'appelant)."""
+def log_audit(
+    conn: sqlite3.Connection, action: str, detail: Any = "",
+    *, patient_id: Optional[int] = None,
+) -> None:
+    """Consigne une action (best-effort : ne jamais faire echouer l'appelant).
+
+    `detail` peut etre une chaine (retro-compat) ou un dict/list : dans ce dernier
+    cas il est serialise en JSON (cf. parse_audit_detail pour la lecture tolerante).
+    `patient_id` rattache l'evenement a une fiche (None = evenement global, ex.
+    demarrage) ; il alimente l'onglet Historique via list_audit_patient.
+    """
     try:
+        if isinstance(detail, (dict, list)):
+            detail_str = json.dumps(detail, ensure_ascii=False)
+        else:
+            detail_str = str(detail) if detail else ""
         conn.execute(
-            "INSERT INTO audit_log (action, detail) VALUES (?, ?)",
-            (action, detail or ""),
+            "INSERT INTO audit_log (action, detail, patient_id) VALUES (?, ?, ?)",
+            (action, detail_str, patient_id),
         )
         conn.commit()
     except sqlite3.Error:
         pass
+
+
+def parse_audit_detail(detail: str) -> Any:
+    """Decode le `detail` d'un evenement : objet JSON si possible, sinon la chaine
+    brute (anciennes lignes non structurees). Best-effort : ne leve jamais."""
+    if not detail:
+        return None
+    try:
+        return json.loads(detail)
+    except (ValueError, TypeError):
+        return detail
 
 
 def list_audit(
@@ -1519,6 +1584,22 @@ def list_audit(
         sql += " LIMIT ?"
         params.append(limit)
     rows = conn.execute(sql, params).fetchall()
+    return [(r["ts"], r["action"], r["detail"] or "") for r in rows]
+
+
+def list_audit_patient(
+    conn: sqlite3.Connection, patient_id: int, limit: int = 200,
+) -> list[tuple[str, str, str]]:
+    """Evenements d'un patient, du plus recent au plus ancien (onglet Historique).
+
+    Renvoie (ts, action, detail) ; `detail` est la chaine brute (JSON pour les
+    lignes recentes), a decoder via parse_audit_detail cote presentation.
+    """
+    rows = conn.execute(
+        "SELECT ts, action, detail FROM audit_log WHERE patient_id = ? "
+        "ORDER BY id DESC LIMIT ?",
+        (patient_id, limit),
+    ).fetchall()
     return [(r["ts"], r["action"], r["detail"] or "") for r in rows]
 
 
@@ -2051,3 +2132,692 @@ def total_regle_periode(
         f"SELECT COALESCE(SUM(montant), 0) AS total FROM depense_reglements{where}", params
     ).fetchone()
     return float(row["total"] or 0)
+
+
+# --- Plans de traitement & actes realises (prestations) -----------------------
+# Cote PATIENT, calque du sous-systeme `depenses` cote fournisseur : un acte
+# (`prestations`) porte a la fois le DU (`montant`) et le PAIEMENT (`montant_regle`
+# cumul, `statut`, `reste` derive), avec un historique de versements datees
+# (`prestation_reglements`). Le plan n'est qu'un regroupement nomme, SANS statut.
+# Le prix est un SNAPSHOT recopie depuis le referentiel d'actes (D3). Voir
+# openspec/changes/plans-de-traitement.
+
+# Sentinelle pour distinguer, dans list_prestations, "tous les actes du patient"
+# (parametre absent) de "actes isoles" (plan_id=None -> plan_id IS NULL).
+_UNSET: Any = object()
+
+
+def normalize_dents(raw: Optional[str]) -> str:
+    """Normalise une saisie de dents (FDI) en chaine « 26, 27 ».
+
+    Decoupe sur virgules / points-virgules / sauts de ligne (PAS sur l'espace, pour
+    tolerer une saisie libre type « 26 (MOD) »), retire les vides et deduplique en
+    conservant l'ordre. Validation FDI volontairement NON bloquante (D10). Renvoie
+    "" si rien d'exploitable.
+    """
+    if not raw:
+        return ""
+    parts: list[str] = []
+    for chunk in re.split(r"[,;\n]+", raw):
+        token = chunk.strip()
+        if token and token not in parts:
+            parts.append(token)
+    return ", ".join(parts)
+
+
+@dataclass
+class PlanTraitement:
+    id: Optional[int]
+    patient_id: int
+    titre: str
+    notes: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+@dataclass
+class Prestation:
+    id: Optional[int]
+    patient_id: int
+    plan_id: Optional[int] = None
+    acte_id: Optional[int] = None
+    libelle: str = ""
+    montant: float = 0.0
+    montant_regle: float = 0.0
+    statut: str = "en_attente"
+    date_acte: Optional[str] = None
+    dents: Optional[str] = None
+    note: Optional[str] = None
+    sort_order: int = 0
+    created_at: Optional[str] = None
+
+    @property
+    def reste(self) -> float:
+        return max(0.0, (self.montant or 0) - (self.montant_regle or 0))
+
+    @property
+    def facturable(self) -> bool:
+        """Un acte a montant nul (controle, geste gratuit) est NON facturable (D5)."""
+        return (self.montant or 0) > 0
+
+
+@dataclass
+class PrestationReglement:
+    id: Optional[int]
+    prestation_id: int
+    montant: float
+    mode: Optional[str] = None
+    date_reglement: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+def _row_to_plan(row: sqlite3.Row) -> PlanTraitement:
+    return PlanTraitement(
+        id=row["id"],
+        patient_id=row["patient_id"],
+        titre=row["titre"],
+        notes=row["notes"],
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_prestation(row: sqlite3.Row) -> Prestation:
+    return Prestation(
+        id=row["id"],
+        patient_id=row["patient_id"],
+        plan_id=row["plan_id"],
+        acte_id=row["acte_id"],
+        libelle=row["libelle"],
+        montant=row["montant"],
+        montant_regle=row["montant_regle"],
+        statut=row["statut"],
+        date_acte=row["date_acte"],
+        dents=row["dents"],
+        note=row["note"],
+        sort_order=row["sort_order"],
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_prestation_reglement(row: sqlite3.Row) -> PrestationReglement:
+    return PrestationReglement(
+        id=row["id"],
+        prestation_id=row["prestation_id"],
+        montant=row["montant"],
+        mode=row["mode"],
+        date_reglement=row["date_reglement"],
+        created_at=row["created_at"],
+    )
+
+
+# --- CRUD plans ---------------------------------------------------------------
+
+def create_plan(
+    conn: sqlite3.Connection, patient_id: int, titre: str,
+    notes: Optional[str] = None,
+) -> PlanTraitement:
+    """Cree un plan (regroupement nomme). Titre obligatoire ; aucun statut (D4)."""
+    titre = (titre or "").strip()
+    if not titre:
+        raise ValueError("Le titre d'un plan de traitement est obligatoire.")
+    cur = conn.execute(
+        "INSERT INTO plans_traitement (patient_id, titre, notes) VALUES (?, ?, ?)",
+        (patient_id, titre, (notes or None)),
+    )
+    conn.commit()
+    return get_plan(conn, cur.lastrowid)  # type: ignore[arg-type, return-value]
+
+
+def update_plan(
+    conn: sqlite3.Connection, plan_id: int, titre: str,
+    notes: Optional[str] = None,
+) -> None:
+    titre = (titre or "").strip()
+    if not titre:
+        raise ValueError("Le titre d'un plan de traitement est obligatoire.")
+    conn.execute(
+        "UPDATE plans_traitement SET titre = ?, notes = ? WHERE id = ?",
+        (titre, (notes or None), plan_id),
+    )
+    conn.commit()
+
+
+def list_plans(conn: sqlite3.Connection, patient_id: int) -> list[PlanTraitement]:
+    rows = conn.execute(
+        "SELECT * FROM plans_traitement WHERE patient_id = ? ORDER BY id DESC",
+        (patient_id,),
+    ).fetchall()
+    return [_row_to_plan(r) for r in rows]
+
+
+def get_plan(conn: sqlite3.Connection, plan_id: int) -> Optional[PlanTraitement]:
+    row = conn.execute(
+        "SELECT * FROM plans_traitement WHERE id = ?", (plan_id,)
+    ).fetchone()
+    return _row_to_plan(row) if row else None
+
+
+def delete_plan(conn: sqlite3.Connection, plan_id: int) -> None:
+    """Supprime un plan. Ses actes sont DETACHES (plan_id -> NULL via ON DELETE SET
+    NULL) et deviennent des actes isoles : aucun reglement n'est jamais perdu (D8)."""
+    conn.execute("DELETE FROM plans_traitement WHERE id = ?", (plan_id,))
+    conn.commit()
+
+
+# --- CRUD prestations (actes realises) ----------------------------------------
+
+def create_prestation(
+    conn: sqlite3.Connection,
+    patient_id: int,
+    libelle: str,
+    montant: float,
+    *,
+    plan_id: Optional[int] = None,
+    acte_id: Optional[int] = None,
+    date_acte: Optional[str] = None,
+    dents: Optional[str] = None,
+    note: Optional[str] = None,
+    sort_order: int = 0,
+) -> Prestation:
+    """Cree un acte realise. `libelle`/`montant` sont un SNAPSHOT fourni par
+    l'appelant (recopie depuis le referentiel, modifiable). `montant >= 0` (un acte
+    a 0 est un controle non facturable, D5). Pas de creation de paiement (D13)."""
+    libelle = (libelle or "").strip()
+    if not libelle:
+        raise ValueError("Le libelle d'un acte est obligatoire.")
+    if montant is None or montant < 0:
+        raise ValueError("Le montant d'un acte doit etre positif ou nul.")
+    cur = conn.execute(
+        """INSERT INTO prestations
+           (patient_id, plan_id, acte_id, libelle, montant, montant_regle, statut,
+            date_acte, dents, note, sort_order)
+           VALUES (?, ?, ?, ?, ?, 0, 'en_attente', ?, ?, ?, ?)""",
+        (patient_id, plan_id, acte_id, libelle, float(montant), date_acte,
+         (normalize_dents(dents) or None), (note or None), sort_order or 0),
+    )
+    conn.commit()
+    return get_prestation(conn, cur.lastrowid)  # type: ignore[arg-type, return-value]
+
+
+def update_prestation(
+    conn: sqlite3.Connection,
+    prestation_id: int,
+    *,
+    libelle: str,
+    montant: float,
+    plan_id: Optional[int] = None,
+    acte_id: Optional[int] = None,
+    date_acte: Optional[str] = None,
+    dents: Optional[str] = None,
+    note: Optional[str] = None,
+) -> None:
+    """Met a jour les champs editables d'un acte. Le cumul regle n'est pas touche ;
+    le statut est recalcule depuis le nouveau montant. Refuse un montant inferieur
+    au deja regle (on ne peut pas facturer moins que ce qui est encaisse)."""
+    pres = get_prestation(conn, prestation_id)
+    if pres is None:
+        raise ValueError("Acte introuvable.")
+    libelle = (libelle or "").strip()
+    if not libelle:
+        raise ValueError("Le libelle d'un acte est obligatoire.")
+    if montant is None or montant < 0:
+        raise ValueError("Le montant d'un acte doit etre positif ou nul.")
+    if float(montant) + 1e-9 < float(pres.montant_regle or 0):
+        raise ValueError("Le montant ne peut pas etre inferieur au deja regle.")
+    statut = statut_depense(float(montant), float(pres.montant_regle or 0))
+    conn.execute(
+        """UPDATE prestations SET libelle = ?, montant = ?, statut = ?, plan_id = ?,
+             acte_id = ?, date_acte = ?, dents = ?, note = ? WHERE id = ?""",
+        (libelle, float(montant), statut, plan_id, acte_id, date_acte,
+         (normalize_dents(dents) or None), (note or None), prestation_id),
+    )
+    conn.commit()
+
+
+def list_prestations(
+    conn: sqlite3.Connection, patient_id: int, plan_id: Any = _UNSET,
+) -> list[Prestation]:
+    """Actes d'un patient. `plan_id` absent => tous ; `plan_id=None` => actes isoles
+    (plan_id IS NULL) ; `plan_id=<id>` => actes du plan. Tri sort_order, id."""
+    sql = "SELECT * FROM prestations WHERE patient_id = ?"
+    params: list[Any] = [patient_id]
+    if plan_id is None:
+        sql += " AND plan_id IS NULL"
+    elif plan_id is not _UNSET:
+        sql += " AND plan_id = ?"
+        params.append(plan_id)
+    sql += " ORDER BY sort_order, id"
+    rows = conn.execute(sql, params).fetchall()
+    return [_row_to_prestation(r) for r in rows]
+
+
+def get_prestation(conn: sqlite3.Connection, prestation_id: int) -> Optional[Prestation]:
+    row = conn.execute(
+        "SELECT * FROM prestations WHERE id = ?", (prestation_id,)
+    ).fetchone()
+    return _row_to_prestation(row) if row else None
+
+
+def prestation_has_reglements(conn: sqlite3.Connection, prestation_id: int) -> bool:
+    """Vrai si l'acte porte au moins un versement (garde de suppression, D8)."""
+    row = conn.execute(
+        "SELECT 1 FROM prestation_reglements WHERE prestation_id = ? LIMIT 1",
+        (prestation_id,),
+    ).fetchone()
+    return row is not None
+
+
+def delete_prestation(conn: sqlite3.Connection, prestation_id: int) -> None:
+    """Supprime un acte. REFUSE si des reglements existent (preserve la trace
+    financiere, D8) : il faut d'abord le solder/annuler explicitement."""
+    if prestation_has_reglements(conn, prestation_id):
+        raise ValueError("Impossible de supprimer un acte portant des reglements.")
+    conn.execute("DELETE FROM prestations WHERE id = ?", (prestation_id,))
+    conn.commit()
+
+
+def add_prestation_reglement(
+    conn: sqlite3.Connection,
+    prestation_id: int,
+    montant: float,
+    *,
+    mode: Optional[str] = None,
+    date_reglement: Optional[str] = None,
+) -> Prestation:
+    """Enregistre un versement (partiel ou solde) sur un acte. Calque de
+    `add_depense_reglement` : incremente le cumul, derive le statut, historise le
+    versement date. Refuse un montant <= 0 ou superieur au reste a payer."""
+    pres = get_prestation(conn, prestation_id)
+    if pres is None:
+        raise ValueError("Acte introuvable.")
+    if montant is None or montant <= 0:
+        raise ValueError("Le versement doit etre strictement superieur a 0.")
+    if montant > pres.reste + 1e-9:
+        raise ValueError("Le versement depasse le reste a payer.")
+    nouveau = float(pres.montant_regle or 0) + float(montant)
+    statut = statut_depense(float(pres.montant or 0), nouveau)
+    when = date_reglement or _now()
+    conn.execute(
+        "UPDATE prestations SET montant_regle = ?, statut = ? WHERE id = ?",
+        (nouveau, statut, prestation_id),
+    )
+    conn.execute(
+        "INSERT INTO prestation_reglements (prestation_id, montant, mode, date_reglement) "
+        "VALUES (?, ?, ?, ?)",
+        (prestation_id, float(montant), mode, when),
+    )
+    conn.commit()
+    return get_prestation(conn, prestation_id)  # type: ignore[return-value]
+
+
+def list_prestation_reglements(
+    conn: sqlite3.Connection, prestation_id: int
+) -> list[PrestationReglement]:
+    """Versements d'un acte (du plus recent au plus ancien)."""
+    rows = conn.execute(
+        "SELECT * FROM prestation_reglements WHERE prestation_id = ? "
+        "ORDER BY date(date_reglement) DESC, id DESC",
+        (prestation_id,),
+    ).fetchall()
+    return [_row_to_prestation_reglement(r) for r in rows]
+
+
+def plan_totaux(
+    conn: sqlite3.Connection, plan_id: int
+) -> tuple[float, float, float]:
+    """(du, encaisse, reste) d'un plan. Les actes a montant=0 sont naturellement
+    neutres (montant et montant_regle nuls)."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(montant), 0) AS du, "
+        "COALESCE(SUM(montant_regle), 0) AS encaisse, "
+        "COALESCE(SUM(montant - montant_regle), 0) AS reste "
+        "FROM prestations WHERE plan_id = ?",
+        (plan_id,),
+    ).fetchone()
+    return float(row["du"] or 0), float(row["encaisse"] or 0), float(row["reste"] or 0)
+
+
+def list_prestations_a_regler(
+    conn: sqlite3.Connection, patient_id: int
+) -> list[Prestation]:
+    """Actes FACTURABLES non soldes (montant>0 et reste>0) d'un patient, pour le
+    recap « Regler ». Les actes a montant=0 (controles) sont exclus (D5)."""
+    rows = conn.execute(
+        "SELECT * FROM prestations WHERE patient_id = ? AND montant > 0 "
+        "AND (montant - montant_regle) > 1e-9 ORDER BY sort_order, id",
+        (patient_id,),
+    ).fetchall()
+    return [_row_to_prestation(r) for r in rows]
+
+
+# --- Vue Finances unifiee : creances (paiements en attente + actes au reste) ---
+# D7 : l'ecran Finances agrege, AU MEME ENDROIT, les paiements en attente (creance
+# de note) et les actes au reste positif (creance d'acte). Chaque ligne garde sa
+# nature ('note' | 'acte') et son action propre (encaisser / regler).
+
+@dataclass
+class Creance:
+    nature: str            # 'note' (paiement) | 'acte' (prestation)
+    source_id: int         # id du paiement ou de la prestation
+    patient: "Patient"
+    libelle: str
+    montant: float         # montant total de la creance
+    reste: float           # reste a recouvrer
+    date: Optional[str]    # echeance (note) ou date_acte (acte) — cle de tri
+    statut: str            # statut de la source
+
+
+def _creance_branch_clause(
+    search: str, date_from: str, date_to: str, date_col: str,
+) -> tuple[list[str], list[Any]]:
+    """Clauses additionnelles (recherche patient + periode) d'une branche d'union.
+    `date_col` est la colonne de date contextuelle de la branche (echeance / acte)."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if search.strip():
+        needle = f"%{slugify(search)}%"
+        clauses.append(
+            "((pt.slug_nom || '_' || pt.slug_prenom) LIKE ? "
+            "OR (pt.slug_prenom || '_' || pt.slug_nom) LIKE ?)"
+        )
+        params += [needle, needle]
+    if date_from.strip():
+        clauses.append(f"date({date_col}) >= ?")
+        params.append(date_from.strip())
+    if date_to.strip():
+        clauses.append(f"date({date_col}) <= ?")
+        params.append(date_to.strip())
+    return clauses, params
+
+
+def _creances_union(
+    search: str, date_from: str, date_to: str,
+) -> tuple[str, list[Any]]:
+    """SQL (et parametres) de l'UNION des creances : paiements en attente + actes au
+    reste positif, normalises en colonnes communes. Sans ORDER BY / LIMIT (ajoutes
+    par l'appelant)."""
+    note_clauses, note_params = _creance_branch_clause(
+        search, date_from, date_to, "pa.date_echeance"
+    )
+    acte_clauses, acte_params = _creance_branch_clause(
+        search, date_from, date_to, "pr.date_acte"
+    )
+    note_where = " AND ".join(["pa.statut = 'en_attente'"] + note_clauses)
+    acte_where = " AND ".join(
+        ["pr.montant > 0", "(pr.montant - pr.montant_regle) > 1e-9"] + acte_clauses
+    )
+    sql = (
+        "SELECT 'note' AS nature, pa.id AS source_id, "
+        "pt.id AS p_id, pt.nom, pt.prenom, pt.date_naissance, pt.email, "
+        "pt.telephone, pt.adresse, pt.notes AS p_notes, "
+        "COALESCE(NULLIF(d.acte, ''), NULLIF(pa.notes, ''), 'Note d''honoraires') AS libelle, "
+        "pa.montant AS montant, pa.montant AS reste, "
+        "pa.date_echeance AS date_ref, pa.statut AS statut "
+        "FROM paiements pa JOIN patients pt ON pt.id = pa.patient_id "
+        "LEFT JOIN documents d ON d.id = pa.document_id "
+        f"WHERE {note_where} "
+        "UNION ALL "
+        "SELECT 'acte' AS nature, pr.id AS source_id, "
+        "pt.id AS p_id, pt.nom, pt.prenom, pt.date_naissance, pt.email, "
+        "pt.telephone, pt.adresse, pt.notes AS p_notes, "
+        "pr.libelle AS libelle, "
+        "pr.montant AS montant, (pr.montant - pr.montant_regle) AS reste, "
+        "pr.date_acte AS date_ref, pr.statut AS statut "
+        "FROM prestations pr JOIN patients pt ON pt.id = pr.patient_id "
+        f"WHERE {acte_where}"
+    )
+    return sql, note_params + acte_params
+
+
+def list_creances(
+    conn: sqlite3.Connection,
+    search: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[Creance]:
+    """Creances a recouvrer (notes en attente + actes au reste positif), triees par
+    echeance/date (les plus urgentes d'abord, sans date en dernier)."""
+    union, params = _creances_union(search, date_from, date_to)
+    sql = (
+        f"SELECT * FROM ({union}) "
+        "ORDER BY date_ref IS NULL, date_ref, nature, source_id DESC"
+    )
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params = params + [limit, offset]
+    rows = conn.execute(sql, params).fetchall()
+    out: list[Creance] = []
+    for r in rows:
+        patient = Patient(
+            id=r["p_id"], nom=r["nom"], prenom=r["prenom"],
+            date_naissance=r["date_naissance"], email=r["email"],
+            telephone=r["telephone"], adresse=r["adresse"], notes=r["p_notes"],
+        )
+        out.append(Creance(
+            nature=r["nature"], source_id=r["source_id"], patient=patient,
+            libelle=r["libelle"], montant=float(r["montant"] or 0),
+            reste=float(r["reste"] or 0), date=r["date_ref"], statut=r["statut"],
+        ))
+    return out
+
+
+def count_creances(
+    conn: sqlite3.Connection, search: str = "", date_from: str = "", date_to: str = "",
+) -> int:
+    union, params = _creances_union(search, date_from, date_to)
+    row = conn.execute(f"SELECT COUNT(*) AS n FROM ({union})", params).fetchone()
+    return int(row["n"])
+
+
+def total_creances(
+    conn: sqlite3.Connection, search: str = "", date_from: str = "", date_to: str = "",
+) -> float:
+    """Total a recouvrer = somme des restes des deux sources (notes + actes)."""
+    union, params = _creances_union(search, date_from, date_to)
+    row = conn.execute(
+        f"SELECT COALESCE(SUM(reste), 0) AS total FROM ({union})", params
+    ).fetchone()
+    return float(row["total"] or 0)
+
+
+def total_encaisse(
+    conn: sqlite3.Connection, date_from: str = "", date_to: str = "",
+) -> float:
+    """Tresorerie REELLEMENT encaissee sur la periode : paiements encaisses (par
+    date_encaissement) + reglements d'actes (par date_reglement). Agrege les DEUX
+    sources pour les totaux « encaisse » de Finances et du tableau de bord (D7)."""
+    clauses_p: list[str] = []
+    params_p: list[Any] = []
+    if date_from.strip():
+        clauses_p.append("date(date_encaissement) >= ?")
+        params_p.append(date_from.strip())
+    if date_to.strip():
+        clauses_p.append("date(date_encaissement) <= ?")
+        params_p.append(date_to.strip())
+    where_p = " AND ".join(["statut = 'encaisse'"] + clauses_p)
+    row_p = conn.execute(
+        f"SELECT COALESCE(SUM(montant), 0) AS t FROM paiements WHERE {where_p}",
+        params_p,
+    ).fetchone()
+    clauses_r: list[str] = []
+    params_r: list[Any] = []
+    if date_from.strip():
+        clauses_r.append("date(date_reglement) >= ?")
+        params_r.append(date_from.strip())
+    if date_to.strip():
+        clauses_r.append("date(date_reglement) <= ?")
+        params_r.append(date_to.strip())
+    where_r = (" WHERE " + " AND ".join(clauses_r)) if clauses_r else ""
+    row_r = conn.execute(
+        f"SELECT COALESCE(SUM(montant), 0) AS t FROM prestation_reglements{where_r}",
+        params_r,
+    ).fetchone()
+    return float(row_p["t"] or 0) + float(row_r["t"] or 0)
+
+
+# --- Reglement global en cascade (D9 revise) ----------------------------------
+# Un versement unique est REPARTI automatiquement sur les creances du patient, du
+# PLUS ANCIEN au plus recent : d'abord les actes (paiement partiel via
+# prestation_reglements), puis (option) les notes en attente (soldees entierement,
+# car une note est binaire). Le reliquat non affectable est renvoye a l'appelant.
+
+def creances_patient(
+    conn: sqlite3.Connection, patient_id: int, include_notes: bool = True,
+) -> list[Creance]:
+    """Creances non soldees d'un patient, ORDONNEES pour la cascade (du plus ancien
+    au plus recent) : actes facturables au reste positif d'abord (par date d'acte),
+    puis, en option, les notes en attente (par echeance). Sert l'apercu et le total
+    du dialogue « Regler »."""
+    out: list[Creance] = []
+    p = get_patient(conn, patient_id)
+    if p is None:
+        return out
+    acts = conn.execute(
+        "SELECT * FROM prestations WHERE patient_id = ? AND montant > 0 "
+        "AND (montant - montant_regle) > 1e-9 "
+        "ORDER BY (date_acte IS NULL), date(date_acte), id",
+        (patient_id,),
+    ).fetchall()
+    for r in acts:
+        pres = _row_to_prestation(r)
+        out.append(Creance(
+            nature="acte", source_id=pres.id, patient=p, libelle=pres.libelle,
+            montant=float(pres.montant or 0), reste=pres.reste,
+            date=pres.date_acte, statut=pres.statut))
+    if include_notes:
+        notes = conn.execute(
+            "SELECT * FROM paiements WHERE patient_id = ? AND statut = 'en_attente' "
+            "ORDER BY (date_echeance IS NULL), date(date_echeance), id",
+            (patient_id,),
+        ).fetchall()
+        for r in notes:
+            pa = _row_to_paiement(r)
+            out.append(Creance(
+                nature="note", source_id=pa.id, patient=p,
+                libelle=(pa.notes or "Note d'honoraires"),
+                montant=float(pa.montant or 0), reste=float(pa.montant or 0),
+                date=pa.date_echeance, statut=pa.statut))
+    return out
+
+
+def regler_creances(
+    conn: sqlite3.Connection,
+    patient_id: int,
+    montant: float,
+    *,
+    mode: Optional[str] = None,
+    date_reglement: Optional[str] = None,
+    include_notes: bool = True,
+) -> dict:
+    """Repartit `montant` sur les creances du patient, du plus ancien au plus recent
+    (D9 revise) : actes en paiement partiel (prestation_reglements), puis (option)
+    notes soldees entierement. Une note ne peut PAS etre payee partiellement (binaire)
+    donc elle n'est soldee que si le reliquat la couvre entierement.
+
+    Renvoie {alloue, reste, lignes:[(nature, source_id, libelle, montant)]} ; `reste`
+    est le reliquat NON affecte (montant superieur aux creances solvables)."""
+    if montant is None or montant <= 0:
+        raise ValueError("Le montant a regler doit etre strictement superieur a 0.")
+    when = date_reglement or _now()
+    remaining = float(montant)
+    lignes: list[tuple] = []
+    for c in creances_patient(conn, patient_id, include_notes=include_notes):
+        if remaining <= 1e-9:
+            break
+        if c.nature == "acte":
+            pay = min(remaining, c.reste)
+            if pay <= 1e-9:
+                continue
+            add_prestation_reglement(conn, c.source_id, pay, mode=mode,
+                                     date_reglement=when)
+            remaining -= pay
+            lignes.append(("acte", c.source_id, c.libelle, pay))
+        else:  # note : binaire, soldee seulement si entierement couverte
+            if c.reste <= remaining + 1e-9:
+                mark_paiement_encaisse(conn, c.source_id, when=when, mode=mode)
+                remaining -= c.reste
+                lignes.append(("note", c.source_id, c.libelle, c.reste))
+    return {"alloue": float(montant) - remaining, "reste": max(0.0, remaining),
+            "lignes": lignes}
+
+
+# --- Historique unifie des encaissements d'un patient (fiche) -----------------
+# Bloc « Reglements » de la fiche : ce qui a ete REELLEMENT encaisse, actes et notes
+# confondus, synchronise avec les lignes d'actes (chaque versement d'acte y apparait).
+
+@dataclass
+class Encaissement:
+    nature: str            # 'acte' | 'note'
+    source_id: int         # prestation_id ou paiement id
+    libelle: str
+    montant: float
+    mode: Optional[str]
+    date: Optional[str]
+
+
+def list_encaissements_patient(
+    conn: sqlite3.Connection, patient_id: int,
+    limit: int | None = None, offset: int = 0,
+) -> list[Encaissement]:
+    """Encaissements d'un patient (recents d'abord) : versements d'actes
+    (prestation_reglements) + notes encaissees (paiements). Historique unifie."""
+    sql = (
+        "SELECT 'acte' AS nature, pr.id AS source_id, pr.libelle AS libelle, "
+        "reg.montant AS montant, reg.mode AS mode, reg.date_reglement AS date_ref "
+        "FROM prestation_reglements reg JOIN prestations pr ON pr.id = reg.prestation_id "
+        "WHERE pr.patient_id = ? "
+        "UNION ALL "
+        "SELECT 'note' AS nature, pa.id AS source_id, "
+        "COALESCE(NULLIF(pa.notes, ''), 'Note d''honoraires') AS libelle, "
+        "pa.montant AS montant, pa.mode AS mode, pa.date_encaissement AS date_ref "
+        "FROM paiements pa WHERE pa.patient_id = ? AND pa.statut = 'encaisse' "
+    )
+    sql = (f"SELECT * FROM ({sql}) "
+           "ORDER BY date_ref IS NULL, date(date_ref) DESC, source_id DESC")
+    params: list[Any] = [patient_id, patient_id]
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    rows = conn.execute(sql, params).fetchall()
+    return [Encaissement(
+        nature=r["nature"], source_id=r["source_id"], libelle=r["libelle"],
+        montant=float(r["montant"] or 0), mode=r["mode"], date=r["date_ref"],
+    ) for r in rows]
+
+
+def count_encaissements_patient(conn: sqlite3.Connection, patient_id: int) -> int:
+    row = conn.execute(
+        "SELECT (SELECT COUNT(*) FROM prestation_reglements reg "
+        "        JOIN prestations pr ON pr.id = reg.prestation_id "
+        "        WHERE pr.patient_id = ?) "
+        "     + (SELECT COUNT(*) FROM paiements "
+        "        WHERE patient_id = ? AND statut = 'encaisse') AS n",
+        (patient_id, patient_id),
+    ).fetchone()
+    return int(row["n"])
+
+
+def solde_patient(
+    conn: sqlite3.Connection, patient_id: int, include_notes: bool = True,
+) -> tuple[float, float, float]:
+    """(du, encaisse, reste) consolides d'un patient sur les actes (+ notes en
+    option) : du = total facture, encaisse = cumul regle + notes encaissees,
+    reste = du - encaisse (actes au reste + notes en attente)."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(montant), 0) AS du, "
+        "COALESCE(SUM(montant_regle), 0) AS enc FROM prestations WHERE patient_id = ?",
+        (patient_id,),
+    ).fetchone()
+    du = float(row["du"] or 0)
+    enc = float(row["enc"] or 0)
+    if include_notes:
+        rowp = conn.execute(
+            "SELECT COALESCE(SUM(montant), 0) AS du, "
+            "COALESCE(SUM(CASE WHEN statut = 'encaisse' THEN montant ELSE 0 END), 0) AS enc "
+            "FROM paiements WHERE patient_id = ?",
+            (patient_id,),
+        ).fetchone()
+        du += float(rowp["du"] or 0)
+        enc += float(rowp["enc"] or 0)
+    return du, enc, max(0.0, du - enc)

@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 11
 
 
 class SchemaTooNewError(RuntimeError):
@@ -145,14 +145,22 @@ CREATE TABLE IF NOT EXISTS job_items (
 
 CREATE INDEX IF NOT EXISTS idx_job_items_job ON job_items(job_id);
 
+-- v11 : `patient_id` rattache un evenement a une fiche (NULL = evenement global,
+-- ex. demarrage) et `detail` heberge desormais un JSON structure. Pas de FK sur
+-- `patient_id` : log_audit reste best-effort et certaines lignes sont globales ou
+-- anterieures (NULL). Voir openspec/changes/refonte-fiche-patient.
 CREATE TABLE IF NOT EXISTS audit_log (
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts      TEXT NOT NULL DEFAULT (datetime('now')),
-    action  TEXT NOT NULL,
-    detail  TEXT
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL DEFAULT (datetime('now')),
+    action      TEXT NOT NULL,
+    detail      TEXT,
+    patient_id  INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
+-- idx_audit_patient est cree dans _migrate(), APRES l'ajout de la colonne
+-- patient_id : sur une base anterieure, audit_log existe deja sans cette colonne,
+-- donc le CREATE INDEX ne peut pas s'executer ici (avant l'ALTER).
 
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
@@ -272,6 +280,61 @@ CREATE TABLE IF NOT EXISTS actes (
 
 CREATE INDEX IF NOT EXISTS idx_actes_slug ON actes(slug_libelle);
 CREATE INDEX IF NOT EXISTS idx_actes_actif ON actes(actif);
+
+-- v10 : plans de traitement (regroupement nomme d'actes d'un patient), actes
+-- realises (`prestations` : du + reglement partiel, calque de `depenses`) et
+-- historique des reglements d'actes. Evolution PUREMENT ADDITIVE : trois tables
+-- neuves creees par _SCHEMA ; `paiements` / `documents` ne sont PAS touchees.
+-- `prestations.plan_id` est nullable (acte ISOLE = sans plan) avec
+-- `ON DELETE SET NULL` : supprimer un plan DETACHE ses actes (ils deviennent
+-- isoles) au lieu de les detruire (D8). PAS de colonne `type` : un controle est
+-- un acte a montant nul (D5, non facturable derive). Le prix est un SNAPSHOT
+-- recopie depuis le referentiel d'actes (D3). Voir
+-- openspec/changes/plans-de-traitement.
+CREATE TABLE IF NOT EXISTS plans_traitement (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    patient_id  INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+    titre       TEXT NOT NULL,
+    notes       TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_plans_patient ON plans_traitement(patient_id);
+
+-- Acte realise sur un patient : porte a la fois le DU (`montant`) et le PAIEMENT
+-- (`montant_regle` cumul, `statut`, reste derive) — calque de `depenses`.
+CREATE TABLE IF NOT EXISTS prestations (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    patient_id     INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+    plan_id        INTEGER REFERENCES plans_traitement(id) ON DELETE SET NULL,
+    acte_id        INTEGER,
+    libelle        TEXT NOT NULL,
+    montant        REAL NOT NULL DEFAULT 0,
+    montant_regle  REAL NOT NULL DEFAULT 0,
+    statut         TEXT NOT NULL DEFAULT 'en_attente',  -- en_attente | regle_partiellement | regle
+    date_acte      TEXT,
+    dents          TEXT,
+    note           TEXT,
+    sort_order     INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_prestations_patient ON prestations(patient_id);
+CREATE INDEX IF NOT EXISTS idx_prestations_plan ON prestations(plan_id);
+
+-- Historique des reglements d'un acte (1 ligne par versement, datee) : calque de
+-- `depense_reglements`. `prestations.montant_regle` reste le cumul (source du solde).
+CREATE TABLE IF NOT EXISTS prestation_reglements (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    prestation_id   INTEGER NOT NULL REFERENCES prestations(id) ON DELETE CASCADE,
+    montant         REAL NOT NULL,
+    mode            TEXT,
+    date_reglement  TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_prestation_reglements_prestation ON prestation_reglements(prestation_id);
+CREATE INDEX IF NOT EXISTS idx_prestation_reglements_date ON prestation_reglements(date_reglement);
 """
 
 
@@ -398,6 +461,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # neuve et entierement creee par _SCHEMA (CREATE TABLE IF NOT EXISTS). Le bump
     # de SCHEMA_VERSION 8 -> 9 declenche a lui seul le snapshot pre-migration dans
     # connect() pour toute base ouverte en v8 (cf. _snapshot_before_migration).
+    # v10 : plans de traitement / prestations / prestation_reglements. Aucune
+    # transformation ici : les trois tables sont neuves et entierement creees par
+    # _SCHEMA (CREATE TABLE IF NOT EXISTS) ; `paiements` / `documents` ne sont pas
+    # touchees. Le bump SCHEMA_VERSION 9 -> 10 declenche a lui seul le snapshot
+    # pre-migration dans connect() pour toute base ouverte en v9.
+    # v11 : journal d'audit par patient. Colonne additive nullable `patient_id`
+    # (sans FK) + index de lecture par patient. Idempotent (garde _column_exists,
+    # index IF NOT EXISTS). Les anciennes lignes gardent patient_id NULL et un
+    # `detail` texte libre (toleres a la lecture, cf. repo.parse_audit_detail). Le
+    # bump SCHEMA_VERSION 10 -> 11 declenche le snapshot pre-migration dans connect().
+    if not _column_exists(conn, "audit_log", "patient_id"):
+        conn.execute("ALTER TABLE audit_log ADD COLUMN patient_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_patient ON audit_log(patient_id, id DESC)"
+    )
 
 
 def _set_version(conn: sqlite3.Connection) -> None:
