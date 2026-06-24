@@ -1,0 +1,6 @@
+# Rust / Tauri build artifacts
+/target
+/gen/schemas
+
+# Binaire sidecar copié au build (généré par PyInstaller, renommé avec le triple)
+/binaries

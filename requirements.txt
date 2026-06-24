@@ -7,3 +7,9 @@ pyinstaller>=6.0
 
 # Interface graphique du CRM (crm_app.py / crm_web.py)
 flet>=0.28
+
+# Backend de services (sidecar) de l'UI React — cf. crm/server.py.
+# Reutilise le moteur (src/ + crm/ hors app.py) via une facade HTTP localhost.
+# SSE des operations longues : implemente avec StreamingResponse (pas de dep en plus).
+fastapi>=0.110
+uvicorn>=0.29

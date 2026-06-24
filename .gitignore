@@ -4,6 +4,7 @@ __pycache__/
 # ...sauf les specs de build du CRM (necessaires a build-crm.bat)
 !crm-desktop.spec
 !crm-web.spec
+!crm-server.spec
 build/
 dist/
 .venv/
