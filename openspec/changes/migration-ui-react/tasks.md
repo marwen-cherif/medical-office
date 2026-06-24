@@ -78,4 +78,27 @@
 - [ ] 6.1 **Recette de parité** de Paramétrage contre Flet (référentiel `cartographie.md` de
       l'étude) sur une **vraie DB** copiée de `backups/`
 - [ ] 6.2 Mesurer la **latence ressentie** des listes et acter le **seuil de recette**
-- [ ] 6.3 Acter le **go/no-go intermédiaire** avant le portage des écrans denses (Patients, …)
+- [x] 6.3 Acter le **go/no-go intermédiaire** avant le portage des écrans denses (Patients, …)
+      → **GO** : la chaîne pilote valide l'architecture, on enchaîne sur les écrans denses (§7).
+
+## 7. Migration des écrans denses (mirroir complet Flet → React)
+
+> Backend : nouveaux routeurs `crm/routers/*` (patients, clinical, documents, finances,
+> prestataires, jobs, dashboard) inclus dans `app` via `register_all` — moteur réutilisé sans
+> modification. Frontend : `ui/src/screens/*` + hooks `ui/src/hooks/*` + composants partagés.
+> Client TS régénéré (`openapi.json` → `schema.d.ts`). `tsc -b` et `vite build` passent ; chaîne
+> HTTP (auth, lectures, écritures) vérifiée contre une vraie DB.
+
+- [x] 7.1 **Backend façade complète** : 67 routes couvrant patients/fiche, plans &
+      prestations, règlements (acte + cascade), notes/paiements, encaissements, historique,
+      documents & génération (mono + multi-lignes, brouillon, rendu/impression/envoi/statut
+      Mailjet en SSE), finances (paiements/créances + dépenses), prestataires (+ factures
+      upload + dépenses), jobs (lots + détail + relance), tableau de bord
+- [x] 7.2 **Tableau de bord** : KPI + graphiques (donuts SVG) + répartition documents + activité
+- [x] 7.3 **Patients** : liste (recherche/filtre/pagination, anti-doublon) + **fiche** (4 onglets :
+      Plans & actes, Documents, Règlements, Historique) avec **odontogramme** et **génération**
+- [x] 7.4 **Finances** : onglets Paiements/créances et Dépenses (filtres période/statut, totaux)
+- [x] 7.5 **Prestataires** : liste + fiche (factures importées, dépenses, règlements)
+- [x] 7.6 **Travaux** : documents (filtres + lots génération/envoi) et jobs (liste + détail + relance)
+- [ ] 7.7 **Recette manuelle Windows + Word** : génération/impression/envoi réels, parité globale
+      contre Flet sur une vraie DB, puis **retrait de Flet** (incrément ultérieur)

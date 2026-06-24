@@ -12,14 +12,14 @@ import { cn } from "@/lib/utils";
 
 type NavItem = { to: string; label: string; icon: LucideIcon; enabled: boolean };
 
-// Reprend la navigation de l'app Flet. Seul « Paramétrage » est porté dans ce
-// pilote ; les autres écrans (à venir) sont affichés mais désactivés.
+// Reprend la navigation (et l'ordre) de l'app Flet : Tableau, Patients,
+// Prestataires, Finances, Travaux, Paramétrage.
 const ITEMS: NavItem[] = [
-  { to: "/tableau-de-bord", label: "Tableau de bord", icon: LayoutDashboard, enabled: false },
-  { to: "/patients", label: "Patients", icon: Users, enabled: false },
-  { to: "/finances", label: "Finances", icon: Wallet, enabled: false },
-  { to: "/travaux", label: "Travaux", icon: Briefcase, enabled: false },
-  { to: "/prestataires", label: "Prestataires", icon: Truck, enabled: false },
+  { to: "/tableau-de-bord", label: "Tableau de bord", icon: LayoutDashboard, enabled: true },
+  { to: "/patients", label: "Patients", icon: Users, enabled: true },
+  { to: "/prestataires", label: "Prestataires", icon: Truck, enabled: true },
+  { to: "/finances", label: "Finances", icon: Wallet, enabled: true },
+  { to: "/travaux", label: "Travaux", icon: Briefcase, enabled: true },
   { to: "/parametrage", label: "Paramétrage", icon: Settings, enabled: true },
 ];
 

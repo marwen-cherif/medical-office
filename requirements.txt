@@ -13,3 +13,4 @@ flet>=0.28
 # SSE des operations longues : implemente avec StreamingResponse (pas de dep en plus).
 fastapi>=0.110
 uvicorn>=0.29
+python-multipart>=0.0.9   # upload des factures fournisseurs (UploadFile/Form)

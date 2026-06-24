@@ -6,3 +6,6 @@ dist-ssr
 
 # Tauri (Rust) build artifacts
 src-tauri/target
+
+# Captures d'ecran de verification visuelle (generees par shot.mjs)
+.shots/

@@ -6,9 +6,12 @@ de l'interface, qui **reutilise le moteur existant** (`src/` + `crm/` hors `app.
 ici : les routes ne font qu'appeler `crm/repo.py`, `crm/templates.py`,
 `crm/printing.py`, etc. et serialiser le resultat en JSON.
 
-Perimetre de cet increment (walking skeleton) : l'ecran **Parametrage** (modeles de
-documents, modeles d'email, imprimante, catalogue d'actes). Les autres ecrans
-(Patients, Finances, ...) seront ajoutes par increments ulterieurs.
+Perimetre : la facade couvre desormais **tous les ecrans** du CRM. Les routes de
+**Parametrage** (modeles de documents, modeles d'email, imprimante, catalogue
+d'actes) sont definies dans ce module ; les autres domaines (Patients & fiche,
+clinique/plans/actes, Documents & generation, Finances, Prestataires, Travaux/jobs,
+Tableau de bord) sont portes par les routeurs `crm/routers/*`, inclus en bas de ce
+module via `register_all(app)`.
 
 Invariants preserves (cf. CLAUDE.md), tous portes par le backend Python inchange :
   - Windows + Word COM pour la generation (hors perimetre du pilote, mais la
@@ -861,6 +864,19 @@ async def events(job_id: str):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# =============================================================================
+# Routeurs de domaine (Patients, fiche, Documents, Finances, Prestataires,
+# Travaux, Tableau de bord). Enregistres ICI, en bas du module : toute l'infra
+# partagee (db, submit_job, ApiError, _err_from_engine, codes d'erreur, OkOut,
+# JobAcceptedOut) est deja definie, donc les routeurs peuvent l'importer sans
+# cycle. L'ecran Parametrage (routes ci-dessus) reste inchange.
+# =============================================================================
+
+from .routers import register_all  # noqa: E402
+
+register_all(app)
 
 
 # =============================================================================
