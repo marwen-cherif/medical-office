@@ -140,6 +140,54 @@ Templates use literal `<UPPERCASE_TAG>` markers (regex `<([A-Z0-9_]+)>` in
 template, adding derived tags (e.g. ISO dates, gross amount). `format_montant`
 (`src/doc_filler.py`) formats amounts in French style (space thousands, comma decimal).
 
+### Notes d'honoraires multi-lignes (capability `facturation-multi-lignes`)
+
+Une **note d'honoraires** peut regrouper **plusieurs actes** (isolés + plans), existants ou
+**ajoutés à la volée**, dans un seul document, à partir d'un **contrat de variables standard
+fixe** (« à la Mailjet ») — **aucune** configuration de colonnes par modèle. Un modèle est une
+« note multi-lignes » dès qu'il contient **≥ 1 balise de ligne `<L_*>`** ; sinon il reste
+« simple » (rendu mono-valeur inchangé). La détection se fait par
+`src.doc_filler.classify_placeholders` → `(balises_document, balises_de_ligne)`.
+
+**Contrat de balises** (toujours fourni au modèle ; l'auteur choisit lesquelles afficher) :
+
+- **Balises document** (remplies une fois) : patient `<NOM> <PRENOM> <EMAIL> <TELEPHONE>
+  <ADRESSE> <DATE_NAISSANCE>` ; émission `<DATE>` (défaut = aujourd'hui) ; totaux
+  **calculés** `<TOTAL_DU> <TOTAL_REGLE> <RESTE_A_PAYER> <NB_ACTES>` (+ alias `<TOTAL>` =
+  `<TOTAL_DU>`).
+- **Balises de ligne** (préfixe `L_`, **répétées par ligne**) : `<L_DATE> <L_ACTE>
+  <L_DENTS> <L_NOTE> <L_MONTANT> <L_REGLE> <L_RESTE>`.
+
+**Convention d'écriture du `.docx`** : placer les `<L_*>` dans **une seule ligne de tableau**
+(la « ligne-modèle ») ; les balises document vont ailleurs (paragraphes ou autres lignes du
+tableau, ex. une ligne de totaux). À la génération, `expand_table_rows` (`src/doc_filler.py`)
+**duplique** la ligne-modèle une fois par ligne retenue (clonage `w:tr` par `deepcopy` → mise
+en forme préservée) et la remplit via le `_replace_in_para_elem` réutilisé ; la ligne-modèle
+d'origine est retirée (0 ligne ⇒ tableau sans ligne de données). **Non supporté** : plusieurs
+lignes-modèles, cellules fusionnées verticalement, tableau imbriqué dans la ligne-modèle
+(erreur explicite). `extract_placeholders`/`_fill_docx` traversent désormais aussi les
+**cellules de tableau** (indispensable pour les `<L_*>` et une ligne de totaux `<TOTAL_DU>`).
+
+**Ajout d'actes depuis la note** : l'UI réutilise la carte d'acte (`_acte_card`, avec
+odontogramme) pour saisir de **nouveaux actes** ; ils sont **créés comme actes isolés**
+(`repo.create_prestation`, `plan_id=NULL`) à l'enregistrement (brouillon/génération) — donc
+**suivis dans la dette** et **visibles dans l'onglet Actes**. Pas de « ligne libre » non
+tracée. La création est idempotente (ré-essai ⇒ mise à jour via `pres_id`, pas de doublon).
+
+**Côté données / règles** : `crm/generator.py` projette chaque acte (`repo.Prestation`) en
+ligne **brute** `{ source, prestation_id?, date, acte, dents, note, montant, regle }`,
+sérialisée sous la **clé réservée `__lignes__`** de `documents.variables` (JSON, **aucune
+migration de schéma**) ; totaux et formats sont **recalculés au rendu**, jamais stockés.
+`documents.montant` reçoit le total **uniquement** pour l'affichage/email — **jamais comme
+créance** : conformément à « source unique du dû » (`plans-de-traitement`), générer une note
+**ne crée aucun paiement** (le dû éventuel est porté par les actes créés, pas par la note). `documents.acte_date` = 1re date des lignes (nom de fichier
+stable) ; `documents.acte` = résumé court. Les documents sans `__lignes__` se chargent/rendent
+comme avant (compat ascendante).
+
+> **Abandon vs conception initiale** : pas d'**évaluateur de formules** (`src/formula.py` non
+> créé) — les totaux sont calculés en Python ; pas de migration `template_fields.scope/
+> expression` ni de **configuration de colonnes par modèle** — le contrat de variables est fixe.
+
 ## Data preservation across releases (READ before any schema/DB change)
 
 The app ships as a replaceable `.exe`; the user's real data lives **next to it** and must

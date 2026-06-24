@@ -9,6 +9,7 @@ from __future__ import annotations
 import calendar
 import json
 import math
+import re
 import sqlite3
 import sys
 import threading
@@ -21,7 +22,7 @@ from typing import Callable
 import flet as ft
 from flet import canvas as cv
 
-from src.doc_filler import extract_placeholders
+from src.doc_filler import classify_placeholders, extract_placeholders
 
 from . import backup, generator, print_settings, printing, repo, templates, version
 from .db import SchemaTooNewError, connect
@@ -2645,9 +2646,99 @@ class CrmApp:
             chip, self._actions_menu(actions, tooltip="Actions de l'acte"),
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
+    def _odontogramme(self, *, is_selected, on_toggle,
+                      denture: str = "adulte") -> types.SimpleNamespace:
+        """Odontogramme cliquable (capability `selection-dents`).
+
+        Grille de dents FDI en croix (maxillaire en haut, mandibulaire en bas ;
+        côté DROIT du patient à gauche de l'écran — vue « face au patient »),
+        avec bascule denture adulte (permanentes) / enfant (temporaires).
+        Composant 100 % Flet : rendu et clics identiques en desktop et en web.
+
+        Paramètres :
+          is_selected(num) -> bool : la dent `num` est-elle retenue ?
+          on_toggle(num)           : bascule la dent `num` (appelé au clic).
+          denture                  : « adulte » | « enfant » affichée au départ.
+
+        La SÉLECTION reste portée par l'appelant (source de vérité unique) ; ce
+        composant n'en est qu'une vue. Renvoie un handle : `.control`,
+        `.refresh()` (re-rend selon la sélection) et `.set_denture(d)`."""
+        state = {"denture": denture if denture in ("adulte", "enfant") else "adulte"}
+        grid = ft.Column([], tight=True, spacing=4)
+
+        def _tooth(num: str) -> ft.Control:
+            sel = is_selected(num)
+            # Le numéro FDI reste TOUJOURS visible (sélectionnée ou non) ; la
+            # sélection se distingue par le fond NAVY et le texte blanc.
+            return ft.Container(
+                ft.Text(num, size=11, text_align=ft.TextAlign.CENTER,
+                        weight=ft.FontWeight.BOLD, color=SURFACE if sel else NAVY),
+                width=30, height=30, alignment=ft.Alignment.CENTER,
+                border_radius=6, ink=True,
+                bgcolor=NAVY if sel else ft.Colors.with_opacity(0.08, NAVY),
+                border=ft.Border.all(1, TEAL_DARK if sel else BORDER),
+                tooltip=f"Dent {num}",
+                on_click=lambda e, n=num: on_toggle(n))
+
+        def _arcade(nums: list[str]) -> ft.Row:
+            # Petit espace central marquant la ligne médiane entre les deux côtés.
+            cells: list[ft.Control] = []
+            half = len(nums) // 2
+            for i, n in enumerate(nums):
+                if i == half:
+                    cells.append(ft.Container(width=10))
+                cells.append(_tooth(n))
+            return ft.Row(cells, spacing=2, tight=True,
+                          alignment=ft.MainAxisAlignment.CENTER)
+
+        def refresh(e=None):
+            q = (repo.DENTS_TEMPORAIRES if state["denture"] == "enfant"
+                 else repo.DENTS_PERMANENTES)
+            qd = (5, 6, 7, 8) if state["denture"] == "enfant" else (1, 2, 3, 4)
+            # Haut : quadrant droit (inversé, 8→1 vers la médiane) puis gauche ;
+            # Bas : quadrant droit (inversé) puis gauche.
+            top = list(reversed(q[qd[0]])) + list(q[qd[1]])
+            bottom = list(reversed(q[qd[3]])) + list(q[qd[2]])
+            grid.controls = [_arcade(top), _arcade(bottom)]
+            self.page.update()
+
+        btn_adulte = ft.TextButton("Adulte", on_click=lambda e: set_denture("adulte"))
+        btn_enfant = ft.TextButton("Enfant", on_click=lambda e: set_denture("enfant"))
+
+        def _render_switch():
+            for b, key in ((btn_adulte, "adulte"), (btn_enfant, "enfant")):
+                on = state["denture"] == key
+                b.style = ft.ButtonStyle(
+                    bgcolor=NAVY if on else ft.Colors.with_opacity(0.06, NAVY),
+                    color=SURFACE if on else NAVY)
+
+        def set_denture(d: str):
+            if d in ("adulte", "enfant") and d != state["denture"]:
+                state["denture"] = d
+                _render_switch()
+                refresh()
+
+        _render_switch()
+        refresh()
+        control = ft.Container(
+            ft.Column([
+                ft.Row([
+                    ft.Text("Schéma dentaire", size=12, color=MUTED,
+                            weight=ft.FontWeight.BOLD),
+                    ft.Container(expand=True), btn_adulte, btn_enfant,
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                grid,
+            ], tight=True, spacing=6),
+            padding=8, border_radius=8, border=ft.Border.all(1, BORDER),
+            bgcolor=ft.Colors.with_opacity(0.4, BG))
+        return types.SimpleNamespace(
+            control=control, refresh=refresh, set_denture=set_denture,
+            denture=lambda: state["denture"])
+
     def _acte_card(self, *, pres: "repo.Prestation | None" = None,
                    actes: "list[repo.Acte] | None" = None,
                    on_change=None, on_remove=None,
+                   date_naissance: "str | None" = None,
                    removable: bool = True) -> types.SimpleNamespace:
         """Composant reutilisable « carte acte » (3.4) : selecteur referentiel qui
         pre-remplit libelle+prix (modifiables), date, dents (chips) et note. Sert le
@@ -2697,40 +2788,57 @@ class CrmApp:
         note = ft.TextField(label="Note (optionnelle)", value=(pres.note if pres else ""),
                             multiline=True, min_lines=1, max_lines=3)
 
+        # `dents_list` = SOURCE DE VÉRITÉ unique de la sélection ; le champ (ajout)
+        # et l'odontogramme (affichage + sélection) en sont les deux vues. Pas de
+        # chips dans le formulaire : la sélection est lue/modifiée sur le schéma.
         dents_list = [d for d in repo.normalize_dents(pres.dents if pres else "").split(", ")
                       if d]
-        chips_row = ft.Row([], wrap=True, spacing=6, run_spacing=6)
         dent_input = ft.TextField(
             label="Dents (FDI)", expand=True,
-            hint_text="une ou plusieurs, séparées par des virgules — ex. 26, 27")
+            hint_text="dictez ou tapez plusieurs dents, puis Entrée pour les ajouter")
 
-        def render_chips():
-            chips: list[ft.Control] = []
-            for d in list(dents_list):
-                chips.append(ft.Container(
-                    ft.Row([
-                        ft.Text(d, size=12, color=TEAL_DARK),
-                        ft.IconButton(ft.Icons.CLOSE, icon_size=14, icon_color=TEAL_DARK,
-                                      tooltip="Retirer",
-                                      on_click=lambda e, val=d: (dents_list.remove(val)
-                                                                 if val in dents_list else None,
-                                                                 render_chips())),
-                    ], tight=True, spacing=0),
-                    bgcolor=ft.Colors.with_opacity(0.14, TEAL_DARK),
-                    padding=ft.Padding.only(left=10, right=2, top=0, bottom=0),
-                    border_radius=14))
-            chips_row.controls = chips
-            self.page.update()
+        # Odontogramme : denture par défaut dérivée de l'âge (adulte si naissance
+        # inconnue) ; clic = toggle de la dent dans `dents_list`.
+        odonto = self._odontogramme(
+            is_selected=lambda n: n in dents_list,
+            on_toggle=lambda n: toggle_dent(n),
+            denture=repo.denture_par_defaut(date_naissance))
 
-        def add_dent(e=None):
-            for d in [x.strip() for x in repo.normalize_dents(dent_input.value).split(",")
-                      if x.strip()]:
-                if d not in dents_list:
-                    dents_list.append(d)
+        def sync():
+            """Re-rend l'odontogramme depuis `dents_list`."""
+            odonto.refresh()
+
+        def toggle_dent(num: str):
+            if num in dents_list:
+                dents_list.remove(num)
+            else:
+                dents_list.append(num)
+            sync()
+
+        def add_dents_from_input(e=None):
+            """Ajoute en bloc toutes les dents saisies/dictées dans le champ.
+
+            On dicte ou tape plusieurs numéros enchaînés (séparés par espace,
+            virgule, point-virgule ou saut de ligne) puis Entrée les ajoute tous
+            d'un coup et vide le champ. Déclenché aussi par le bouton « + » et la
+            perte de focus (filet de sécurité), jamais au fil de la frappe."""
+            raw = (dent_input.value or "").strip()
+            if not raw:
+                return
+            tokens = [t for t in re.split(r"[,\s;]+", raw) if t]
             dent_input.value = ""
-            render_chips()
-        dent_input.on_submit = add_dent
-        render_chips()
+            added = False
+            for t in tokens:
+                if t not in dents_list:
+                    dents_list.append(t)
+                    added = True
+            if added:
+                sync()                # re-surligne les dents sur l'odontogramme
+            else:
+                self.page.update()    # vide le champ même si tout était doublon
+
+        dent_input.on_blur = add_dents_from_input
+        dent_input.on_submit = add_dents_from_input
 
         del_btn = (ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=RED,
                                  tooltip="Retirer cet acte",
@@ -2743,9 +2851,10 @@ class CrmApp:
             date_row,
             ft.Row([dent_input,
                     ft.IconButton(ft.Icons.ADD, icon_color=NAVY,
-                                  tooltip="Ajouter la dent", on_click=add_dent)],
+                                  tooltip="Ajouter les dents saisies",
+                                  on_click=add_dents_from_input)],
                    spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            chips_row,
+            odonto.control,
             note,
         ], tight=True, spacing=8), padding=12)
 
@@ -2806,7 +2915,8 @@ class CrmApp:
 
         def add_card(pres=None):
             h = self._acte_card(pres=pres, actes=actes,
-                                on_change=recompute, on_remove=remove_card)
+                                on_change=recompute, on_remove=remove_card,
+                                date_naissance=p.date_naissance)
             cards.append(h)
             cards_col.controls = [c.control for c in cards]
             recompute()
@@ -2907,7 +3017,8 @@ class CrmApp:
         is_edit = pres is not None
         actes = repo.list_actes(self.conn)
         plans = repo.list_plans(self.conn, p.id)
-        card = self._acte_card(pres=pres, actes=actes, removable=False)
+        card = self._acte_card(pres=pres, actes=actes, removable=False,
+                               date_naissance=p.date_naissance)
         init_plan = (str(pres.plan_id) if (pres and pres.plan_id)
                      else (str(plan_id) if plan_id else ""))
         plan_dd = ft.Dropdown(
@@ -5112,6 +5223,148 @@ class CrmApp:
             out.append(TemplateField(template.name, tag, _humanize(tag), _guess_type(tag), ""))
         return out
 
+    def _is_multiline_template(self, template: templates.Template) -> bool:
+        """Vrai si le modèle est une « note multi-lignes » (≥ 1 balise de ligne <L_*>)."""
+        try:
+            _, line_tags = classify_placeholders(template.path)
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(line_tags)
+
+    def _multiline_fields(self, p: Patient, saved_lignes: "list[dict] | None"):
+        """Éditeur « note multi-lignes » : sélection des actes existants du patient
+        (groupés, pré-cochés) + ajout de **nouveaux actes isolés** via le même
+        formulaire que l'ajout d'acte (carte avec référentiel + odontogramme). Renvoie
+        `(control, commit, recap)` ; `commit()` **crée** en base les nouveaux actes
+        isolés (donc tracés dans la dette et visibles dans l'onglet Actes) et renvoie
+        les lignes BRUTES retenues. Le total est recalculé en direct.
+
+        `saved_lignes` (reprise d'un brouillon) restitue la (dé)sélection des actes ;
+        None ⇒ création (tous les actes existants pré-cochés). Ordre déterministe :
+        actes isolés, puis par plan, puis les nouveaux actes saisis.
+        """
+        has_saved = saved_lignes is not None
+        saved = saved_lignes or []
+        saved_acte_ids = {l.get("prestation_id") for l in saved if l.get("source") == "acte"}
+
+        actes_ref = repo.list_actes(self.conn)  # référentiel pour pré-remplir les cartes
+        isoles = repo.list_prestations(self.conn, p.id, plan_id=None)
+        plans = repo.list_plans(self.conn, p.id)
+        plan_groups = [(pl, repo.list_prestations(self.conn, p.id, plan_id=pl.id))
+                       for pl in plans]
+
+        acte_state: list = []  # [(checkbox, prestation)] dans l'ordre d'affichage
+        cards: list = []       # handles _acte_card (nouveaux actes isolés à créer)
+        cards_col = ft.Column([], tight=True, spacing=10)
+        count_text = ft.Text("0 ligne(s) retenue(s)", color=MUTED, size=12)
+        # Récapitulatif rempli via _money_summary (même carte que la fiche patient,
+        # fond blanc) ; placé en bas du dialogue par _generate_dialog.
+        recap_holder = ft.Container()
+
+        def refresh_total():
+            du = sum((pres.montant or 0) for cb, pres in acte_state if cb.value)
+            regle = sum((pres.montant_regle or 0) for cb, pres in acte_state if cb.value)
+            nb = sum(1 for cb, _ in acte_state if cb.value)
+            for c in cards:
+                if not c.blank():
+                    du += c.montant()
+                    nb += 1  # un nouvel acte = réglé 0
+            reste = du - regle
+            count_text.value = f"{nb} ligne(s) retenue(s)"
+            recap_holder.content = self._money_summary([
+                ("Total dû", du, TEXT),
+                ("Réglé", regle, GREEN),
+                ("Reste à payer", reste, AMBER),
+            ])
+            self.page.update()
+
+        def acte_row(pres) -> ft.Control:
+            checked = (pres.id in saved_acte_ids) if has_saved else True
+            cb = ft.Checkbox(value=checked, on_change=lambda e: refresh_total())
+            acte_state.append((cb, pres))
+            bits = [b for b in [generator._ligne_date_fr(pres.date_acte), pres.libelle,
+                                generator.format_montant(pres.montant or 0)] if b]
+            label = "  ·  ".join(bits)
+            if pres.reste and abs(pres.reste - (pres.montant or 0)) > 1e-9:
+                label += f"  (reste {generator.format_montant(pres.reste)})"
+            return ft.Row([cb, ft.Text(label, color=TEXT, expand=True)],
+                          vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=4)
+
+        groups: list[ft.Control] = []
+
+        def add_group(title: str, pres_list: list):
+            if not pres_list:
+                return
+            groups.append(ft.Text(f"{title} ({len(pres_list)})", color=NAVY,
+                                  weight=ft.FontWeight.BOLD, size=12))
+            for pres in pres_list:
+                groups.append(acte_row(pres))
+
+        add_group("Actes isolés", isoles)
+        for pl, pres_list in plan_groups:
+            add_group(pl.titre, pres_list)
+        if not acte_state:
+            groups.append(ft.Text("Aucun acte existant pour ce patient.",
+                                  color=MUTED, size=12))
+
+        # --- Nouveaux actes isolés (réutilise la carte d'ajout d'acte) -----------
+        def remove_card(h):
+            if h in cards:
+                cards.remove(h)
+                cards_col.controls = [c.control for c in cards]
+                refresh_total()
+
+        def add_card(e=None):
+            h = self._acte_card(actes=actes_ref, on_change=refresh_total,
+                                on_remove=remove_card, date_naissance=p.date_naissance)
+            cards.append(h)
+            cards_col.controls = [c.control for c in cards]
+            self.page.update()
+            refresh_total()
+
+        def commit() -> list:
+            """Crée les nouveaux actes isolés (plan_id=NULL) et renvoie les lignes
+            brutes retenues (actes cochés + actes créés). Lève ValueError si une carte
+            est invalide (AVANT toute création). Idempotent en cas de re-tentative :
+            une carte déjà créée (pres_id) est mise à jour, pas dupliquée."""
+            process = [c for c in cards if not c.blank()]
+            data = [c.read() for c in process]  # valide tout d'abord (peut lever)
+            lignes = [generator.prestation_to_ligne(pres)
+                      for cb, pres in acte_state if cb.value]
+            for c, d in zip(process, data):
+                if getattr(c, "pres_id", None):  # déjà créé (re-tentative) : mise à jour
+                    repo.update_prestation(
+                        self.conn, c.pres_id, libelle=d["libelle"], montant=d["montant"],
+                        plan_id=None, acte_id=d["acte_id"], date_acte=d["date_acte"],
+                        dents=d["dents"], note=d["note"])
+                    pres = repo.get_prestation(self.conn, c.pres_id)
+                else:
+                    pres = repo.create_prestation(
+                        self.conn, p.id, d["libelle"], d["montant"], plan_id=None,
+                        acte_id=d["acte_id"], date_acte=d["date_acte"],
+                        dents=d["dents"], note=d["note"])
+                    c.pres_id = pres.id
+                    repo.log_audit(self.conn, "acte_cree",
+                                   {"prestation_id": pres.id, "libelle": pres.libelle,
+                                    "origine": "note_honoraires"}, patient_id=p.id)
+                lignes.append(generator.prestation_to_ligne(pres))
+            return lignes
+
+        control = ft.Column([
+            ft.Text("Actes à facturer", color=TEXT, weight=ft.FontWeight.BOLD),
+            ft.Column(groups, tight=True, spacing=4),
+            ft.Divider(height=8),
+            ft.Row([ft.Text("Nouveaux actes", color=TEXT, weight=ft.FontWeight.BOLD),
+                    ft.Container(expand=True), count_text],
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Text("Créés comme actes isolés (suivis dans la dette, visibles dans "
+                    "l'onglet Actes).", color=MUTED, size=11),
+            cards_col,
+            ft.TextButton("+ Ajouter un acte", icon=ft.Icons.ADD, on_click=add_card),
+        ], tight=True, spacing=8)
+        refresh_total()
+        return control, commit, recap_holder
+
     def _generate_dialog(self, p: Patient, draft: Document | None = None,
                          category: str | None = None) -> None:
         """Génère un document (brouillon → Word → JPG/PDF). Ne crée **plus aucun
@@ -5165,12 +5418,29 @@ class CrmApp:
                           options=[ft.dropdown.Option("jpg"), ft.dropdown.Option("pdf")])
         status = ft.Text("", color=RED, size=12)
         fields_col = ft.Column([], tight=True, spacing=10)
+        # Récap multi-lignes : placé tout en bas du dialogue (rempli par build_fields).
+        recap_col = ft.Column([], tight=True)
         getters: dict[str, callable] = {}
+        ml_commit = None  # défini par build_fields si le modèle est multi-lignes
 
         def build_fields():
             getters.clear()
+            nonlocal ml_commit
+            ml_commit = None
+            recap_col.controls = []
             controls = []
             tpl = templates.get_template(tpl_dd.value)
+            # Modèle « note multi-lignes » (≥ 1 balise <L_*>) : éditeur d'actes
+            # (sélection + ajout d'actes isolés), au lieu du formulaire mono-valeur
+            # (3.1). La reprise d'un brouillon restitue la sélection depuis `__lignes__`.
+            if tpl and self._is_multiline_template(tpl):
+                saved = draft_vars.get(generator.LIGNES_KEY) if draft is not None else None
+                ml_control, ml_commit, ml_recap = self._multiline_fields(
+                    p, saved if isinstance(saved, list) else None)
+                fields_col.controls = [ml_control]
+                recap_col.controls = [ml_recap]
+                self.page.update()
+                return
             for f in (self._resolve_fields(tpl) if tpl else []):
                 # En edition, la valeur memorisee du brouillon prime sur le defaut.
                 init = draft_vars.get(f.tag, f.default_value or "")
@@ -5214,7 +5484,13 @@ class CrmApp:
             tpl = templates.get_template(tpl_dd.value)
             if not tpl:
                 raise ValueError("Modèle introuvable.")
-            variables = {tag: (get() or "") for tag, get in getters.items()}
+            if ml_commit is not None:
+                # Note multi-lignes : commit() crée les nouveaux actes isolés (tracés
+                # dans la dette) et renvoie les lignes brutes retenues, sérialisées
+                # sous la clé réservée `__lignes__` (totaux/formats recalculés au rendu).
+                variables = {generator.LIGNES_KEY: ml_commit()}
+            else:
+                variables = {tag: (get() or "") for tag, get in getters.items()}
             if draft is not None:
                 generator.update_draft(
                     self.conn, draft, variables=variables, output_format=fmt.value)
@@ -5285,7 +5561,7 @@ class CrmApp:
             self._run_busy(button, status, work)
 
         build_fields()
-        body_controls = [tpl_dd, fields_col, fmt, status]
+        body_controls = [tpl_dd, fields_col, fmt, status, recap_col]
 
         # Brouillon = action secondaire ; Générer (et imprimer) = actions primaires.
         # Les boutons de generation pilotent eux-memes `_run_busy` (busy=False ici)

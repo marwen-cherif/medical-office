@@ -4,6 +4,7 @@ import re
 import shutil
 import tempfile
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 
 from docx import Document
@@ -46,13 +47,18 @@ class WordSession:
         template_path: Path,
         replacements: dict[str, str],
         pdf_output: Path,
+        line_rows: list[dict[str, str]] | None = None,
     ) -> Path:
-        """Remplace les placeholders via python-docx, exporte en PDF via Word COM."""
+        """Remplace les placeholders via python-docx, exporte en PDF via Word COM.
+
+        `line_rows` (optionnel) : note multi-lignes -> la ligne-modele `<L_*>` est
+        repetee une fois par entree (cf. `_fill_docx`/`expand_table_rows`).
+        """
         pdf_output.parent.mkdir(parents=True, exist_ok=True)
 
         with tempfile.TemporaryDirectory() as tmp:
             filled_docx = Path(tmp) / "filled.docx"
-            _fill_docx(template_path, replacements, filled_docx)
+            _fill_docx(template_path, replacements, filled_docx, line_rows=line_rows)
 
             doc = self._word.Documents.Open(str(filled_docx), ReadOnly=False)
             try:
@@ -86,6 +92,12 @@ def extract_placeholders(template_path: Path) -> list[str]:
     for txbx in doc.element.body.iter(qn("w:txbxContent")):
         for p_elem in txbx.iter(qn("w:p")):
             chunks.append(_p_elem_text(p_elem))
+    # Cellules de tableau : `doc.paragraphs` ne les traverse pas. Indispensable pour
+    # detecter les balises de ligne `<L_*>` (qui vivent dans la ligne-modele) et les
+    # balises document placees dans un tableau (ex. ligne de totaux <TOTAL_DU>).
+    for tbl in doc.element.body.iter(qn("w:tbl")):
+        for p_elem in tbl.iter(qn("w:p")):
+            chunks.append(_p_elem_text(p_elem))
     for section in doc.sections:
         for para in section.header.paragraphs:
             chunks.append(para.text)
@@ -99,9 +111,118 @@ def extract_placeholders(template_path: Path) -> list[str]:
     return list(seen.keys())
 
 
-def _fill_docx(template_path: Path, replacements: dict[str, str], output_path: Path) -> None:
-    """Remplace les placeholders dans tous les paragraphes du docx (corps + zones de texte)."""
+# --- Note multi-lignes : convention de balises ligne/document -----------------
+# Une balise de ligne porte le prefixe `L_` ; elle est repetee une fois par ligne
+# de la note (cf. capability facturation-multi-lignes). Les autres balises sont
+# des balises *document*, remplies une seule fois. La distinction est purement
+# additive : la regex `<([A-Z0-9_]+)>` matche deja `L_*`.
+LINE_TAG_PREFIX = "L_"
+
+
+def is_line_tag(tag: str) -> bool:
+    """Vrai si `tag` (sans chevrons) est une balise de ligne (prefixe `L_`)."""
+    return tag.upper().startswith(LINE_TAG_PREFIX)
+
+
+def line_tag_column(tag: str) -> str:
+    """Nom de colonne d'une balise de ligne : balise sans prefixe, en minuscules
+    (`L_MONTANT` -> `montant`). Sans effet sur une balise document."""
+    if is_line_tag(tag):
+        return tag[len(LINE_TAG_PREFIX):].lower()
+    return tag.lower()
+
+
+def classify_placeholders(template_path: Path) -> tuple[list[str], list[str]]:
+    """Renvoie `(balises_document, balises_de_ligne)` du modele, dans l'ordre.
+
+    `extract_placeholders` reste la liste a plat (compat consommateurs) ; cette
+    fonction la classe par convention de prefixe. Un modele est une « note
+    multi-lignes » des qu'il porte >= 1 balise de ligne `L_*`.
+    """
+    tags = extract_placeholders(template_path)
+    doc_tags = [t for t in tags if not is_line_tag(t)]
+    line_tags = [t for t in tags if is_line_tag(t)]
+    return doc_tags, line_tags
+
+
+def _find_template_rows(scope) -> list:
+    """Lignes de tableau (`w:tr`) portant >= 1 balise de ligne `L_*`.
+
+    Reconstruit le texte complet de chaque ligne (balises eventuellement eclatees
+    sur plusieurs runs) avant la recherche. `scope` est un element lxml (corps).
+    """
+    rows = []
+    for tr in scope.iter(qn("w:tr")):
+        text = "".join(t.text or "" for t in tr.iter(qn("w:t")))
+        if any(is_line_tag(m) for m in _PLACEHOLDER_RE.findall(text)):
+            rows.append(tr)
+    return rows
+
+
+def _validate_template_row(tr) -> None:
+    """Refuse une ligne-modele a la structure non supportee (D3) : message clair."""
+    if tr.find(qn("w:tbl")) is not None or next(tr.iter(qn("w:tbl")), None) is not None:
+        raise ValueError(
+            "Modele « note multi-lignes » non supporte : tableau imbrique dans la "
+            "ligne-modele <L_*>."
+        )
+    if next(tr.iter(qn("w:vMerge")), None) is not None:
+        raise ValueError(
+            "Modele « note multi-lignes » non supporte : cellules fusionnees "
+            "verticalement dans la ligne-modele <L_*>."
+        )
+
+
+def expand_table_rows(doc, line_rows: list[dict[str, str]], template_rows=None) -> None:
+    """Repete la ligne-modele d'un tableau Word : une copie par entree de
+    `line_rows`, remplie via le `_replace_in_para_elem` *reutilise*, puis retire
+    la ligne-modele d'origine (retrait simple si 0 ligne).
+
+    Fonction **additive** (D3) : sans ligne-modele `<L_*>`, ne fait rien. La
+    duplication est purement structurelle (`deepcopy` du `w:tr` complet -> mise en
+    forme `w:trPr`/`w:tcPr`/`w:rPr` preservee) ; le remplissage des cellules
+    reutilise la logique de redistribution de runs sans la modifier.
+
+    Chaque entree de `line_rows` est un dict `{ "<L_DATE>": "...", ... }` (balises
+    de ligne completes, chevrons inclus).
+    """
+    rows = template_rows if template_rows is not None else _find_template_rows(doc.element.body)
+    if not rows:
+        return
+    if len(rows) > 1:
+        raise ValueError(
+            "Modele « note multi-lignes » non supporte : plusieurs lignes-modeles "
+            "<L_*> detectees. Une seule ligne de tableau doit porter les balises <L_*>."
+        )
+    tr = rows[0]
+    _validate_template_row(tr)
+    parent = tr.getparent()
+    idx = parent.index(tr)
+    for offset, row_repl in enumerate(line_rows):
+        clone = deepcopy(tr)
+        for p_elem in clone.iter(qn("w:p")):
+            _replace_in_para_elem(p_elem, row_repl)
+        parent.insert(idx + 1 + offset, clone)
+    parent.remove(tr)
+
+
+def _fill_docx(
+    template_path: Path,
+    replacements: dict[str, str],
+    output_path: Path,
+    line_rows: list[dict[str, str]] | None = None,
+) -> None:
+    """Remplace les placeholders du docx (corps, zones de texte, en-tetes/pieds,
+    cellules de tableau) et, si `line_rows` est fourni, repete la ligne-modele.
+
+    `line_rows=None` => comportement historique mono-valeur (aucune expansion).
+    """
     doc = Document(str(template_path))
+
+    # Ligne(s)-modele : reperees une fois pour les exclure de la passe document
+    # (elles sont traitees par l'expansion) et alimenter `expand_table_rows`.
+    template_rows = _find_template_rows(doc.element.body)
+    template_row_ids = {id(tr) for tr in template_rows}
 
     # Corps principal
     for para in doc.paragraphs:
@@ -118,6 +239,20 @@ def _fill_docx(template_path: Path, replacements: dict[str, str], output_path: P
             _replace_in_para(para, replacements)
         for para in section.footer.paragraphs:
             _replace_in_para(para, replacements)
+
+    # Cellules de tableau (balises document) : `doc.paragraphs` ne les traverse
+    # pas. On remplit ici les balises document presentes dans les tableaux (ex.
+    # ligne de totaux <TOTAL_DU>), en excluant la/les ligne(s)-modele.
+    for tbl in doc.element.body.iter(qn("w:tbl")):
+        for tr in tbl.iter(qn("w:tr")):
+            if id(tr) in template_row_ids:
+                continue
+            for p_elem in tr.iter(qn("w:p")):
+                _replace_in_para_elem(p_elem, replacements)
+
+    # Expansion de la ligne-modele (note multi-lignes) si demandee.
+    if line_rows is not None:
+        expand_table_rows(doc, line_rows, template_rows=template_rows)
 
     doc.save(str(output_path))
 

@@ -2165,6 +2165,67 @@ def normalize_dents(raw: Optional[str]) -> str:
     return ", ".join(parts)
 
 
+# --- Notation FDI (odontogramme) ---------------------------------------------
+#
+# Quadrants FDI (vue « face au patient ») :
+#   permanentes : 1 = maxillaire droit, 2 = maxillaire gauche,
+#                 3 = mandibulaire gauche, 4 = mandibulaire droit ;
+#   temporaires : 5/6/7/8 selon le meme decoupage (denture de lait).
+# Dans chaque quadrant la dent est numerotee de 1 (incisive centrale, pres de la
+# ligne mediane) vers l'arriere (8 pour les permanentes, 5 pour les temporaires).
+
+# Denture adulte : dents permanentes 11-18, 21-28, 31-38, 41-48.
+DENTS_PERMANENTES: dict[int, list[str]] = {
+    q: [f"{q}{d}" for d in range(1, 9)] for q in (1, 2, 3, 4)
+}
+
+# Denture enfant : dents temporaires 51-55, 61-65, 71-75, 81-85.
+DENTS_TEMPORAIRES: dict[int, list[str]] = {
+    q: [f"{q}{d}" for d in range(1, 6)] for q in (5, 6, 7, 8)
+}
+
+# Ensemble plat de tous les numeros FDI valides (permanentes + temporaires).
+_FDI_VALIDES: frozenset[str] = frozenset(
+    n for quadrants in (DENTS_PERMANENTES, DENTS_TEMPORAIRES)
+    for nums in quadrants.values() for n in nums
+)
+
+
+def is_fdi_valide(num: Optional[str]) -> bool:
+    """Vrai si `num` est un numero de dent FDI valide (permanente ou temporaire).
+
+    Volontairement strict (sert le surlignage de l'odontogramme) : une saisie
+    libre non FDI renvoie False et n'est simplement pas reflechie sur le schema,
+    sans bloquer la saisie (cf. `normalize_dents`).
+    """
+    return (num or "").strip() in _FDI_VALIDES
+
+
+def fdi_quadrant(num: Optional[str]) -> Optional[int]:
+    """Quadrant FDI (1..8) d'un numero de dent valide, sinon None."""
+    token = (num or "").strip()
+    return int(token[0]) if is_fdi_valide(token) else None
+
+
+def denture_par_defaut(date_naissance: Optional[str]) -> str:
+    """Denture a afficher par defaut dans l'odontogramme.
+
+    Renvoie « enfant » pour un jeune patient (age < 13 ans), « adulte » sinon —
+    y compris quand la date de naissance est absente ou illisible (defaut adulte).
+    `date_naissance` est attendue en ISO « AAAA-MM-JJ » (format de stockage).
+    """
+    iso = (date_naissance or "").strip()
+    if not iso:
+        return "adulte"
+    try:
+        ddn = datetime.strptime(iso[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return "adulte"
+    today = date.today()
+    age = today.year - ddn.year - ((today.month, today.day) < (ddn.month, ddn.day))
+    return "enfant" if age < 13 else "adulte"
+
+
 @dataclass
 class PlanTraitement:
     id: Optional[int]
