@@ -205,6 +205,148 @@ def _draft_fields_from_variables(
     )
 
 
+# --- Note multi-lignes (facturation-multi-lignes) -----------------------------
+# Contrat de balises standard « a la Mailjet » consomme par les modeles « note
+# multi-lignes ». Un modele est multi-lignes des qu'il porte >= 1 balise de ligne
+# <L_*> (cf. src.doc_filler.classify_placeholders). Aucune configuration de
+# colonnes par modele : le contrat est fixe et documente (CLAUDE.md).
+
+# Cle reservee de documents.variables : liste des lignes BRUTES retenues. Les
+# totaux et formats sont RECALCULES au rendu, jamais stockes (design D7).
+LIGNES_KEY = "__lignes__"
+
+# Balises de ligne (repetees par ligne) et balises document calculees (totaux).
+LINE_TAGS = ("L_DATE", "L_ACTE", "L_DENTS", "L_NOTE", "L_MONTANT", "L_REGLE", "L_RESTE")
+TOTAL_TAGS = ("TOTAL_DU", "TOTAL_REGLE", "RESTE_A_PAYER", "NB_ACTES", "TOTAL")
+
+
+def _ligne_num(value) -> float:
+    """Montant d'une ligne en float ; vide/non numerique -> 0 (design D5)."""
+    if value is None or value == "":
+        return 0.0
+    try:
+        return float(str(value).replace(",", "."))
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def prestation_to_ligne(pres: "repo.Prestation") -> dict:
+    """Projette un acte (repo.Prestation) en ligne de contexte BRUTE (design D4)."""
+    return {
+        "source": "acte",
+        "prestation_id": pres.id,
+        "date": pres.date_acte or "",
+        "acte": pres.libelle or "",
+        "dents": pres.dents or "",
+        "note": pres.note or "",
+        "montant": float(pres.montant or 0),
+        "regle": float(pres.montant_regle or 0),
+    }
+
+
+def total_du_lignes(lignes: list[dict]) -> float:
+    """Total du NUMERIQUE (pour document.montant : affichage/email, jamais une creance, D6)."""
+    return sum(_ligne_num(l.get("montant")) for l in lignes)
+
+
+def totaux_num(lignes: list[dict]) -> tuple[float, float, float, int]:
+    """(total_du, total_regle, reste, nb_lignes) NUMERIQUES — pour l'affichage UI
+    (recap en direct), la mise en forme restant a la charge de l'appelant."""
+    du = total_du_lignes(lignes)
+    regle = sum(_ligne_num(l.get("regle")) for l in lignes)
+    return du, regle, du - regle, len(lignes)
+
+
+def compute_totaux(lignes: list[dict]) -> dict[str, str]:
+    """Totaux FORMATES (style FR) calcules sur les lignes retenues (design D5).
+
+    `TOTAL_DU` = somme des montants ; `TOTAL_REGLE` = somme des regles ;
+    `RESTE_A_PAYER` = du - regle ; `NB_ACTES` = nb de lignes (entier) ;
+    `TOTAL` = alias de `TOTAL_DU`. Cles sans chevrons (l'appelant ajoute <>).
+    """
+    total_du = total_du_lignes(lignes)
+    total_regle = sum(_ligne_num(l.get("regle")) for l in lignes)
+    reste = total_du - total_regle
+    return {
+        "TOTAL_DU": format_montant(total_du),
+        "TOTAL_REGLE": format_montant(total_regle),
+        "RESTE_A_PAYER": format_montant(reste),
+        "NB_ACTES": str(len(lignes)),
+        "TOTAL": format_montant(total_du),
+    }
+
+
+def _ligne_date_fr(iso) -> str:
+    """Date d'une ligne ISO -> jj/mm/aaaa (sinon valeur brute)."""
+    if not iso:
+        return ""
+    try:
+        return date.fromisoformat(str(iso)).strftime("%d/%m/%Y")
+    except ValueError:
+        return str(iso)
+
+
+def _ligne_to_row_repl(l: dict) -> dict[str, str]:
+    """Dict de remplacement <L_*> FORMATE d'une ligne, pour l'expansion (D4/D5)."""
+    montant = _ligne_num(l.get("montant"))
+    regle = _ligne_num(l.get("regle"))
+    reste = max(0.0, montant - regle)
+    return {
+        "<L_DATE>": _ligne_date_fr(l.get("date")),
+        "<L_ACTE>": str(l.get("acte") or ""),
+        "<L_DENTS>": str(l.get("dents") or ""),
+        "<L_NOTE>": str(l.get("note") or ""),
+        "<L_MONTANT>": format_montant(montant),
+        "<L_REGLE>": format_montant(regle),
+        "<L_RESTE>": format_montant(reste),
+    }
+
+
+def get_lignes(variables: dict) -> Optional[list[dict]]:
+    """Lignes brutes d'une note multi-lignes depuis `variables` (cle reservee), ou
+    None pour un document mono-valeur (compat ascendante, design D7)."""
+    lignes = variables.get(LIGNES_KEY)
+    return lignes if isinstance(lignes, list) else None
+
+
+def _first_ligne_date(lignes: list[dict]) -> Optional[date]:
+    """1re date parseable des lignes (ordre d'affichage), pour acte_date (design D8)."""
+    for l in lignes:
+        raw = l.get("date")
+        if raw:
+            try:
+                return date.fromisoformat(str(raw))
+            except ValueError:
+                continue
+    return None
+
+
+def _resume_lignes(lignes: list[dict]) -> Optional[str]:
+    """Resume court des actes pour l'affichage liste (ex. « Detartrage, Composite +2 », D8)."""
+    labels = [str(l.get("acte") or "").strip() for l in lignes]
+    labels = [x for x in labels if x]
+    if not labels:
+        return None
+    head = labels[:2]
+    extra = len(labels) - len(head)
+    resume = ", ".join(head)
+    if extra > 0:
+        resume += f" +{extra}"
+    return resume
+
+
+def _draft_fields(variables: dict) -> tuple[date, Optional[float], Optional[str]]:
+    """Champs derives (acte_date, montant, acte) : note multi-lignes (D6/D8) sinon
+    mono-valeur (historique). Pour une note multi-lignes : montant = total (valeur
+    d'affichage/email, **pas** une creance, D6), acte_date = 1re date, acte = resume."""
+    lignes = get_lignes(variables)
+    if lignes is not None:
+        acte_date = _first_ligne_date(lignes) or date.today()
+        total = total_du_lignes(lignes)
+        return acte_date, (total if total else None), _resume_lignes(lignes)
+    return _draft_fields_from_variables(variables)
+
+
 def save_draft(
     conn: sqlite3.Connection,
     patient: Patient,
@@ -225,7 +367,7 @@ def save_draft(
     if ext not in ("jpg", "pdf"):
         raise ValueError("output_format doit etre 'jpg' ou 'pdf'.")
 
-    acte_date, montant, acte = _draft_fields_from_variables(variables)
+    acte_date, montant, acte = _draft_fields(variables)
     doc = Document(
         id=None,
         patient_id=patient.id,  # type: ignore[arg-type]
@@ -255,7 +397,7 @@ def update_draft(
     ext = output_format.lstrip(".").lower()
     if ext not in ("jpg", "pdf"):
         raise ValueError("output_format doit etre 'jpg' ou 'pdf'.")
-    acte_date, montant, acte = _draft_fields_from_variables(variables)
+    acte_date, montant, acte = _draft_fields(variables)
     document.acte = acte
     document.montant = montant
     document.acte_date = acte_date.isoformat()
@@ -308,20 +450,35 @@ def render_document(conn: sqlite3.Connection, document: Document) -> Document:
     out_path = base_dir / build_filename(
         patient, document.type, acte_date, ext, doc_id=document.id
     )
+    lignes = get_lignes(variables)
     repl = _patient_replacements(patient)
     for tag, raw in variables.items():
+        if tag == LIGNES_KEY:
+            continue  # lignes traitees a part (expansion de la ligne-modele)
         if tag.upper() in AUTO_PATIENT_TAGS:
             continue  # ne pas ecraser les champs patient
+        if tag.upper().startswith("L_"):
+            continue  # balise de ligne : remplie par l'expansion, pas en document
         repl.update(_format_variable(tag, raw))
+
+    # Note multi-lignes : totaux calcules (balises document) + lignes formatees
+    # (expansion de la ligne-modele). Mono-valeur : `line_rows` reste None (D7).
+    line_rows = None
+    if lignes is not None:
+        repl.update({f"<{k}>": v for k, v in compute_totaux(lignes).items()})
+        if "<DATE>" not in repl:  # date d'emission par defaut = aujourd'hui (D1)
+            repl["<DATE>"] = date.today().strftime("%d/%m/%Y")
+        line_rows = [_ligne_to_row_repl(l) for l in lignes]
 
     try:
         with WordSession() as word:
             if ext == "pdf":
-                word.fill_and_export_pdf(template.path, repl, out_path)
+                word.fill_and_export_pdf(template.path, repl, out_path, line_rows=line_rows)
             else:
                 with tempfile.TemporaryDirectory() as tmp:
                     pdf_path = Path(tmp) / (out_path.stem + ".pdf")
-                    word.fill_and_export_pdf(template.path, repl, pdf_path)
+                    word.fill_and_export_pdf(
+                        template.path, repl, pdf_path, line_rows=line_rows)
                     pdf_first_page_to_jpg(pdf_path, out_path)
     except Exception as exc:  # noqa: BLE001
         document.statut = "erreur"

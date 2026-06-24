@@ -22,7 +22,7 @@ from typing import Callable
 import flet as ft
 from flet import canvas as cv
 
-from src.doc_filler import extract_placeholders
+from src.doc_filler import classify_placeholders, extract_placeholders
 
 from . import backup, generator, print_settings, printing, repo, templates, version
 from .db import SchemaTooNewError, connect
@@ -5223,6 +5223,148 @@ class CrmApp:
             out.append(TemplateField(template.name, tag, _humanize(tag), _guess_type(tag), ""))
         return out
 
+    def _is_multiline_template(self, template: templates.Template) -> bool:
+        """Vrai si le modèle est une « note multi-lignes » (≥ 1 balise de ligne <L_*>)."""
+        try:
+            _, line_tags = classify_placeholders(template.path)
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(line_tags)
+
+    def _multiline_fields(self, p: Patient, saved_lignes: "list[dict] | None"):
+        """Éditeur « note multi-lignes » : sélection des actes existants du patient
+        (groupés, pré-cochés) + ajout de **nouveaux actes isolés** via le même
+        formulaire que l'ajout d'acte (carte avec référentiel + odontogramme). Renvoie
+        `(control, commit, recap)` ; `commit()` **crée** en base les nouveaux actes
+        isolés (donc tracés dans la dette et visibles dans l'onglet Actes) et renvoie
+        les lignes BRUTES retenues. Le total est recalculé en direct.
+
+        `saved_lignes` (reprise d'un brouillon) restitue la (dé)sélection des actes ;
+        None ⇒ création (tous les actes existants pré-cochés). Ordre déterministe :
+        actes isolés, puis par plan, puis les nouveaux actes saisis.
+        """
+        has_saved = saved_lignes is not None
+        saved = saved_lignes or []
+        saved_acte_ids = {l.get("prestation_id") for l in saved if l.get("source") == "acte"}
+
+        actes_ref = repo.list_actes(self.conn)  # référentiel pour pré-remplir les cartes
+        isoles = repo.list_prestations(self.conn, p.id, plan_id=None)
+        plans = repo.list_plans(self.conn, p.id)
+        plan_groups = [(pl, repo.list_prestations(self.conn, p.id, plan_id=pl.id))
+                       for pl in plans]
+
+        acte_state: list = []  # [(checkbox, prestation)] dans l'ordre d'affichage
+        cards: list = []       # handles _acte_card (nouveaux actes isolés à créer)
+        cards_col = ft.Column([], tight=True, spacing=10)
+        count_text = ft.Text("0 ligne(s) retenue(s)", color=MUTED, size=12)
+        # Récapitulatif rempli via _money_summary (même carte que la fiche patient,
+        # fond blanc) ; placé en bas du dialogue par _generate_dialog.
+        recap_holder = ft.Container()
+
+        def refresh_total():
+            du = sum((pres.montant or 0) for cb, pres in acte_state if cb.value)
+            regle = sum((pres.montant_regle or 0) for cb, pres in acte_state if cb.value)
+            nb = sum(1 for cb, _ in acte_state if cb.value)
+            for c in cards:
+                if not c.blank():
+                    du += c.montant()
+                    nb += 1  # un nouvel acte = réglé 0
+            reste = du - regle
+            count_text.value = f"{nb} ligne(s) retenue(s)"
+            recap_holder.content = self._money_summary([
+                ("Total dû", du, TEXT),
+                ("Réglé", regle, GREEN),
+                ("Reste à payer", reste, AMBER),
+            ])
+            self.page.update()
+
+        def acte_row(pres) -> ft.Control:
+            checked = (pres.id in saved_acte_ids) if has_saved else True
+            cb = ft.Checkbox(value=checked, on_change=lambda e: refresh_total())
+            acte_state.append((cb, pres))
+            bits = [b for b in [generator._ligne_date_fr(pres.date_acte), pres.libelle,
+                                generator.format_montant(pres.montant or 0)] if b]
+            label = "  ·  ".join(bits)
+            if pres.reste and abs(pres.reste - (pres.montant or 0)) > 1e-9:
+                label += f"  (reste {generator.format_montant(pres.reste)})"
+            return ft.Row([cb, ft.Text(label, color=TEXT, expand=True)],
+                          vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=4)
+
+        groups: list[ft.Control] = []
+
+        def add_group(title: str, pres_list: list):
+            if not pres_list:
+                return
+            groups.append(ft.Text(f"{title} ({len(pres_list)})", color=NAVY,
+                                  weight=ft.FontWeight.BOLD, size=12))
+            for pres in pres_list:
+                groups.append(acte_row(pres))
+
+        add_group("Actes isolés", isoles)
+        for pl, pres_list in plan_groups:
+            add_group(pl.titre, pres_list)
+        if not acte_state:
+            groups.append(ft.Text("Aucun acte existant pour ce patient.",
+                                  color=MUTED, size=12))
+
+        # --- Nouveaux actes isolés (réutilise la carte d'ajout d'acte) -----------
+        def remove_card(h):
+            if h in cards:
+                cards.remove(h)
+                cards_col.controls = [c.control for c in cards]
+                refresh_total()
+
+        def add_card(e=None):
+            h = self._acte_card(actes=actes_ref, on_change=refresh_total,
+                                on_remove=remove_card, date_naissance=p.date_naissance)
+            cards.append(h)
+            cards_col.controls = [c.control for c in cards]
+            self.page.update()
+            refresh_total()
+
+        def commit() -> list:
+            """Crée les nouveaux actes isolés (plan_id=NULL) et renvoie les lignes
+            brutes retenues (actes cochés + actes créés). Lève ValueError si une carte
+            est invalide (AVANT toute création). Idempotent en cas de re-tentative :
+            une carte déjà créée (pres_id) est mise à jour, pas dupliquée."""
+            process = [c for c in cards if not c.blank()]
+            data = [c.read() for c in process]  # valide tout d'abord (peut lever)
+            lignes = [generator.prestation_to_ligne(pres)
+                      for cb, pres in acte_state if cb.value]
+            for c, d in zip(process, data):
+                if getattr(c, "pres_id", None):  # déjà créé (re-tentative) : mise à jour
+                    repo.update_prestation(
+                        self.conn, c.pres_id, libelle=d["libelle"], montant=d["montant"],
+                        plan_id=None, acte_id=d["acte_id"], date_acte=d["date_acte"],
+                        dents=d["dents"], note=d["note"])
+                    pres = repo.get_prestation(self.conn, c.pres_id)
+                else:
+                    pres = repo.create_prestation(
+                        self.conn, p.id, d["libelle"], d["montant"], plan_id=None,
+                        acte_id=d["acte_id"], date_acte=d["date_acte"],
+                        dents=d["dents"], note=d["note"])
+                    c.pres_id = pres.id
+                    repo.log_audit(self.conn, "acte_cree",
+                                   {"prestation_id": pres.id, "libelle": pres.libelle,
+                                    "origine": "note_honoraires"}, patient_id=p.id)
+                lignes.append(generator.prestation_to_ligne(pres))
+            return lignes
+
+        control = ft.Column([
+            ft.Text("Actes à facturer", color=TEXT, weight=ft.FontWeight.BOLD),
+            ft.Column(groups, tight=True, spacing=4),
+            ft.Divider(height=8),
+            ft.Row([ft.Text("Nouveaux actes", color=TEXT, weight=ft.FontWeight.BOLD),
+                    ft.Container(expand=True), count_text],
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Text("Créés comme actes isolés (suivis dans la dette, visibles dans "
+                    "l'onglet Actes).", color=MUTED, size=11),
+            cards_col,
+            ft.TextButton("+ Ajouter un acte", icon=ft.Icons.ADD, on_click=add_card),
+        ], tight=True, spacing=8)
+        refresh_total()
+        return control, commit, recap_holder
+
     def _generate_dialog(self, p: Patient, draft: Document | None = None,
                          category: str | None = None) -> None:
         """Génère un document (brouillon → Word → JPG/PDF). Ne crée **plus aucun
@@ -5276,12 +5418,29 @@ class CrmApp:
                           options=[ft.dropdown.Option("jpg"), ft.dropdown.Option("pdf")])
         status = ft.Text("", color=RED, size=12)
         fields_col = ft.Column([], tight=True, spacing=10)
+        # Récap multi-lignes : placé tout en bas du dialogue (rempli par build_fields).
+        recap_col = ft.Column([], tight=True)
         getters: dict[str, callable] = {}
+        ml_commit = None  # défini par build_fields si le modèle est multi-lignes
 
         def build_fields():
             getters.clear()
+            nonlocal ml_commit
+            ml_commit = None
+            recap_col.controls = []
             controls = []
             tpl = templates.get_template(tpl_dd.value)
+            # Modèle « note multi-lignes » (≥ 1 balise <L_*>) : éditeur d'actes
+            # (sélection + ajout d'actes isolés), au lieu du formulaire mono-valeur
+            # (3.1). La reprise d'un brouillon restitue la sélection depuis `__lignes__`.
+            if tpl and self._is_multiline_template(tpl):
+                saved = draft_vars.get(generator.LIGNES_KEY) if draft is not None else None
+                ml_control, ml_commit, ml_recap = self._multiline_fields(
+                    p, saved if isinstance(saved, list) else None)
+                fields_col.controls = [ml_control]
+                recap_col.controls = [ml_recap]
+                self.page.update()
+                return
             for f in (self._resolve_fields(tpl) if tpl else []):
                 # En edition, la valeur memorisee du brouillon prime sur le defaut.
                 init = draft_vars.get(f.tag, f.default_value or "")
@@ -5325,7 +5484,13 @@ class CrmApp:
             tpl = templates.get_template(tpl_dd.value)
             if not tpl:
                 raise ValueError("Modèle introuvable.")
-            variables = {tag: (get() or "") for tag, get in getters.items()}
+            if ml_commit is not None:
+                # Note multi-lignes : commit() crée les nouveaux actes isolés (tracés
+                # dans la dette) et renvoie les lignes brutes retenues, sérialisées
+                # sous la clé réservée `__lignes__` (totaux/formats recalculés au rendu).
+                variables = {generator.LIGNES_KEY: ml_commit()}
+            else:
+                variables = {tag: (get() or "") for tag, get in getters.items()}
             if draft is not None:
                 generator.update_draft(
                     self.conn, draft, variables=variables, output_format=fmt.value)
@@ -5396,7 +5561,7 @@ class CrmApp:
             self._run_busy(button, status, work)
 
         build_fields()
-        body_controls = [tpl_dd, fields_col, fmt, status]
+        body_controls = [tpl_dd, fields_col, fmt, status, recap_col]
 
         # Brouillon = action secondaire ; Générer (et imprimer) = actions primaires.
         # Les boutons de generation pilotent eux-memes `_run_busy` (busy=False ici)
