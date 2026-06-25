@@ -14,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Pagination } from "@/components/common/Pagination";
+import { RowActions } from "@/components/common/RowActions";
 import { humanizeError } from "@/lib/errors";
 import { docStatut, fmtDevise, humanize, isoToFr } from "@/lib/format";
 import {
@@ -60,53 +61,57 @@ export function DocumentsTab({
     const canSend =
       !!d.email && (d.statut === "en_attente_envoi" || d.statut === "erreur_envoi");
     return (
-      <div className="flex shrink-0 items-center gap-1">
-        {(isDraft || isError) && (
-          <Button variant="ghost" size="icon" title="Générer"
-                  onClick={() => withToast(render.mutateAsync({ id: d.id }), "Document généré.")}>
-            <PlayCircle className="size-4 text-navy" />
-          </Button>
-        )}
-        {isDraft && (
-          <Button variant="ghost" size="icon" title="Modifier le brouillon"
-                  onClick={() => setGen({ mode: "generic", draft: d })}>
-            <Pencil className="size-4" />
-          </Button>
-        )}
-        {d.has_file && (
-          <>
-            <Button variant="ghost" size="icon" title="Ouvrir le fichier"
-                    onClick={() => withToast(open.mutateAsync(d.id), "Fichier ouvert.")}>
-              <FolderOpen className="size-4" />
-            </Button>
-            <Button variant="ghost" size="icon" title="Imprimer"
-                    onClick={() => withToast(print.mutateAsync({ id: d.id }), "Envoyé à l'imprimante.")}>
-              <Printer className="size-4" />
-            </Button>
-          </>
-        )}
-        {canSend && (
-          <Button variant="ghost" size="icon" title="Envoyer par email"
-                  onClick={() => withToast(send.mutateAsync({ id: d.id, body: {} }), "Email envoyé.")}>
-            <Send className="size-4 text-navy" />
-          </Button>
-        )}
-        {d.statut === "envoye" && (
-          <Button variant="ghost" size="icon" title="Rafraîchir le statut"
-                  onClick={() => withToast(refresh.mutateAsync({ id: d.id }), "Statut mis à jour.")}>
-            <RefreshCw className="size-4" />
-          </Button>
-        )}
-        {(isDraft || isError) && (
-          <Button variant="ghost" size="icon" title="Supprimer"
-                  onClick={() => {
-                    if (confirm("Supprimer ce document ?"))
-                      withToast(del.mutateAsync(d.id), "Document supprimé.");
-                  }}>
-            <Trash2 className="size-4 text-red" />
-          </Button>
-        )}
-      </div>
+      <RowActions
+        actions={[
+          (isDraft || isError) && {
+            key: "render",
+            label: "Générer",
+            icon: PlayCircle,
+            onClick: () => withToast(render.mutateAsync({ id: d.id }), "Document généré."),
+          },
+          isDraft && {
+            key: "edit",
+            label: "Modifier le brouillon",
+            icon: Pencil,
+            onClick: () => setGen({ mode: "generic", draft: d }),
+          },
+          d.has_file && {
+            key: "open",
+            label: "Ouvrir le fichier",
+            icon: FolderOpen,
+            onClick: () => withToast(open.mutateAsync(d.id), "Fichier ouvert."),
+          },
+          d.has_file && {
+            key: "print",
+            label: "Imprimer",
+            icon: Printer,
+            onClick: () => withToast(print.mutateAsync({ id: d.id }), "Envoyé à l'imprimante."),
+          },
+          canSend && {
+            key: "send",
+            label: "Envoyer par email",
+            icon: Send,
+            onClick: () => withToast(send.mutateAsync({ id: d.id, body: {} }), "Email envoyé."),
+          },
+          d.statut === "envoye" && {
+            key: "refresh",
+            label: "Rafraîchir le statut",
+            icon: RefreshCw,
+            onClick: () => withToast(refresh.mutateAsync({ id: d.id }), "Statut mis à jour."),
+          },
+          (isDraft || isError) && {
+            key: "delete",
+            label: "Supprimer",
+            icon: Trash2,
+            tone: "danger",
+            separatorBefore: true,
+            onClick: () => {
+              if (confirm("Supprimer ce document ?"))
+                withToast(del.mutateAsync(d.id), "Document supprimé.");
+            },
+          },
+        ]}
+      />
     );
   }
 

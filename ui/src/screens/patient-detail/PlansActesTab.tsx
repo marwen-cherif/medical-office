@@ -13,6 +13,7 @@ import {
 } from "@/hooks/clinical";
 import type { Paiement, Plan, Prestation } from "@/api/types";
 import { OdontogrammeClinique } from "@/components/common/OdontogrammeClinique";
+import { RowActions } from "@/components/common/RowActions";
 import { PlanDialog } from "./PlanDialog";
 import { PrestationDialog } from "./PrestationDialog";
 import { PayerActeDialog } from "./PayerActeDialog";
@@ -86,17 +87,25 @@ function PrestationRow({
         ) : (
           <Badge>À régler</Badge>
         )}
-        {pres.facturable && pres.reste > 0 && (
-          <Button variant="ghost" size="icon" title="Régler cet acte" onClick={onRegler}>
-            <Banknote className="size-4 text-green" />
-          </Button>
-        )}
-        <Button variant="ghost" size="icon" title="Modifier" onClick={onEdit}>
-          <Pencil className="size-4" />
-        </Button>
-        <Button variant="ghost" size="icon" title="Supprimer" onClick={onDelete}>
-          <Trash2 className="size-4 text-red" />
-        </Button>
+        <RowActions
+          actions={[
+            pres.facturable && pres.reste > 0 && {
+              key: "regler",
+              label: "Régler cet acte",
+              icon: Banknote,
+              onClick: onRegler,
+            },
+            { key: "edit", label: "Modifier", icon: Pencil, onClick: onEdit },
+            {
+              key: "delete",
+              label: "Supprimer",
+              icon: Trash2,
+              tone: "danger",
+              separatorBefore: true,
+              onClick: onDelete,
+            },
+          ]}
+        />
       </div>
     </div>
   );
@@ -181,18 +190,23 @@ export function PlansActesTab({
                     {n.date_echeance ? `Échéance : ${isoToFr(n.date_echeance)}` : "Sans échéance"}
                   </div>
                 </div>
-                <Button variant="ghost" size="icon" title="Régler" onClick={() => setPayNote(n)}>
-                  <Banknote className="size-4 text-green" />
-                </Button>
-                {!partiel && (
-                  <Button variant="ghost" size="icon" title="Annuler"
-                          onClick={() => delPaiement.mutate(n.id, {
-                            onSuccess: () => toast.success("Note annulée."),
-                            onError: (e) => toast.error(humanizeError(e)),
-                          })}>
-                    <Trash2 className="size-4 text-red" />
-                  </Button>
-                )}
+                <RowActions
+                  actions={[
+                    { key: "regler", label: "Régler", icon: Banknote, onClick: () => setPayNote(n) },
+                    !partiel && {
+                      key: "annuler",
+                      label: "Annuler la note",
+                      icon: Trash2,
+                      tone: "danger",
+                      separatorBefore: true,
+                      onClick: () =>
+                        delPaiement.mutate(n.id, {
+                          onSuccess: () => toast.success("Note annulée."),
+                          onError: (e) => toast.error(humanizeError(e)),
+                        }),
+                    },
+                  ]}
+                />
               </div>
             );
           })}
