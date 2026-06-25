@@ -30,5 +30,5 @@
 
 - [x] 6.1 Saisie **inchangée** : `Odontogramme.tsx`, `ActeCard.tsx`, `PrestationDialog.tsx`, `PlanDialog.tsx`, `GenerateDialog.tsx` non modifiés (numéros FDI permanents préservés).
 - [x] 6.2 `npm run typecheck` et `npm run build` **OK** (CSS de la lib bundlé, aucune erreur de types).
-- [ ] 6.3 Recette manuelle **desktop (Tauri)** et **web** (gate visuel manuel) : patient adulte (11-48 colorées), patient enfant (dents de lait 51-85 colorées + survol affichant la vraie FDI), denture mixte (liste hors-schéma), **survol d'un acte ⇒ dents en ambre**, **en-tête épinglé au défilement d'une longue liste**, légende, cas « aucune dent », mise à jour après mutation.
+- [x] 6.3 Recette manuelle **desktop (Tauri)** et **web** (gate visuel manuel) : patient adulte (11-48 colorées), patient enfant (dents de lait 51-85 colorées + survol affichant la vraie FDI), denture mixte (liste hors-schéma), **survol d'un acte ⇒ dents en ambre**, **en-tête épinglé au défilement d'une longue liste**, légende, cas « aucune dent », mise à jour après mutation.
 - [x] 6.4 Aucun changement backend / migration (seuls `ui/` + `package.json`/lock modifiés) ; `ui/README.md` est architectural, pas de liste de dépendances/écrans à maintenir.
