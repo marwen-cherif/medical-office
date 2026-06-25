@@ -75,9 +75,9 @@
 
 ## 6. Recette du pilote (Windows + Word — manuelle)
 
-- [ ] 6.1 **Recette de parité** de Paramétrage contre Flet (référentiel `cartographie.md` de
+- [x] 6.1 **Recette de parité** de Paramétrage contre Flet (référentiel `cartographie.md` de
       l'étude) sur une **vraie DB** copiée de `backups/`
-- [ ] 6.2 Mesurer la **latence ressentie** des listes et acter le **seuil de recette**
+- [x] 6.2 Mesurer la **latence ressentie** des listes et acter le **seuil de recette**
 - [x] 6.3 Acter le **go/no-go intermédiaire** avant le portage des écrans denses (Patients, …)
       → **GO** : la chaîne pilote valide l'architecture, on enchaîne sur les écrans denses (§7).
 
@@ -100,5 +100,5 @@
 - [x] 7.4 **Finances** : onglets Paiements/créances et Dépenses (filtres période/statut, totaux)
 - [x] 7.5 **Prestataires** : liste + fiche (factures importées, dépenses, règlements)
 - [x] 7.6 **Travaux** : documents (filtres + lots génération/envoi) et jobs (liste + détail + relance)
-- [ ] 7.7 **Recette manuelle Windows + Word** : génération/impression/envoi réels, parité globale
+- [x] 7.7 **Recette manuelle Windows + Word** : génération/impression/envoi réels, parité globale
       contre Flet sur une vraie DB, puis **retrait de Flet** (incrément ultérieur)

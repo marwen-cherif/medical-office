@@ -199,6 +199,21 @@ export function useCreatePaiement(patientId: number) {
   });
 }
 
+/** Règlement (partiel ou total) d'une note, comme pour un acte. */
+export function usePaiementReglement(patientId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, body }: { id: number; body: ReglementIn }) =>
+      unwrap(
+        await client.POST("/api/paiements/{paiement_id}/reglement", {
+          params: { path: { paiement_id: id } },
+          body,
+        }),
+      ),
+    onSuccess: () => invalidatePatient(qc, patientId),
+  });
+}
+
 export function useEncaisserPaiement(patientId: number) {
   const qc = useQueryClient();
   return useMutation({

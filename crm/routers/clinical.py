@@ -60,6 +60,8 @@ class PaiementOut(BaseModel):
     id: int
     patient_id: int
     montant: float
+    montant_regle: float
+    reste: float
     statut: str
     mode: Optional[str] = None
     date_echeance: Optional[str] = None
@@ -171,7 +173,8 @@ def plan_out(pl: repo.PlanTraitement) -> PlanOut:
 
 def paiement_out(pa: repo.Paiement) -> PaiementOut:
     return PaiementOut(
-        id=pa.id, patient_id=pa.patient_id, montant=pa.montant, statut=pa.statut,
+        id=pa.id, patient_id=pa.patient_id, montant=pa.montant,
+        montant_regle=pa.montant_regle, reste=pa.reste, statut=pa.statut,
         mode=pa.mode, date_echeance=pa.date_echeance,
         date_encaissement=pa.date_encaissement, notes=pa.notes,
     )
@@ -183,7 +186,7 @@ def paiement_out(pa: repo.Paiement) -> PaiementOut:
 def patient_clinical(patient_id: int) -> ClinicalOut:
     with core.db() as conn:
         notes = [pa for pa in repo.list_paiements(conn, patient_id)
-                 if pa.statut == "en_attente"]
+                 if pa.statut in ("en_attente", "regle_partiellement")]
         isoles = repo.list_prestations(conn, patient_id, plan_id=None)
         plans = repo.list_plans(conn, patient_id)
         groups: list[PlanGroupOut] = []
@@ -397,8 +400,31 @@ def paiement_create(patient_id: int, body: PaiementIn) -> PaiementOut:
         raise core._err_from_engine(exc)
 
 
+@router.post("/paiements/{paiement_id}/reglement", response_model=PaiementOut)
+def paiement_reglement(paiement_id: int, body: ReglementIn) -> PaiementOut:
+    """Enregistre un versement (partiel ou solde) sur une note, comme pour un acte."""
+    try:
+        with core.db() as conn:
+            existing = repo.get_paiement(conn, paiement_id)
+            if existing is None:
+                raise core.ApiError(core.ERR_NOT_FOUND,
+                                    f"Note introuvable : {paiement_id}", status=404)
+            pa = repo.add_paiement_reglement(
+                conn, paiement_id, body.montant, mode=body.mode,
+                date_reglement=body.date_reglement)
+            repo.log_audit(conn, "paiement_regle",
+                           {"paiement_id": paiement_id, "montant": body.montant,
+                            "mode": body.mode}, patient_id=existing.patient_id)
+        return paiement_out(pa)
+    except core.ApiError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise core._err_from_engine(exc)
+
+
 @router.post("/paiements/{paiement_id}/encaisser", response_model=core.OkOut)
 def paiement_encaisser(paiement_id: int, body: EncaisserIn) -> core.OkOut:
+    """Solde ENTIEREMENT une note (raccourci « encaisser » en un clic)."""
     with core.db() as conn:
         repo.mark_paiement_encaisse(conn, paiement_id, when=body.date_encaissement,
                                     mode=body.mode)
@@ -408,7 +434,12 @@ def paiement_encaisser(paiement_id: int, body: EncaisserIn) -> core.OkOut:
 
 @router.delete("/paiements/{paiement_id}", response_model=core.OkOut)
 def paiement_delete(paiement_id: int) -> core.OkOut:
-    with core.db() as conn:
-        repo.delete_paiement(conn, paiement_id)
-        repo.log_audit(conn, "paiement_supprime", {"paiement_id": paiement_id})
-    return core.OkOut()
+    try:
+        with core.db() as conn:
+            repo.delete_paiement(conn, paiement_id)
+            repo.log_audit(conn, "paiement_supprime", {"paiement_id": paiement_id})
+        return core.OkOut()
+    except core.ApiError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise core._err_from_engine(exc)

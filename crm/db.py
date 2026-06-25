@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 class SchemaTooNewError(RuntimeError):
@@ -83,12 +83,16 @@ CREATE TABLE IF NOT EXISTS documents (
 
 CREATE INDEX IF NOT EXISTS idx_documents_patient ON documents(patient_id);
 
+-- Note d'honoraires / paiement : porte le DU (`montant`) et le PAIEMENT
+-- (`montant_regle` cumul, `statut`, reste derive) — desormais reglable
+-- PARTIELLEMENT, calque des actes (`prestations`). 'encaisse' = soldee.
 CREATE TABLE IF NOT EXISTS paiements (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     patient_id          INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
     document_id         INTEGER REFERENCES documents(id) ON DELETE SET NULL,
     montant             REAL NOT NULL DEFAULT 0,
-    statut              TEXT NOT NULL DEFAULT 'en_attente',
+    montant_regle       REAL NOT NULL DEFAULT 0,
+    statut              TEXT NOT NULL DEFAULT 'en_attente',  -- en_attente | regle_partiellement | encaisse
     mode                TEXT,
     date_echeance       TEXT,
     date_encaissement   TEXT,
@@ -97,6 +101,20 @@ CREATE TABLE IF NOT EXISTS paiements (
 );
 
 CREATE INDEX IF NOT EXISTS idx_paiements_patient ON paiements(patient_id);
+
+-- Historique des reglements d'une note (1 ligne par versement, datee) : calque de
+-- `prestation_reglements`. `paiements.montant_regle` reste le cumul (source du solde).
+CREATE TABLE IF NOT EXISTS paiement_reglements (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    paiement_id     INTEGER NOT NULL REFERENCES paiements(id) ON DELETE CASCADE,
+    montant         REAL NOT NULL,
+    mode            TEXT,
+    date_reglement  TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_paiement_reglements_paiement ON paiement_reglements(paiement_id);
+CREATE INDEX IF NOT EXISTS idx_paiement_reglements_date ON paiement_reglements(date_reglement);
 
 CREATE TABLE IF NOT EXISTS mail_templates (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -476,6 +494,29 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_audit_patient ON audit_log(patient_id, id DESC)"
     )
+    # v12 : reglement PARTIEL des notes (paiements). Colonne additive `montant_regle`
+    # (cumul regle, source du solde) + table d'historique `paiement_reglements` (creee
+    # par _SCHEMA). Backfill : toute note deja `encaisse` se voit attribuer
+    # montant_regle = montant et 1 ligne d'historique resumant le versement, datee de
+    # l'encaissement (sinon de la creation) — pour que la tresorerie/encaissements
+    # restent coherents apres bascule sur l'historique. Idempotent : garde
+    # _column_exists pour l'ALTER, sentinelle meta + garde NOT IN pour le backfill.
+    if not _column_exists(conn, "paiements", "montant_regle"):
+        conn.execute(
+            "ALTER TABLE paiements ADD COLUMN montant_regle REAL NOT NULL DEFAULT 0"
+        )
+    if _meta_get(conn, "paiements_reglements_backfill_v12") is None:
+        conn.execute(
+            "UPDATE paiements SET montant_regle = montant "
+            "WHERE statut = 'encaisse' AND montant_regle = 0"
+        )
+        conn.execute(
+            "INSERT INTO paiement_reglements (paiement_id, montant, mode, date_reglement) "
+            "SELECT id, montant, mode, COALESCE(date_encaissement, created_at) "
+            "FROM paiements WHERE statut = 'encaisse' "
+            "AND id NOT IN (SELECT paiement_id FROM paiement_reglements)"
+        )
+        _meta_set(conn, "paiements_reglements_backfill_v12")
 
 
 def _set_version(conn: sqlite3.Connection) -> None:

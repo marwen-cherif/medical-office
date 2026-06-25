@@ -16,7 +16,10 @@ export const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-[var(--radius)] border border-line bg-white p-6 shadow-lg",
+        // `grid` + items à `min-width:auto` : un contenu large intrinsèque (ex. l'odontogramme)
+        // élargit la piste et fait déborder le modal en scroll horizontal. `[&>*]:min-w-0`
+        // autorise les items à rétrécir → le contenu large gère son propre `overflow-x`.
+        "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-[var(--radius)] border border-line bg-white p-6 shadow-lg [&>*]:min-w-0",
         className,
       )}
       {...props}

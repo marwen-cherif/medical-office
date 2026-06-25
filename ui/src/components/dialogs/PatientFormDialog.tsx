@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { DatePicker } from "@/components/common/DatePicker";
 import {
   Dialog,
   DialogContent,
@@ -99,8 +100,8 @@ export function PatientFormDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <Label htmlFor="pt-ddn">Date de naissance</Label>
-              <Input id="pt-ddn" type="date" value={form.date_naissance}
-                     onChange={(e) => set("date_naissance")(e.target.value)} />
+              <DatePicker id="pt-ddn" dropdown value={form.date_naissance}
+                          onChange={set("date_naissance")} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="pt-tel">Téléphone</Label>

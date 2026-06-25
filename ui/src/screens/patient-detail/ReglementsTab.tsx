@@ -4,7 +4,7 @@ import { MoneySummary } from "@/components/common/MoneySummary";
 import { Pagination } from "@/components/common/Pagination";
 import { Badge } from "@/components/ui/badge";
 import { humanizeError } from "@/lib/errors";
-import { fmtEuro, isoToFr, modeLabel } from "@/lib/format";
+import { fmtDevise, isoToFr, modeLabel } from "@/lib/format";
 import { useEncaissements } from "@/hooks/clinical";
 
 export function ReglementsTab({ patientId }: { patientId: number }) {
@@ -36,7 +36,7 @@ export function ReglementsTab({ patientId }: { patientId: number }) {
               className="flex items-center gap-3 border-t border-line py-2 first:border-t-0"
             >
               <span className="w-24 text-right font-semibold tabular-nums text-green">
-                {fmtEuro(e.montant)}
+                {fmtDevise(e.montant)}
               </span>
               {e.nature === "acte" ? (
                 <Stethoscope className="size-4 text-muted" />

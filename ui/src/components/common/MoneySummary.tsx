@@ -1,5 +1,5 @@
 import { Wallet } from "lucide-react";
-import { fmtEuro } from "@/lib/format";
+import { fmtDevise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export type MoneyItem = { label: string; value: number; tone?: "ink" | "green" | "amber" | "red" };
@@ -36,7 +36,7 @@ export function MoneySummary({ items, layout = "row" }: { items: MoneyItem[]; la
           <div key={i} className={cn("min-w-0", column ? "py-2 first:pt-0 last:pb-0" : "flex-1 px-4 first:pl-0")}>
             <div className="text-xs text-muted">{it.label}</div>
             <div className={cn("text-lg font-semibold tabular-nums", TONE[it.tone ?? "ink"])}>
-              {fmtEuro(it.value)}
+              {fmtDevise(it.value)}
             </div>
           </div>
         ))}

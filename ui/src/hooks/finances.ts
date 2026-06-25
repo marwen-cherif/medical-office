@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { client, unwrap } from "@/lib/api";
 import { PAGE_SIZE } from "@/components/common/Pagination";
+import type { ReglementIn } from "@/api/types";
 
 export type FinFilter = { statut: string; search: string; date_from: string; date_to: string };
 
@@ -43,6 +44,21 @@ export function useEncaisserNote() {
         await client.POST("/api/paiements/{paiement_id}/encaisser", {
           params: { path: { paiement_id: id } },
           body: { mode: mode ?? null, date_encaissement: date ?? null },
+        }),
+      ),
+    onSuccess: () => invalidateFin(qc),
+  });
+}
+
+/** Règlement (partiel ou total) d'une note depuis l'écran Finances. */
+export function useReglerNote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, body }: { id: number; body: ReglementIn }) =>
+      unwrap(
+        await client.POST("/api/paiements/{paiement_id}/reglement", {
+          params: { path: { paiement_id: id } },
+          body,
         }),
       ),
     onSuccess: () => invalidateFin(qc),

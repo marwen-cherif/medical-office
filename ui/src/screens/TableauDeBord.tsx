@@ -16,7 +16,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { DateRangeFilter } from "@/components/common/DateRangeFilter";
 import { humanizeError } from "@/lib/errors";
-import { fmtEuro, humanize, isoToFrDateTime, monthRange } from "@/lib/format";
+import { fmtDevise, humanize, isoToFrDateTime, monthRange } from "@/lib/format";
 import { useDashboard } from "@/hooks/dashboard";
 import type { DocTypeCount, Kpis } from "@/api/types";
 
@@ -109,7 +109,7 @@ function LegendRow({
     <div className="flex items-center gap-2 text-sm">
       <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
       <span className="text-muted">{label}</span>
-      <span className="ml-auto tabular-nums text-ink">{fmtEuro(amount)}</span>
+      <span className="ml-auto tabular-nums text-ink">{fmtDevise(amount)}</span>
       <span className="w-10 text-right tabular-nums text-xs text-muted">{pct}%</span>
     </div>
   );
@@ -172,26 +172,26 @@ export function TableauDeBord() {
         <div className="space-y-6">
           {/* Grille de KPI */}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <KpiTile label="CA encaissé" value={fmtEuro(kpis.ca_encaisse)} icon={Banknote} />
+            <KpiTile label="CA encaissé" value={fmtDevise(kpis.ca_encaisse)} icon={Banknote} />
             <KpiTile
               label="Encours à recouvrer"
-              value={fmtEuro(kpis.encours)}
+              value={fmtDevise(kpis.encours)}
               icon={Wallet}
             />
             <KpiTile
               label="Solde net"
-              value={fmtEuro(kpis.solde_net)}
+              value={fmtDevise(kpis.solde_net)}
               icon={kpis.solde_net >= 0 ? TrendingUp : TrendingDown}
               valueClass={kpis.solde_net >= 0 ? "text-green" : "text-red"}
             />
             <KpiTile
               label="Dépenses payées"
-              value={fmtEuro(kpis.depenses_reglees)}
+              value={fmtDevise(kpis.depenses_reglees)}
               icon={TrendingDown}
             />
             <KpiTile
               label="Dette fournisseurs"
-              value={fmtEuro(kpis.dette_fournisseurs)}
+              value={fmtDevise(kpis.dette_fournisseurs)}
               icon={TrendingDown}
             />
             <KpiTile
@@ -272,7 +272,7 @@ export function TableauDeBord() {
                     kpis.solde_net >= 0 ? "text-green" : "text-red"
                   }`}
                 >
-                  {fmtEuro(kpis.solde_net)}
+                  {fmtDevise(kpis.solde_net)}
                 </span>
               </div>
             </BalanceCard>

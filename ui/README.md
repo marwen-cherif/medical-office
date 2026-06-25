@@ -74,6 +74,22 @@ cd ui
 npm run tauri dev   # spawn le sidecar + Vite, ouvre la fenêtre native
 ```
 
+### Devise (euro / dinar tunisien)
+
+L'affichage des montants suit la variable d'environnement Vite **`VITE_DEVISE`** :
+`EUR` (par défaut, symbole `€`, 2 décimales) ou `TND` (symbole `DT`, 3 décimales).
+Le contrat est centralisé dans `src/lib/format.ts` (`DEVISE`, `fmtMontant`,
+`fmtDevise`, `DEVISE_SYMBOLE`). Pour changer de devise, la définir avant le build :
+
+```powershell
+# Fichier .env (committé) ou .env.local, ou en ligne :
+$env:VITE_DEVISE = "TND"; npm run tauri build
+```
+
+Voir `ui/.env.example`. La variable est lue **au build** (Vite l'inline dans le
+bundle) ; elle ne couvre que l'UI — le rendu des documents Word (`src/doc_filler.py`)
+reste indépendant.
+
 ### Régénérer le client TypeScript après un changement d'API backend
 
 ```powershell

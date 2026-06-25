@@ -913,11 +913,34 @@ def create_server(host: str, port: int, token: str) -> tuple[uvicorn.Server, soc
     return server, sock, actual_port
 
 
+def _set_process_title(title: str) -> None:
+    """Donne un nom parlant au process plutot que le generique « python.exe ».
+
+    Windows : `SetConsoleTitleW` renomme la fenetre console — c'est l'intitule que le
+    Gestionnaire des taches affiche pour une appli console (onglet « Processus »),
+    ce qui distingue ce sidecar des autres `python.exe` en dev. `setproctitle`, s'il
+    est installe, ajuste en plus le titre lu par d'autres outils / plateformes. En
+    production (exe PyInstaller) l'image s'appelle deja `crm-server.exe`. Best-effort :
+    ne leve jamais (le serveur doit demarrer meme si le renommage echoue)."""
+    try:
+        import setproctitle  # type: ignore
+        setproctitle.setproctitle(title)
+    except Exception:  # noqa: BLE001
+        pass
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleTitleW(title)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def run(host: str = "127.0.0.1", port: int = 0, token: Optional[str] = None) -> None:
     """Demarre le backend : init base, handshake stdout, boucle ASGI (bloquant)."""
     token = token or os.environ.get("CRM_TOKEN") or secrets.token_urlsafe(32)
     _init_db()
     server, sock, actual_port = create_server(host, port, token)
+    _set_process_title(f"Cabinet CRM — Backend (port {actual_port})")
     # Handshake : la coquille (Tauri) lit cette ligne sur stdout pour decouvrir le
     # port effectif et le jeton, puis ouvre la WebView pointant sur l'UI.
     handshake = {"host": host, "port": actual_port, "token": token,

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { Check, Plus, Search, Trash2, Truck, Wallet, X } from "lucide-react";
+import { Banknote, Check, Plus, Search, Trash2, Truck, Wallet, X } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,11 +26,11 @@ import { MoneySummary } from "@/components/common/MoneySummary";
 import { DateRangeFilter } from "@/components/common/DateRangeFilter";
 import { DepenseDialog } from "@/components/dialogs/DepenseDialog";
 import { ReglerDepenseDialog } from "@/components/dialogs/ReglerDepenseDialog";
+import { ReglerNoteDialog, type NoteCible } from "@/components/dialogs/ReglerNoteDialog";
 import { humanizeError } from "@/lib/errors";
-import { depenseStatut, fmtEuro, isoToFr, modeLabel, monthRange } from "@/lib/format";
+import { depenseStatut, fmtDevise, isoToFr, modeLabel, monthRange } from "@/lib/format";
 import {
   useAnnulerNote,
-  useEncaisserNote,
   useFinanceDepenses,
   useFinancePaiements,
   type FinFilter,
@@ -88,21 +88,11 @@ function PaiementsTab() {
     date_to: range.to,
   };
   const q = useFinancePaiements(filter, page);
-  const encaisser = useEncaisserNote();
   const annuler = useAnnulerNote();
+  const [reglerNote, setReglerNote] = useState<NoteCible | null>(null);
 
   const items = q.data?.items ?? [];
   const summary = q.data?.summary;
-
-  function onEncaisser(id: number) {
-    encaisser.mutate(
-      { id },
-      {
-        onSuccess: () => toast.success("Note marquée encaissée."),
-        onError: (e) => toast.error(humanizeError(e)),
-      },
-    );
-  }
 
   function onAnnuler(id: number) {
     annuler.mutate(id, {
@@ -179,9 +169,11 @@ function PaiementsTab() {
           </TableHeader>
           <TableBody>
             {items.map((row) => {
-              const isNote = row.kind === "paiement";
+              const isNote = row.kind === "paiement" || row.nature === "note";
               const enAttente = row.statut === "en_attente";
+              const partiel = row.statut === "regle_partiellement";
               const encaisse = row.statut === "encaisse";
+              const reglable = isNote && !encaisse && row.reste > 1e-6;
               const detail = [
                 row.libelle,
                 isoToFr(row.date),
@@ -192,42 +184,46 @@ function PaiementsTab() {
               return (
                 <TableRow key={`${row.kind}-${row.source_id}`}>
                   <TableCell className="text-right font-semibold tabular-nums">
-                    {fmtEuro(row.montant)}
+                    {fmtDevise(row.montant)}
                   </TableCell>
                   <TableCell className="font-semibold">{row.patient_display}</TableCell>
                   <TableCell className="text-muted">{detail || "—"}</TableCell>
                   <TableCell>
                     {encaisse ? (
                       <Badge variant="success">Encaissé</Badge>
+                    ) : partiel ? (
+                      <Badge variant="outline">Partiel</Badge>
                     ) : (
                       <Badge variant="default">En attente</Badge>
                     )}
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-1">
+                      {reglable && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title="Régler"
+                          className="text-green"
+                          onClick={() => setReglerNote({
+                            id: row.source_id, libelle: row.libelle,
+                            montant: row.montant, reste: row.reste,
+                          })}
+                        >
+                          <Banknote className="size-4" />
+                        </Button>
+                      )}
                       {isNote && enAttente && (
-                        <>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            title="Marquer encaissé"
-                            className="text-green"
-                            disabled={encaisser.isPending}
-                            onClick={() => onEncaisser(row.source_id)}
-                          >
-                            <Check className="size-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            title="Annuler"
-                            className="text-red"
-                            disabled={annuler.isPending}
-                            onClick={() => onAnnuler(row.source_id)}
-                          >
-                            <X className="size-4" />
-                          </Button>
-                        </>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title="Annuler"
+                          className="text-red"
+                          disabled={annuler.isPending}
+                          onClick={() => onAnnuler(row.source_id)}
+                        >
+                          <X className="size-4" />
+                        </Button>
                       )}
                       <Button variant="secondary" size="sm" asChild>
                         <Link to={`/patients/${row.patient_id}`}>Ouvrir la fiche</Link>
@@ -249,6 +245,8 @@ function PaiementsTab() {
       </div>
 
       <Pagination total={q.data?.total ?? 0} page={page} onPage={setPage} />
+
+      <ReglerNoteDialog note={reglerNote} onClose={() => setReglerNote(null)} />
     </div>
   );
 }
@@ -358,9 +356,9 @@ function DepensesTab() {
               return (
                 <TableRow key={d.id}>
                   <TableCell className="text-right">
-                    <div className="font-semibold tabular-nums">{fmtEuro(d.montant)}</div>
+                    <div className="font-semibold tabular-nums">{fmtDevise(d.montant)}</div>
                     <div className="text-xs text-muted tabular-nums">
-                      réglé {fmtEuro(d.montant_regle)} · reste {fmtEuro(d.reste)}
+                      réglé {fmtDevise(d.montant_regle)} · reste {fmtDevise(d.reste)}
                     </div>
                   </TableCell>
                   <TableCell className="font-semibold">

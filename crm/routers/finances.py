@@ -95,7 +95,7 @@ def finances_paiements(statut: str = "en_attente", search: str = "",
             items = [FinanceRow(
                 kind="paiement", nature="note", source_id=pa.id,
                 patient_id=pt.id, patient_display=pt.display,
-                libelle=pa.notes or "Paiement", montant=pa.montant, reste=0.0,
+                libelle=pa.notes or "Paiement", montant=pa.montant, reste=pa.reste,
                 date=pa.date_encaissement or pa.date_echeance, statut=pa.statut,
                 mode=pa.mode) for pa, pt in rows]
             if statut == "encaisse":

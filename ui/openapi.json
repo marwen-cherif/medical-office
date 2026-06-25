@@ -4101,12 +4101,106 @@
         }
       }
     },
+    "/api/paiements/{paiement_id}/reglement": {
+      "post": {
+        "tags": [
+          "clinical"
+        ],
+        "summary": "Paiement Reglement",
+        "description": "Enregistre un versement (partiel ou solde) sur une note, comme pour un acte.",
+        "operationId": "paiement_reglement_api_paiements__paiement_id__reglement_post",
+        "parameters": [
+          {
+            "name": "paiement_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Paiement Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReglementIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaiementOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/paiements/{paiement_id}/encaisser": {
       "post": {
         "tags": [
           "clinical"
         ],
         "summary": "Paiement Encaisser",
+        "description": "Solde ENTIEREMENT une note (raccourci « encaisser » en un clic).",
         "operationId": "paiement_encaisser_api_paiements__paiement_id__encaisser_post",
         "parameters": [
           {
@@ -9537,6 +9631,14 @@
             "type": "number",
             "title": "Montant"
           },
+          "montant_regle": {
+            "type": "number",
+            "title": "Montant Regle"
+          },
+          "reste": {
+            "type": "number",
+            "title": "Reste"
+          },
           "statut": {
             "type": "string",
             "title": "Statut"
@@ -9591,6 +9693,8 @@
           "id",
           "patient_id",
           "montant",
+          "montant_regle",
+          "reste",
           "statut"
         ],
         "title": "PaiementOut"

@@ -81,7 +81,7 @@ export function PrestationDialog({
 
   return (
     <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Modifier l'acte" : "Nouvel acte"}</DialogTitle>
         </DialogHeader>

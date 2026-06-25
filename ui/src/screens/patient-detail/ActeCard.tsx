@@ -11,7 +11,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Odontogramme } from "@/components/common/Odontogramme";
+import { DatePicker } from "@/components/common/DatePicker";
 import { useActes } from "@/hooks/queries";
+import { DEVISE_SYMBOLE, fmtDevise } from "@/lib/format";
 
 /** Valeur saisie d'un acte (carte). Montant en chaîne pour la saisie. */
 export type ActeValue = {
@@ -60,7 +62,7 @@ export function ActeCard({
               <SelectContent>
                 {(actes.data?.items ?? []).map((a) => (
                   <SelectItem key={a.id} value={String(a.id)}>
-                    {a.libelle} — {a.prix.toFixed(2)} €
+                    {a.libelle} — {fmtDevise(a.prix)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -72,13 +74,13 @@ export function ActeCard({
               <Input value={value.libelle} onChange={(e) => set({ libelle: e.target.value, acte_id: null })} />
             </div>
             <div className="space-y-2">
-              <Label>Montant (€)</Label>
+              <Label>Montant ({DEVISE_SYMBOLE})</Label>
               <Input inputMode="decimal" value={value.montant} placeholder="0.00"
                      onChange={(e) => set({ montant: e.target.value })} />
             </div>
             <div className="space-y-2">
               <Label>Date</Label>
-              <Input type="date" value={value.date_acte} onChange={(e) => set({ date_acte: e.target.value })} />
+              <DatePicker value={value.date_acte} onChange={(date_acte) => set({ date_acte })} />
             </div>
           </div>
         </div>

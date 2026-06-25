@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DatePicker } from "@/components/common/DatePicker";
 import {
   Dialog,
   DialogContent,
@@ -18,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { humanizeError } from "@/lib/errors";
+import { DEVISE_SYMBOLE } from "@/lib/format";
 import { useCreateDepense, usePrestataires } from "@/hooks/prestataires";
 
 /**
@@ -108,14 +110,13 @@ export function DepenseDialog({
           )}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label htmlFor="d-montant">Montant (€)</Label>
+              <Label htmlFor="d-montant">Montant ({DEVISE_SYMBOLE})</Label>
               <Input id="d-montant" autoFocus inputMode="decimal" value={montant}
                      onChange={(e) => setMontant(e.target.value)} placeholder="0.00" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="d-echeance">Échéance</Label>
-              <Input id="d-echeance" type="date" value={echeance}
-                     onChange={(e) => setEcheance(e.target.value)} />
+              <DatePicker id="d-echeance" value={echeance} onChange={setEcheance} />
             </div>
           </div>
           <div className="space-y-2">
@@ -130,7 +131,7 @@ export function DepenseDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="montant">Montant (€)</SelectItem>
+                  <SelectItem value="montant">Montant ({DEVISE_SYMBOLE})</SelectItem>
                   <SelectItem value="pourcentage">Pourcentage (%)</SelectItem>
                 </SelectContent>
               </Select>

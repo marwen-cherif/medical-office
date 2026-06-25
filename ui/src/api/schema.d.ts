@@ -653,6 +653,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/paiements/{paiement_id}/reglement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Paiement Reglement
+         * @description Enregistre un versement (partiel ou solde) sur une note, comme pour un acte.
+         */
+        post: operations["paiement_reglement_api_paiements__paiement_id__reglement_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/paiements/{paiement_id}/encaisser": {
         parameters: {
             query?: never;
@@ -662,7 +682,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Paiement Encaisser */
+        /**
+         * Paiement Encaisser
+         * @description Solde ENTIEREMENT une note (raccourci « encaisser » en un clic).
+         */
         post: operations["paiement_encaisser_api_paiements__paiement_id__encaisser_post"];
         delete?: never;
         options?: never;
@@ -2045,6 +2068,10 @@ export interface components {
             patient_id: number;
             /** Montant */
             montant: number;
+            /** Montant Regle */
+            montant_regle: number;
+            /** Reste */
+            reste: number;
             /** Statut */
             statut: string;
             /** Mode */
@@ -5617,6 +5644,77 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["PaiementIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaiementOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    paiement_reglement_api_paiements__paiement_id__reglement_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                paiement_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReglementIn"];
             };
         };
         responses: {

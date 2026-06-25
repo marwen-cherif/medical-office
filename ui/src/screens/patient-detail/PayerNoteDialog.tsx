@@ -21,43 +21,43 @@ import {
 import { humanizeError } from "@/lib/errors";
 import { DEVISE_SYMBOLE, fmtDevise, MODE_OPTIONS, todayIso } from "@/lib/format";
 import { parseMontant, ResteApresReglement } from "@/components/common/ResteApresReglement";
-import { useRegleDepense } from "@/hooks/prestataires";
-import type { Depense } from "@/api/types";
+import { usePaiementReglement } from "@/hooks/clinical";
+import type { Paiement } from "@/api/types";
 
-/** Versement (partiel ou total) sur une dépense fournisseur. */
-export function ReglerDepenseDialog({
-  depense,
-  prestataireId,
+/** Règlement (partiel ou total) d'une note précise — calque de PayerActeDialog. */
+export function PayerNoteDialog({
+  patientId,
+  paiement,
   onClose,
 }: {
-  depense: Depense | null;
-  prestataireId?: number;
+  patientId: number;
+  paiement: Paiement | null;
   onClose: () => void;
 }) {
-  const regler = useRegleDepense(prestataireId);
+  const regler = usePaiementReglement(patientId);
   const [montant, setMontant] = useState("");
   const [mode, setMode] = useState("especes");
   const [date, setDate] = useState(todayIso());
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (depense) {
-      setMontant(String(depense.reste.toFixed(2)));
+    if (paiement) {
+      setMontant((paiement.reste ?? 0).toFixed(2));
       setMode("especes");
       setDate(todayIso());
       setError("");
     }
-  }, [depense]);
+  }, [paiement]);
 
   const saisi = parseMontant(montant);
 
   function submit() {
-    if (!depense) return;
+    if (!paiement) return;
     const v = parseMontant(montant);
     if (!v || v <= 0) return setError("Montant invalide.");
-    if (v > depense.reste + 1e-6) return setError("Le versement dépasse le reste dû.");
+    if (v > (paiement.reste ?? 0) + 1e-6) return setError("Le montant dépasse le reste à recouvrer.");
     regler.mutate(
-      { id: depense.id, body: { versement: v, mode, date_reglement: date } },
+      { id: paiement.id, body: { montant: v, mode, date_reglement: date } },
       {
         onSuccess: () => {
           toast.success("Règlement enregistré.");
@@ -69,34 +69,35 @@ export function ReglerDepenseDialog({
   }
 
   return (
-    <Dialog open={!!depense} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={!!paiement} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Régler la dépense</DialogTitle>
+          <DialogTitle>Régler la note</DialogTitle>
         </DialogHeader>
-        {depense && (
+        {paiement && (
           <div className="space-y-3 py-2">
+            <p className="text-sm font-medium text-ink">{paiement.notes || "Note d'honoraires"}</p>
             <div className="flex justify-between text-sm text-muted">
               <span>Total dû</span>
-              <span className="tabular-nums">{fmtDevise(depense.montant)}</span>
+              <span className="tabular-nums">{fmtDevise(paiement.montant)}</span>
             </div>
             <div className="flex justify-between text-sm text-muted">
               <span>Déjà réglé</span>
-              <span className="tabular-nums">{fmtDevise(depense.montant_regle)}</span>
+              <span className="tabular-nums">{fmtDevise(paiement.montant_regle)}</span>
             </div>
             <div className="flex justify-between text-sm text-muted">
-              <span>Reste à payer</span>
-              <span className="tabular-nums">{fmtDevise(depense.reste)}</span>
+              <span>Reste à recouvrer</span>
+              <span className="tabular-nums">{fmtDevise(paiement.reste)}</span>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label htmlFor="r-montant">Montant versé ({DEVISE_SYMBOLE})</Label>
-                <Input id="r-montant" autoFocus inputMode="decimal" value={montant}
+                <Label htmlFor="pn-montant">Montant ({DEVISE_SYMBOLE})</Label>
+                <Input id="pn-montant" autoFocus inputMode="decimal" value={montant}
                        onChange={(e) => setMontant(e.target.value)} />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="r-date">Date</Label>
-                <DatePicker id="r-date" value={date} onChange={setDate} />
+                <Label htmlFor="pn-date">Date</Label>
+                <DatePicker id="pn-date" value={date} onChange={setDate} />
               </div>
             </div>
             <div className="space-y-2">
@@ -112,13 +113,13 @@ export function ReglerDepenseDialog({
                 </SelectContent>
               </Select>
             </div>
-            <ResteApresReglement reste={depense.reste} saisi={saisi} label="Reste à payer après versement" />
+            <ResteApresReglement reste={paiement.reste ?? 0} saisi={saisi} />
             {error && <p className="text-xs text-red">{error}</p>}
           </div>
         )}
         <DialogFooter>
           <Button variant="secondary" onClick={onClose}>Annuler</Button>
-          <Button onClick={submit} disabled={regler.isPending}>Enregistrer le versement</Button>
+          <Button onClick={submit} disabled={regler.isPending}>Enregistrer</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

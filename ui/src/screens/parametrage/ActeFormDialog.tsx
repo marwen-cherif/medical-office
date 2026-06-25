@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { humanizeError } from "@/lib/errors";
+import { DEVISE_SYMBOLE } from "@/lib/format";
 import { useCreateActe, useUpdateActe } from "@/hooks/queries";
 import type { Acte } from "@/api/types";
 
@@ -84,7 +85,7 @@ export function ActeFormDialog({
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label htmlFor="a-prix">Prix (€)</Label>
+                <Label htmlFor="a-prix">Prix ({DEVISE_SYMBOLE})</Label>
                 <Input id="a-prix" inputMode="decimal" {...register("prix")} placeholder="0.00" />
                 {errors.prix && <p className="text-xs text-red">{errors.prix.message}</p>}
               </div>

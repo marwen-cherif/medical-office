@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DatePicker } from "@/components/common/DatePicker";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +19,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { humanizeError } from "@/lib/errors";
-import { fmtEuro, MODE_OPTIONS, todayIso } from "@/lib/format";
+import { DEVISE_SYMBOLE, fmtDevise, MODE_OPTIONS, todayIso } from "@/lib/format";
+import { parseMontant, ResteApresReglement } from "@/components/common/ResteApresReglement";
 import { usePrestationReglement } from "@/hooks/clinical";
 import type { Prestation } from "@/api/types";
 
@@ -47,9 +49,11 @@ export function PayerActeDialog({
     }
   }, [prestation]);
 
+  const saisi = parseMontant(montant);
+
   function submit() {
     if (!prestation) return;
-    const v = Number(montant.replace(",", "."));
+    const v = parseMontant(montant);
     if (!v || v <= 0) return setError("Montant invalide.");
     if (v > prestation.reste + 1e-6) return setError("Le montant dépasse le reste à payer.");
     regler.mutate(
@@ -75,25 +79,25 @@ export function PayerActeDialog({
             <p className="text-sm font-medium text-ink">{prestation.libelle}</p>
             <div className="flex justify-between text-sm text-muted">
               <span>Total dû</span>
-              <span className="tabular-nums">{fmtEuro(prestation.montant)}</span>
+              <span className="tabular-nums">{fmtDevise(prestation.montant)}</span>
             </div>
             <div className="flex justify-between text-sm text-muted">
               <span>Déjà réglé</span>
-              <span className="tabular-nums">{fmtEuro(prestation.montant_regle)}</span>
+              <span className="tabular-nums">{fmtDevise(prestation.montant_regle)}</span>
             </div>
-            <div className="flex justify-between text-sm font-semibold text-amber">
+            <div className="flex justify-between text-sm text-muted">
               <span>Reste à payer</span>
-              <span className="tabular-nums">{fmtEuro(prestation.reste)}</span>
+              <span className="tabular-nums">{fmtDevise(prestation.reste)}</span>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label htmlFor="pa-montant">Montant (€)</Label>
+                <Label htmlFor="pa-montant">Montant ({DEVISE_SYMBOLE})</Label>
                 <Input id="pa-montant" autoFocus inputMode="decimal" value={montant}
                        onChange={(e) => setMontant(e.target.value)} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="pa-date">Date</Label>
-                <Input id="pa-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+                <DatePicker id="pa-date" value={date} onChange={setDate} />
               </div>
             </div>
             <div className="space-y-2">
@@ -109,6 +113,7 @@ export function PayerActeDialog({
                 </SelectContent>
               </Select>
             </div>
+            <ResteApresReglement reste={prestation.reste} saisi={saisi} />
             {error && <p className="text-xs text-red">{error}</p>}
           </div>
         )}

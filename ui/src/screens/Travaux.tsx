@@ -37,7 +37,7 @@ import { DateRangeFilter } from "@/components/common/DateRangeFilter";
 import { humanizeError } from "@/lib/errors";
 import {
   docStatut,
-  fmtEuro,
+  fmtDevise,
   humanize,
   isoToFr,
   isoToFrDateTime,
@@ -384,7 +384,7 @@ function DocumentRowItem({
         </div>
       </TableCell>
       <TableCell className="text-muted">
-        {[humanize(d.type), d.montant != null ? fmtEuro(d.montant) : ""]
+        {[humanize(d.type), d.montant != null ? fmtDevise(d.montant) : ""]
           .filter(Boolean)
           .join(" · ") || "—"}
       </TableCell>

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { DatePicker } from "@/components/common/DatePicker";
 import {
   Dialog,
   DialogContent,
@@ -20,7 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { humanizeError } from "@/lib/errors";
-import { fmtEuro, isoToFr, MODE_OPTIONS, todayIso } from "@/lib/format";
+import { DEVISE_SYMBOLE, fmtDevise, isoToFr, MODE_OPTIONS, todayIso } from "@/lib/format";
 import { useCascadeRegler, useCreances } from "@/hooks/clinical";
 
 /**
@@ -82,7 +83,7 @@ export function ReglerDialog({
       { montant: v, mode, date_reglement: date, include_notes: includeNotes },
       {
         onSuccess: (res) => {
-          toast.success(`Règlement réparti : ${fmtEuro(res.alloue)}.`);
+          toast.success(`Règlement réparti : ${fmtDevise(res.alloue)}.`);
           onClose();
         },
         onError: (e) => setError(humanizeError(e)),
@@ -99,13 +100,13 @@ export function ReglerDialog({
         <div className="space-y-3 py-2">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label htmlFor="rg-montant">Montant (€)</Label>
+              <Label htmlFor="rg-montant">Montant ({DEVISE_SYMBOLE})</Label>
               <Input id="rg-montant" autoFocus inputMode="decimal" value={montant}
                      onChange={(e) => setMontant(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="rg-date">Date</Label>
-              <Input id="rg-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              <DatePicker id="rg-date" value={date} onChange={setDate} />
             </div>
           </div>
           <div className="space-y-2">
@@ -144,16 +145,16 @@ export function ReglerDialog({
                     {c.libelle}
                     {c.date ? <span className="text-muted"> · {isoToFr(c.date)}</span> : null}
                   </span>
-                  <span className="tabular-nums text-muted">{fmtEuro(c.reste)}</span>
+                  <span className="tabular-nums text-muted">{fmtDevise(c.reste)}</span>
                   <span className="w-24 text-right tabular-nums font-medium text-green">
-                    {alloue > 0 ? `+ ${fmtEuro(alloue)}` : "—"}
+                    {alloue > 0 ? `+ ${fmtDevise(alloue)}` : "—"}
                   </span>
                 </div>
               ))}
             </div>
             {restant > 0 && (
               <p className="mt-2 text-xs text-amber">
-                Surplus non alloué : {fmtEuro(restant)} (le montant dépasse le total dû).
+                Surplus non alloué : {fmtDevise(restant)} (le montant dépasse le total dû).
               </p>
             )}
           </div>

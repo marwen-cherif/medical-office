@@ -6,15 +6,37 @@ import type { BadgeProps } from "@/components/ui/badge";
 
 type BadgeVariant = NonNullable<BadgeProps["variant"]>;
 
-/** Montant FR : espace fine pour les milliers, virgule décimale, 2 décimales. */
+// --- Devise de l'application -------------------------------------------------
+// La devise est choisie au build via la variable d'environnement Vite
+// `VITE_DEVISE` (valeurs : "EUR" par défaut, ou "TND"). Le symbole affiché et le
+// nombre de décimales en découlent. Pour en ajouter une, compléter `DEVISES`.
+// Voir aussi `ui/.env.example`.
+type DeviseConfig = { code: string; symbole: string; decimales: number };
+
+const DEVISES: Record<string, DeviseConfig> = {
+  EUR: { code: "EUR", symbole: "€", decimales: 2 },
+  TND: { code: "TND", symbole: "DT", decimales: 3 },
+};
+
+/** Devise courante, résolue depuis `VITE_DEVISE` (repli sur l'euro si inconnue). */
+export const DEVISE: DeviseConfig =
+  DEVISES[(import.meta.env.VITE_DEVISE ?? "EUR").toUpperCase()] ?? DEVISES.EUR;
+
+/** Symbole de la devise courante (`€`, `DT`, …) — pour les libellés de champs. */
+export const DEVISE_SYMBOLE = DEVISE.symbole;
+
+/** Montant FR : espace fine pour les milliers, virgule décimale, décimales selon la devise. */
 export function fmtMontant(value: number | null | undefined): string {
   const n = value ?? 0;
-  return n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return n.toLocaleString("fr-FR", {
+    minimumFractionDigits: DEVISE.decimales,
+    maximumFractionDigits: DEVISE.decimales,
+  });
 }
 
-/** `1 800,00 €`. */
-export function fmtEuro(value: number | null | undefined): string {
-  return `${fmtMontant(value)} €`;
+/** Montant suivi du symbole de la devise courante (`1 800,00 €`, `1 800,000 DT`). */
+export function fmtDevise(value: number | null | undefined): string {
+  return `${fmtMontant(value)} ${DEVISE.symbole}`;
 }
 
 /** ISO `YYYY-MM-DD` → `DD/MM/YYYY` (chaîne vide si absente/illisible). */
@@ -35,9 +57,25 @@ export function isoToFrDateTime(iso: string | null | undefined): string {
 
 /** Date du jour en ISO (`YYYY-MM-DD`), en heure locale. */
 export function todayIso(): string {
-  const d = new Date();
+  return dateToIso(new Date());
+}
+
+/** `Date` → ISO `YYYY-MM-DD` en heure locale (pas de décalage UTC). */
+export function dateToIso(d: Date): string {
   const z = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`;
+}
+
+/**
+ * ISO `YYYY-MM-DD` → `Date` locale (minuit), ou `undefined` si absente/illisible.
+ * Construit la date composant par composant pour éviter l'interprétation UTC de
+ * `new Date("YYYY-MM-DD")`, qui décalerait d'un jour selon le fuseau.
+ */
+export function isoToDate(iso: string | null | undefined): Date | undefined {
+  if (!iso) return undefined;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return undefined;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 }
 
 /** Bornes ISO du mois courant (filtres financiers par défaut). */

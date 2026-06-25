@@ -116,11 +116,17 @@ class Paiement:
     patient_id: int
     document_id: Optional[int] = None
     montant: float = 0.0
-    statut: str = "en_attente"  # en_attente | encaisse
+    montant_regle: float = 0.0
+    statut: str = "en_attente"  # en_attente | regle_partiellement | encaisse
     mode: Optional[str] = None
     date_echeance: Optional[str] = None
     date_encaissement: Optional[str] = None
     notes: Optional[str] = None
+
+    @property
+    def reste(self) -> float:
+        """Reste a recouvrer (>= 0)."""
+        return max(0.0, (self.montant or 0) - (self.montant_regle or 0))
 
 
 @dataclass
@@ -275,7 +281,8 @@ def _patient_filter_clause(search: str, filtre: str) -> tuple[str, list[Any]]:
         clauses.append("email IS NOT NULL AND TRIM(email) <> ''")
     elif filtre == "impayes":
         clauses.append(
-            "id IN (SELECT patient_id FROM paiements WHERE statut = 'en_attente')"
+            "id IN (SELECT patient_id FROM paiements "
+            "WHERE statut IN ('en_attente', 'regle_partiellement'))"
         )
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     return where, params
@@ -766,6 +773,7 @@ def _row_to_paiement(row: sqlite3.Row) -> Paiement:
         patient_id=row["patient_id"],
         document_id=row["document_id"],
         montant=row["montant"],
+        montant_regle=row["montant_regle"],
         statut=row["statut"],
         mode=row["mode"],
         date_echeance=row["date_echeance"],
@@ -774,38 +782,90 @@ def _row_to_paiement(row: sqlite3.Row) -> Paiement:
     )
 
 
+def get_paiement(conn: sqlite3.Connection, paiement_id: int) -> Optional[Paiement]:
+    row = conn.execute(
+        "SELECT * FROM paiements WHERE id = ?", (paiement_id,)
+    ).fetchone()
+    return _row_to_paiement(row) if row else None
+
+
 def create_paiement(conn: sqlite3.Connection, p: Paiement) -> Paiement:
     # Regle metier : un paiement porte toujours un montant strictement positif.
     if p.montant is None or p.montant <= 0:
         raise ValueError("Le montant d'un paiement doit être strictement supérieur à 0.")
+    # Une note creee deja encaissee porte un cumul regle egal au montant.
+    montant_regle = float(p.montant_regle or 0)
+    if p.statut == "encaisse" and montant_regle <= 0:
+        montant_regle = float(p.montant or 0)
     cur = conn.execute(
         """INSERT INTO paiements
-           (patient_id, document_id, montant, statut, mode, date_echeance,
-            date_encaissement, notes)
-           VALUES (?,?,?,?,?,?,?,?)""",
+           (patient_id, document_id, montant, montant_regle, statut, mode,
+            date_echeance, date_encaissement, notes)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
         (
-            p.patient_id, p.document_id, p.montant, p.statut, p.mode,
+            p.patient_id, p.document_id, p.montant, montant_regle, p.statut, p.mode,
             p.date_echeance, p.date_encaissement, p.notes,
         ),
     )
     conn.commit()
     p.id = cur.lastrowid
+    p.montant_regle = montant_regle
     return p
+
+
+def add_paiement_reglement(
+    conn: sqlite3.Connection,
+    paiement_id: int,
+    montant: float,
+    *,
+    mode: Optional[str] = None,
+    date_reglement: Optional[str] = None,
+) -> Paiement:
+    """Enregistre un versement (partiel ou solde) sur une note. Calque de
+    `add_prestation_reglement` : incremente le cumul, derive le statut, historise le
+    versement date. `date_encaissement` est posee quand la note est entierement soldee.
+    Refuse un montant <= 0 ou superieur au reste a recouvrer."""
+    pa = get_paiement(conn, paiement_id)
+    if pa is None:
+        raise ValueError("Note introuvable.")
+    if montant is None or montant <= 0:
+        raise ValueError("Le versement doit etre strictement superieur a 0.")
+    if montant > pa.reste + 1e-9:
+        raise ValueError("Le versement depasse le reste a recouvrer.")
+    nouveau = float(pa.montant_regle or 0) + float(montant)
+    statut = statut_paiement(float(pa.montant or 0), nouveau)
+    when = date_reglement or _now()
+    # date_encaissement = date du SOLDE (la note devient 'encaisse') ; reste NULL tant
+    # qu'elle est partielle, l'historique date portant alors la tracabilite.
+    date_enc = when if statut == "encaisse" else None
+    conn.execute(
+        "UPDATE paiements SET montant_regle = ?, statut = ?, "
+        "date_encaissement = COALESCE(?, date_encaissement), mode = COALESCE(?, mode) "
+        "WHERE id = ?",
+        (nouveau, statut, date_enc, mode, paiement_id),
+    )
+    conn.execute(
+        "INSERT INTO paiement_reglements (paiement_id, montant, mode, date_reglement) "
+        "VALUES (?, ?, ?, ?)",
+        (paiement_id, float(montant), mode, when),
+    )
+    conn.commit()
+    return get_paiement(conn, paiement_id)  # type: ignore[return-value]
 
 
 def mark_paiement_encaisse(
     conn: sqlite3.Connection, paiement_id: int, when: Optional[str] = None,
     mode: Optional[str] = None,
 ) -> None:
-    """Marque un paiement encaisse. `mode` (especes/cheque/virement), s'il est
-    fourni, est enregistre pour la tracabilite ; sinon le mode existant est garde.
+    """Solde ENTIEREMENT une note (raccourci « encaisser » en un clic) : enregistre un
+    versement du reste a recouvrer via `add_paiement_reglement` (historise + statut
+    'encaisse'). `mode`, s'il est fourni, est enregistre pour la tracabilite.
     """
-    conn.execute(
-        "UPDATE paiements SET statut='encaisse', date_encaissement=?, "
-        "mode=COALESCE(?, mode) WHERE id=?",
-        (when or _now(), mode, paiement_id),
-    )
-    conn.commit()
+    pa = get_paiement(conn, paiement_id)
+    if pa is None:
+        return
+    if pa.reste > 1e-9:
+        add_paiement_reglement(conn, paiement_id, pa.reste, mode=mode, date_reglement=when)
 
 
 def list_paiements(
@@ -831,8 +891,22 @@ def count_paiements_for_patient(conn: sqlite3.Connection, patient_id: int) -> in
     return int(row["n"])
 
 
+def paiement_has_reglements(conn: sqlite3.Connection, paiement_id: int) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM paiement_reglements WHERE paiement_id = ? LIMIT 1",
+        (paiement_id,),
+    ).fetchone()
+    return row is not None
+
+
 def delete_paiement(conn: sqlite3.Connection, paiement_id: int) -> None:
-    """Supprime un paiement (annulation). La trace reste dans le journal d'audit."""
+    """Supprime (annule) une note SANS aucun versement. Une note deja (partiellement)
+    reglee n'est pas annulable — sa tresorerie doit rester tracee (calque des actes).
+    La trace reste dans le journal d'audit."""
+    if paiement_has_reglements(conn, paiement_id):
+        raise ValueError(
+            "Cette note a deja des reglements : elle ne peut pas etre annulee."
+        )
     conn.execute("DELETE FROM paiements WHERE id = ?", (paiement_id,))
     conn.commit()
 
@@ -1828,6 +1902,17 @@ def statut_depense(montant: float, regle: float) -> str:
     return "regle"
 
 
+def statut_paiement(montant: float, regle: float) -> str:
+    """Statut d'une note derive du cumul regle (source unique de verite). Calque de
+    `statut_depense` mais l'etat solde reste 'encaisse' (compat ascendante : tous les
+    filtres existants — encaissements, tresorerie, creances — lisent statut='encaisse')."""
+    if regle <= 0:
+        return "en_attente"
+    if regle + 1e-9 < (montant or 0):
+        return "regle_partiellement"
+    return "encaisse"
+
+
 @dataclass
 class Depense:
     id: Optional[int]
@@ -2602,7 +2687,10 @@ def _creances_union(
     acte_clauses, acte_params = _creance_branch_clause(
         search, date_from, date_to, "pr.date_acte"
     )
-    note_where = " AND ".join(["pa.statut = 'en_attente'"] + note_clauses)
+    note_where = " AND ".join(
+        ["pa.statut IN ('en_attente', 'regle_partiellement')",
+         "(pa.montant - pa.montant_regle) > 1e-9"] + note_clauses
+    )
     acte_where = " AND ".join(
         ["pr.montant > 0", "(pr.montant - pr.montant_regle) > 1e-9"] + acte_clauses
     )
@@ -2611,7 +2699,7 @@ def _creances_union(
         "pt.id AS p_id, pt.nom, pt.prenom, pt.date_naissance, pt.email, "
         "pt.telephone, pt.adresse, pt.notes AS p_notes, "
         "COALESCE(NULLIF(d.acte, ''), NULLIF(pa.notes, ''), 'Note d''honoraires') AS libelle, "
-        "pa.montant AS montant, pa.montant AS reste, "
+        "pa.montant AS montant, (pa.montant - pa.montant_regle) AS reste, "
         "pa.date_echeance AS date_ref, pa.statut AS statut "
         "FROM paiements pa JOIN patients pt ON pt.id = pa.patient_id "
         "LEFT JOIN documents d ON d.id = pa.document_id "
@@ -2685,22 +2773,10 @@ def total_creances(
 def total_encaisse(
     conn: sqlite3.Connection, date_from: str = "", date_to: str = "",
 ) -> float:
-    """Tresorerie REELLEMENT encaissee sur la periode : paiements encaisses (par
-    date_encaissement) + reglements d'actes (par date_reglement). Agrege les DEUX
-    sources pour les totaux « encaisse » de Finances et du tableau de bord (D7)."""
-    clauses_p: list[str] = []
-    params_p: list[Any] = []
-    if date_from.strip():
-        clauses_p.append("date(date_encaissement) >= ?")
-        params_p.append(date_from.strip())
-    if date_to.strip():
-        clauses_p.append("date(date_encaissement) <= ?")
-        params_p.append(date_to.strip())
-    where_p = " AND ".join(["statut = 'encaisse'"] + clauses_p)
-    row_p = conn.execute(
-        f"SELECT COALESCE(SUM(montant), 0) AS t FROM paiements WHERE {where_p}",
-        params_p,
-    ).fetchone()
+    """Tresorerie REELLEMENT encaissee sur la periode : versements de notes
+    (paiement_reglements) + reglements d'actes (prestation_reglements), tous deux par
+    date_reglement. Agrege les DEUX sources pour les totaux « encaisse » de Finances et
+    du tableau de bord (D7)."""
     clauses_r: list[str] = []
     params_r: list[Any] = []
     if date_from.strip():
@@ -2710,9 +2786,13 @@ def total_encaisse(
         clauses_r.append("date(date_reglement) <= ?")
         params_r.append(date_to.strip())
     where_r = (" WHERE " + " AND ".join(clauses_r)) if clauses_r else ""
+    row_p = conn.execute(
+        f"SELECT COALESCE(SUM(montant), 0) AS t FROM paiement_reglements{where_r}",
+        list(params_r),
+    ).fetchone()
     row_r = conn.execute(
         f"SELECT COALESCE(SUM(montant), 0) AS t FROM prestation_reglements{where_r}",
-        params_r,
+        list(params_r),
     ).fetchone()
     return float(row_p["t"] or 0) + float(row_r["t"] or 0)
 
@@ -2720,8 +2800,8 @@ def total_encaisse(
 # --- Reglement global en cascade (D9 revise) ----------------------------------
 # Un versement unique est REPARTI automatiquement sur les creances du patient, du
 # PLUS ANCIEN au plus recent : d'abord les actes (paiement partiel via
-# prestation_reglements), puis (option) les notes en attente (soldees entierement,
-# car une note est binaire). Le reliquat non affectable est renvoye a l'appelant.
+# prestation_reglements), puis (option) les notes (paiement partiel via
+# paiement_reglements). Le reliquat non affectable est renvoye a l'appelant.
 
 def creances_patient(
     conn: sqlite3.Connection, patient_id: int, include_notes: bool = True,
@@ -2748,7 +2828,9 @@ def creances_patient(
             date=pres.date_acte, statut=pres.statut))
     if include_notes:
         notes = conn.execute(
-            "SELECT * FROM paiements WHERE patient_id = ? AND statut = 'en_attente' "
+            "SELECT * FROM paiements WHERE patient_id = ? "
+            "AND statut IN ('en_attente', 'regle_partiellement') "
+            "AND (montant - montant_regle) > 1e-9 "
             "ORDER BY (date_echeance IS NULL), date(date_echeance), id",
             (patient_id,),
         ).fetchall()
@@ -2757,7 +2839,7 @@ def creances_patient(
             out.append(Creance(
                 nature="note", source_id=pa.id, patient=p,
                 libelle=(pa.notes or "Note d'honoraires"),
-                montant=float(pa.montant or 0), reste=float(pa.montant or 0),
+                montant=float(pa.montant or 0), reste=pa.reste,
                 date=pa.date_echeance, statut=pa.statut))
     return out
 
@@ -2772,9 +2854,9 @@ def regler_creances(
     include_notes: bool = True,
 ) -> dict:
     """Repartit `montant` sur les creances du patient, du plus ancien au plus recent
-    (D9 revise) : actes en paiement partiel (prestation_reglements), puis (option)
-    notes soldees entierement. Une note ne peut PAS etre payee partiellement (binaire)
-    donc elle n'est soldee que si le reliquat la couvre entierement.
+    (D9 revise) : actes ET notes en paiement PARTIEL (prestation_reglements /
+    paiement_reglements). Chaque creance recoit min(reliquat, reste) ; une note peut
+    donc etre soldee partiellement, comme un acte.
 
     Renvoie {alloue, reste, lignes:[(nature, source_id, libelle, montant)]} ; `reste`
     est le reliquat NON affecte (montant superieur aux creances solvables)."""
@@ -2786,19 +2868,17 @@ def regler_creances(
     for c in creances_patient(conn, patient_id, include_notes=include_notes):
         if remaining <= 1e-9:
             break
+        pay = min(remaining, c.reste)
+        if pay <= 1e-9:
+            continue
         if c.nature == "acte":
-            pay = min(remaining, c.reste)
-            if pay <= 1e-9:
-                continue
             add_prestation_reglement(conn, c.source_id, pay, mode=mode,
                                      date_reglement=when)
-            remaining -= pay
-            lignes.append(("acte", c.source_id, c.libelle, pay))
-        else:  # note : binaire, soldee seulement si entierement couverte
-            if c.reste <= remaining + 1e-9:
-                mark_paiement_encaisse(conn, c.source_id, when=when, mode=mode)
-                remaining -= c.reste
-                lignes.append(("note", c.source_id, c.libelle, c.reste))
+        else:  # note : reglement partiel comme un acte
+            add_paiement_reglement(conn, c.source_id, pay, mode=mode,
+                                   date_reglement=when)
+        remaining -= pay
+        lignes.append((c.nature, c.source_id, c.libelle, pay))
     return {"alloue": float(montant) - remaining, "reste": max(0.0, remaining),
             "lignes": lignes}
 
@@ -2822,7 +2902,8 @@ def list_encaissements_patient(
     limit: int | None = None, offset: int = 0,
 ) -> list[Encaissement]:
     """Encaissements d'un patient (recents d'abord) : versements d'actes
-    (prestation_reglements) + notes encaissees (paiements). Historique unifie."""
+    (prestation_reglements) + versements de notes (paiement_reglements). Historique
+    unifie, 1 ligne par versement (partiel ou solde)."""
     sql = (
         "SELECT 'acte' AS nature, pr.id AS source_id, pr.libelle AS libelle, "
         "reg.montant AS montant, reg.mode AS mode, reg.date_reglement AS date_ref "
@@ -2831,8 +2912,9 @@ def list_encaissements_patient(
         "UNION ALL "
         "SELECT 'note' AS nature, pa.id AS source_id, "
         "COALESCE(NULLIF(pa.notes, ''), 'Note d''honoraires') AS libelle, "
-        "pa.montant AS montant, pa.mode AS mode, pa.date_encaissement AS date_ref "
-        "FROM paiements pa WHERE pa.patient_id = ? AND pa.statut = 'encaisse' "
+        "reg.montant AS montant, reg.mode AS mode, reg.date_reglement AS date_ref "
+        "FROM paiement_reglements reg JOIN paiements pa ON pa.id = reg.paiement_id "
+        "WHERE pa.patient_id = ? "
     )
     sql = (f"SELECT * FROM ({sql}) "
            "ORDER BY date_ref IS NULL, date(date_ref) DESC, source_id DESC")
@@ -2852,8 +2934,9 @@ def count_encaissements_patient(conn: sqlite3.Connection, patient_id: int) -> in
         "SELECT (SELECT COUNT(*) FROM prestation_reglements reg "
         "        JOIN prestations pr ON pr.id = reg.prestation_id "
         "        WHERE pr.patient_id = ?) "
-        "     + (SELECT COUNT(*) FROM paiements "
-        "        WHERE patient_id = ? AND statut = 'encaisse') AS n",
+        "     + (SELECT COUNT(*) FROM paiement_reglements reg "
+        "        JOIN paiements pa ON pa.id = reg.paiement_id "
+        "        WHERE pa.patient_id = ?) AS n",
         (patient_id, patient_id),
     ).fetchone()
     return int(row["n"])
@@ -2875,7 +2958,7 @@ def solde_patient(
     if include_notes:
         rowp = conn.execute(
             "SELECT COALESCE(SUM(montant), 0) AS du, "
-            "COALESCE(SUM(CASE WHEN statut = 'encaisse' THEN montant ELSE 0 END), 0) AS enc "
+            "COALESCE(SUM(montant_regle), 0) AS enc "
             "FROM paiements WHERE patient_id = ?",
             (patient_id,),
         ).fetchone()

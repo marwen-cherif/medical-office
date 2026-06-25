@@ -37,17 +37,24 @@ python -m pip install -r requirements.txt   # install deps
 python crm_app.py         # CRM desktop window (Flet)
 python crm_web.py         # CRM in browser (set CRM_WEB=1 internally)
 python -m crm.reset       # wipe the SQLite DB + generated notes (asks confirmation)
+python -m crm.import_actes actes.xlsx          # bulk-load the actes catalogue from Excel
+python -m crm.import_actes --modele m.xlsx     # write a sample Excel to fill in
 
 # Build Windows executables (PyInstaller, Windows + Word required)
 .\build-crm.bat           # -> dist\Cabinet-CRM.exe + dist\Cabinet-CRM-Web.exe
 ```
 
 Double-clickable `.bat` wrappers exist for non-technical use: `run-crm.bat` /
-`run-crm-web.bat` (install deps + launch) and `reset.bat` (confirmed wipe). `reset.bat`
+`run-crm-web.bat` (install deps + launch), `reset.bat` (confirmed wipe) and
+`import-actes.bat` (load the actes catalogue from Excel). `reset.bat`
 prefers the built `Cabinet-CRM.exe --reset --yes` if present, else falls back to
 `python -m crm.reset --yes`. The frozen exe accepts `--reset` (optionally with `--yes`)
 as an entry-point flag handled in `crm_app.py` before the GUI starts; `crm.reset` itself
-takes `--yes` to skip the `SUPPRIMER` confirmation.
+takes `--yes` to skip the `SUPPRIMER` confirmation. `import-actes.bat` works the same way
+(menu: generate a blank template / import; drag-and-drop an `.xlsx` onto it to import
+directly): it prefers `Cabinet-CRM.exe --import-actes …` if present, else
+`python -m crm.import_actes …` (both forwarded to `crm.import_actes`, whose `--import-actes`
+entry-point flag is also handled in `crm_app.py`).
 
 CRM web env vars (`crm_web.py`, `crm/app.py`): `CRM_PORT` (default 8550),
 `CRM_HOST=0.0.0.0` to expose on the LAN.

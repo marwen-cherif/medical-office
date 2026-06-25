@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import { MoneySummary } from "@/components/common/MoneySummary";
 import { humanizeError } from "@/lib/errors";
-import { fmtEuro, isoToFr } from "@/lib/format";
+import { fmtDevise, isoToFr } from "@/lib/format";
 import {
   useGenerate,
   useGenerationForm,
@@ -192,9 +192,9 @@ export function GenerateDialog({
             <Checkbox checked={selected.has(l.id)} onCheckedChange={() => toggle(l.id)} />
             <span className="flex-1">
               {l.date_acte ? `${isoToFr(l.date_acte)} · ` : ""}
-              {l.libelle} · {fmtEuro(l.montant)}
+              {l.libelle} · {fmtDevise(l.montant)}
               {l.reste > 0 && Math.abs(l.reste - l.montant) > 1e-9 ? (
-                <span className="text-muted"> (reste {fmtEuro(l.reste)})</span>
+                <span className="text-muted"> (reste {fmtDevise(l.reste)})</span>
               ) : null}
             </span>
           </label>

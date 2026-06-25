@@ -10,7 +10,7 @@ import { PrestataireFormDialog } from "@/components/dialogs/PrestataireFormDialo
 import { DepenseDialog } from "@/components/dialogs/DepenseDialog";
 import { ReglerDepenseDialog } from "@/components/dialogs/ReglerDepenseDialog";
 import { humanizeError } from "@/lib/errors";
-import { depenseStatut, fmtEuro, isoToFr } from "@/lib/format";
+import { depenseStatut, fmtDevise, isoToFr } from "@/lib/format";
 import {
   useDeleteDepense,
   useDeleteFacture,
@@ -165,7 +165,7 @@ function FacturesSection({ id }: { id: number }) {
       <div className="overflow-hidden rounded-[var(--radius)] border border-line bg-white">
         <ul className="divide-y divide-line">
           {items.map((f) => {
-            const sub = [isoToFr(f.created_at), f.montant != null ? fmtEuro(f.montant) : ""]
+            const sub = [isoToFr(f.created_at), f.montant != null ? fmtDevise(f.montant) : ""]
               .filter(Boolean)
               .join(" · ");
             return (
@@ -245,9 +245,9 @@ function DepensesSection({ id }: { id: number }) {
             return (
               <li key={d.id} className="flex items-center gap-3 px-4 py-3">
                 <div className="min-w-0 flex-1">
-                  <div className="font-semibold text-ink tabular-nums">{fmtEuro(d.montant)}</div>
+                  <div className="font-semibold text-ink tabular-nums">{fmtDevise(d.montant)}</div>
                   <div className="text-xs text-muted tabular-nums">
-                    réglé {fmtEuro(d.montant_regle)} · reste {fmtEuro(d.reste)}
+                    réglé {fmtDevise(d.montant_regle)} · reste {fmtDevise(d.reste)}
                   </div>
                   {sub && <div className="truncate text-sm text-muted">{sub}</div>}
                 </div>

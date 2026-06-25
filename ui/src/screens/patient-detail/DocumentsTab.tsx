@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Pagination } from "@/components/common/Pagination";
 import { humanizeError } from "@/lib/errors";
-import { docStatut, fmtEuro, humanize, isoToFr } from "@/lib/format";
+import { docStatut, fmtDevise, humanize, isoToFr } from "@/lib/format";
 import {
   useDeleteDocument,
   useOpenDocument,
@@ -150,7 +150,7 @@ export function DocumentsTab({
                 <div className="min-w-0 flex-1">
                   <div className="font-medium text-ink">
                     {humanize(d.type)}
-                    {d.montant != null ? ` — ${fmtEuro(d.montant)}` : ""}
+                    {d.montant != null ? ` — ${fmtDevise(d.montant)}` : ""}
                   </div>
                   <div className="text-xs text-muted">
                     {d.statut === "envoye"
