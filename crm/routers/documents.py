@@ -82,11 +82,14 @@ class GenFieldOut(BaseModel):
 class GenActeLine(BaseModel):
     id: int
     libelle: str
-    montant: float
+    montant: float                  # montant de l'acte (source du du, lecture seule)
     montant_regle: float
     reste: float
     date_acte: Optional[str] = None
     checked: bool = True
+    # Montant a facturer sur la note pour cet acte (editable cote UI). Defaut =
+    # montant de l'acte ; pour un brouillon, montant edite restitue (D4).
+    montant_note: float = 0.0
 
 
 class GenPlanGroup(BaseModel):
@@ -112,6 +115,7 @@ class GenTemplateOut(BaseModel):
     name: str
     label: str
     categorie: Optional[str] = None
+    is_multiligne: bool = False
 
 
 class NewActeIn(BaseModel):
@@ -132,6 +136,10 @@ class DraftIn(BaseModel):
     variables: dict[str, str] = {}            # modele mono-valeur
     selected_prestation_ids: list[int] = []   # modele multi-lignes : actes existants
     new_actes: list[NewActeIn] = []           # modele multi-lignes : nouveaux actes
+    # Montant de note edite par acte retenu (prestation_id -> montant). Affichage
+    # seul : pose le `montant` de la ligne sans toucher l'acte (D4). Absent => defaut
+    # = montant de l'acte (retro-compatible).
+    montants_notes: dict[int, float] = {}
 
 
 class GenerateIn(DraftIn):
@@ -210,6 +218,32 @@ def _cat_eq(a: Optional[str], b: Optional[str]) -> bool:
     return (a or "").strip().casefold() == (b or "").strip().casefold()
 
 
+def _num_str(value: Optional[float]) -> str:
+    """Montant -> chaine pour un champ : entier sans .0, sinon decimal (950, 950.5)."""
+    v = float(value or 0)
+    return str(int(v)) if v == int(v) else str(v)
+
+
+def _prefill_from_prestation(tag: str, pres: repo.Prestation) -> Optional[str]:
+    """Valeur pré-remplie d'un champ mono-valeur depuis un acte (note depuis 1 acte).
+
+    Mappe par nom de balise standard (ACTE/MONTANT/DATE/DENTS/NOTE) ; renvoie None si
+    la balise ne correspond à aucun attribut connu (laissée à la saisie). Les balises
+    patient (NOM, …) sont déjà exclues en amont (`_resolve_fields`)."""
+    t = tag.upper()
+    if t == "ACTE":
+        return pres.libelle or ""
+    if any(k in t for k in ("MONTANT", "PRIX", "TARIF")):
+        return _num_str(pres.montant)
+    if "DATE" in t:
+        return pres.date_acte or ""  # ISO (le datepicker attend l'ISO)
+    if t == "DENTS":
+        return pres.dents or ""
+    if t == "NOTE":
+        return pres.note or ""
+    return None
+
+
 # --- Liste fiche patient ------------------------------------------------------
 
 @router.get("/patients/{patient_id}/documents", response_model=DocumentListOut)
@@ -257,24 +291,32 @@ def generation_templates(mode: str = "all") -> list[GenTemplateOut]:
                 continue
             if mode == "generic" and note_cat and _cat_eq(cat, note_cat):
                 continue
-            out.append(GenTemplateOut(name=t.name, label=t.label, categorie=cat))
+            # is_multiligne : permet au frontend de pre-selectionner un modele
+            # multi-lignes quand on genere une note depuis des actes (page Actes/Plans).
+            out.append(GenTemplateOut(name=t.name, label=t.label, categorie=cat,
+                                      is_multiligne=_is_multiligne(t)))
     return out
 
 
-def _acte_line(p: repo.Prestation, checked: bool = True) -> GenActeLine:
+def _acte_line(p: repo.Prestation, checked: bool = True,
+               montant_note: Optional[float] = None) -> GenActeLine:
     return GenActeLine(id=p.id, libelle=p.libelle, montant=p.montant,
                        montant_regle=p.montant_regle, reste=p.reste,
-                       date_acte=p.date_acte, checked=checked)
+                       date_acte=p.date_acte, checked=checked,
+                       montant_note=p.montant if montant_note is None else montant_note)
 
 
 @router.get("/patients/{patient_id}/generation/form", response_model=GenFormOut)
 def generation_form(patient_id: int, template: str,
-                    document_id: Optional[int] = None) -> GenFormOut:
+                    document_id: Optional[int] = None,
+                    source_prestation_id: Optional[int] = None) -> GenFormOut:
     """Specification du formulaire pour un (patient, modele).
 
     Mono-valeur : liste des champs a saisir (avec valeurs du brouillon le cas
-    echeant). Multi-lignes : actes existants groupes (pre-coches selon le brouillon)
-    pour selection. Les nouveaux actes sont saisis cote frontend (carte d'acte).
+    echeant ; ou **pre-remplies depuis un acte** si `source_prestation_id` est fourni
+    — note generee depuis un acte unique). Multi-lignes : actes existants groupes
+    (pre-coches selon le brouillon) pour selection. Les nouveaux actes sont saisis
+    cote frontend (carte d'acte).
     """
     with core.db() as conn:
         tpl = templates.get_template(template)
@@ -291,29 +333,46 @@ def generation_form(patient_id: int, template: str,
         multi = _is_multiligne(tpl)
         if multi:
             saved = draft_vars.get(generator.LIGNES_KEY)
-            saved_ids = {l.get("prestation_id") for l in saved
-                         if isinstance(l, dict) and l.get("source") == "acte"} \
+            saved_lines = [l for l in saved if isinstance(l, dict)
+                           and l.get("source") == "acte"] \
                 if isinstance(saved, list) else None
+            saved_ids = {l.get("prestation_id") for l in saved_lines} \
+                if saved_lines is not None else None
+            # Montant de note edite par acte (restitue a la reouverture du brouillon).
+            saved_montants = {l.get("prestation_id"): l.get("montant")
+                              for l in (saved_lines or [])
+                              if l.get("montant") is not None}
             isoles = repo.list_prestations(conn, patient_id, plan_id=None)
             plans = repo.list_plans(conn, patient_id)
 
             def checked(pid: int) -> bool:
                 return (pid in saved_ids) if saved_ids is not None else True
 
+            def montant_note(pid: int) -> Optional[float]:
+                v = saved_montants.get(pid)
+                return float(v) if v is not None else None
+
             groups = []
             for pl in plans:
                 pres = repo.list_prestations(conn, patient_id, plan_id=pl.id)
                 groups.append(GenPlanGroup(
                     titre=pl.titre,
-                    prestations=[_acte_line(x, checked(x.id)) for x in pres]))
+                    prestations=[_acte_line(x, checked(x.id), montant_note(x.id))
+                                 for x in pres]))
             actes = GenActesSource(
-                isoles=[_acte_line(x, checked(x.id)) for x in isoles], plans=groups)
+                isoles=[_acte_line(x, checked(x.id), montant_note(x.id))
+                        for x in isoles], plans=groups)
             return GenFormOut(template=tpl.name, label=tpl.label, is_multiligne=True,
                               output_format=out_fmt, actes=actes)
-        # Mono-valeur
+        # Mono-valeur : valeurs du brouillon en priorité, sinon pré-remplissage depuis
+        # l'acte source (note depuis 1 acte), sinon valeur par défaut du champ.
+        src_pres = (repo.get_prestation(conn, source_prestation_id)
+                    if source_prestation_id and not draft_vars else None)
         fields: list[GenFieldOut] = []
         for f in _resolve_fields(conn, tpl):
-            init = draft_vars.get(f.tag, f.default_value or "")
+            prefill = _prefill_from_prestation(f.tag, src_pres) if src_pres else None
+            fallback = prefill if prefill is not None else (f.default_value or "")
+            init = draft_vars.get(f.tag, fallback)
             fields.append(GenFieldOut(tag=f.tag, label=f.label or f.tag,
                                       type=f.type, default_value=f.default_value or "",
                                       value=init))
@@ -329,12 +388,28 @@ def _build_lignes(conn, patient_id: int, body: DraftIn) -> list[dict]:
     Les nouveaux actes sont crees comme **actes isoles** (plan_id=NULL) — donc
     suivis dans la dette et visibles dans l'onglet Actes (calque Flet). Idempotent :
     un `prestation_id` fourni est mis a jour plutot que recree.
+
+    Le montant de chaque ligne adossee a un acte existant peut etre **surcharge**
+    via `body.montants_notes` (affichage seul, D4) : aucune ecriture sur l'acte, qui
+    reste la source du du. Defaut (acte non surcharge) = montant de l'acte. Les
+    nouveaux actes gardent montant ligne = montant de l'acte (pas de surcharge, D4).
     """
+    # Cles JSON normalisees en int (l'objet JSON porte des cles texte ; pydantic
+    # coerce deja dict[int, float], on securise les deux formes).
+    overrides: dict[int, float] = {}
+    for k, v in (body.montants_notes or {}).items():
+        try:
+            overrides[int(k)] = float(v)
+        except (TypeError, ValueError):
+            continue
     lignes: list[dict] = []
     for pid in body.selected_prestation_ids:
         pres = repo.get_prestation(conn, pid)
         if pres is not None:
-            lignes.append(generator.prestation_to_ligne(pres))
+            ligne = generator.prestation_to_ligne(pres)
+            if pid in overrides:
+                ligne["montant"] = overrides[pid]  # montant de note (affichage, D4)
+            lignes.append(ligne)
     for na in body.new_actes:
         if not (na.libelle or "").strip():
             continue
@@ -436,6 +511,13 @@ def generate(patient_id: int, body: GenerateIn) -> core.JobAcceptedOut:
                 conn, "note_honoraires_generee" if body.is_note else "document_genere",
                 {"document_id": doc.id, "type": doc.type, "modele": doc.template},
                 patient_id=patient_id)
+            # Note AUTONOME (sans aucun acte rattache) -> creance « note »
+            # (design D1-D3). `has_actes` couvre aussi une note MONO-VALEUR generee
+            # depuis un acte (selection/ajout) : elle reste adossee (pas de creance).
+            # No-op pour un document d'un autre type ; idempotent si la note est regeneree.
+            has_actes = bool(body.selected_prestation_ids or body.new_actes)
+            generator.create_note_creance(conn, doc, is_note=body.is_note,
+                                          has_actes=has_actes)
             printer = None
             if body.do_print:
                 printer = _check_printer(conn)

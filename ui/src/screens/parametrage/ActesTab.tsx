@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { humanizeError } from "@/lib/errors";
-import { formatPrix } from "@/lib/utils";
+import { Montant } from "@/components/common/Montant";
 import { useActes, useSetActeActive } from "@/hooks/queries";
 import type { Acte } from "@/api/types";
 import { ActeFormDialog } from "./ActeFormDialog";
@@ -74,7 +74,9 @@ export function ActesTab() {
               <TableRow key={a.id}>
                 <TableCell className="font-medium">{a.libelle}</TableCell>
                 <TableCell className="font-mono text-muted">{a.code ?? "—"}</TableCell>
-                <TableCell className="text-right tabular-nums">{formatPrix(a.prix)}</TableCell>
+                <TableCell className="text-right">
+                  <Montant value={a.prix} />
+                </TableCell>
                 <TableCell>
                   {a.actif ? (
                     <Badge variant="success">Actif</Badge>

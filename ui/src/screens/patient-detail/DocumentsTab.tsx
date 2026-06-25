@@ -15,7 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Pagination } from "@/components/common/Pagination";
 import { RowActions } from "@/components/common/RowActions";
+import { Tooltip } from "@/components/common/Tooltip";
 import { humanizeError } from "@/lib/errors";
+import { useShortcut } from "@/lib/shortcuts";
 import { docStatut, fmtDevise, humanize, isoToFr } from "@/lib/format";
 import {
   useDeleteDocument,
@@ -50,6 +52,21 @@ export function DocumentsTab({
   const refresh = useRefreshStatus();
   const del = useDeleteDocument();
   const [gen, setGen] = useState<GenState>(null);
+
+  useShortcut([
+    {
+      keys: "alt+n",
+      description: "Note d'honoraires",
+      group: "Documents",
+      handler: () => setGen({ mode: "note" }),
+    },
+    {
+      keys: "alt+d",
+      description: "Générer un document",
+      group: "Documents",
+      handler: () => setGen({ mode: "generic" }),
+    },
+  ]);
 
   function withToast(p: Promise<unknown>, msg: string) {
     p.then(() => toast.success(msg)).catch((e) => toast.error(humanizeError(e)));
@@ -127,12 +144,16 @@ export function DocumentsTab({
     <div className="space-y-4 pt-4">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="flex-1 text-lg font-semibold text-ink">Documents</h2>
-        <Button variant="secondary" onClick={() => setGen({ mode: "note" })}>
-          <FileText className="size-4" /> Note d'honoraires
-        </Button>
-        <Button onClick={() => setGen({ mode: "generic" })}>
-          <FileText className="size-4" /> Générer un document
-        </Button>
+        <Tooltip label="Note d'honoraires" shortcut="alt+n">
+          <Button variant="secondary" onClick={() => setGen({ mode: "note" })}>
+            <FileText className="size-4" /> Note d'honoraires
+          </Button>
+        </Tooltip>
+        <Tooltip label="Générer un document" shortcut="alt+d">
+          <Button onClick={() => setGen({ mode: "generic" })}>
+            <FileText className="size-4" /> Générer un document
+          </Button>
+        </Tooltip>
       </div>
 
       {list.isLoading && <p className="text-sm text-muted">Chargement…</p>}

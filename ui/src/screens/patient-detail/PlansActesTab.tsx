@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { Banknote, Pencil, Plus, Trash2, Wallet } from "lucide-react";
+import { Banknote, FileText, Pencil, Plus, Trash2, Wallet, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { humanizeError } from "@/lib/errors";
 import { fmtDevise, isoToFr, parseDents } from "@/lib/format";
+import { Montant } from "@/components/common/Montant";
 import {
   useClinical,
   useDeletePaiement,
@@ -12,8 +14,11 @@ import {
   useDeletePrestation,
 } from "@/hooks/clinical";
 import type { Paiement, Plan, Prestation } from "@/api/types";
+import { useShortcut } from "@/lib/shortcuts";
 import { OdontogrammeClinique } from "@/components/common/OdontogrammeClinique";
+import { Tooltip } from "@/components/common/Tooltip";
 import { RowActions } from "@/components/common/RowActions";
+import { GenerateDialog } from "./GenerateDialog";
 import { PlanDialog } from "./PlanDialog";
 import { PrestationDialog } from "./PrestationDialog";
 import { PayerActeDialog } from "./PayerActeDialog";
@@ -39,23 +44,38 @@ function PrestationRow({
   onRegler,
   onEdit,
   onDelete,
+  onGenerateNote,
   onHover,
+  selectMode,
+  checked,
+  onToggle,
 }: {
   pres: Prestation;
   onRegler: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onGenerateNote: () => void;
   onHover?: (dents: string[] | null) => void;
+  selectMode?: boolean;
+  checked?: boolean;
+  onToggle?: () => void;
 }) {
   const pct = pres.montant > 0 ? Math.min(100, (pres.montant_regle / pres.montant) * 100) : 0;
   return (
     <div
-      className="flex items-start gap-3 border-t border-line py-2 first:border-t-0 hover:bg-bg/60"
+      className="flex items-start gap-3 border-t border-line py-2 first:border-t-0 focus-within:bg-bg/60 hover:bg-bg/60"
       onMouseEnter={() => onHover?.(parseDents(pres.dents))}
       onMouseLeave={() => onHover?.(null)}
+      // Parité clavier du survol : `onFocus`/`onBlur` (focusin/focusout, qui remontent)
+      // surlignent les dents de l'acte dès qu'un de ses contrôles reçoit le focus.
+      onFocus={() => onHover?.(parseDents(pres.dents))}
+      onBlur={() => onHover?.(null)}
     >
+      {selectMode && (
+        <Checkbox className="mt-1 shrink-0" checked={!!checked} onCheckedChange={() => onToggle?.()} />
+      )}
       <div className="w-28 shrink-0 text-right">
-        <div className="font-semibold tabular-nums text-ink">{fmtDevise(pres.montant)}</div>
+        <Montant value={pres.montant} bold tone="ink" className="block" />
         {pres.facturable && (
           <div className="text-xs text-muted">
             réglé {fmtDevise(pres.montant_regle)} · reste {fmtDevise(pres.reste)}
@@ -95,6 +115,12 @@ function PrestationRow({
               icon: Banknote,
               onClick: onRegler,
             },
+            {
+              key: "note",
+              label: "Générer une note d'honoraires",
+              icon: FileText,
+              onClick: onGenerateNote,
+            },
             { key: "edit", label: "Modifier", icon: Pencil, onClick: onEdit },
             {
               key: "delete",
@@ -129,6 +155,71 @@ export function PlansActesTab({
   const [payNote, setPayNote] = useState<Paiement | null>(null);
   const [cascade, setCascade] = useState(false);
   const [hoverFdis, setHoverFdis] = useState<string[] | null>(null);
+  // Mode sélection d'actes pour générer une note d'honoraires (multi-sélection).
+  const [selectMode, setSelectMode] = useState(false);
+  const [selection, setSelection] = useState<Set<number>>(new Set());
+  // Actes pré-cochés transmis au dialogue de note (null = dialogue fermé).
+  const [noteIds, setNoteIds] = useState<number[] | null>(null);
+
+  // Après création d'acte(s) depuis la saisie : ouvrir la note pré-cochée sur ces actes.
+  // Le choix « imprimer ou non » se fait ensuite dans la modale de note.
+  function onActesCreated(prestationIds: number[]) {
+    if (prestationIds.length === 0) return;
+    setNoteIds(prestationIds);
+  }
+
+  function toggleSel(id: number) {
+    setSelection((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  }
+
+  function exitSelect() {
+    setSelectMode(false);
+    setSelection(new Set());
+  }
+
+  // Raccourcis de l'onglet (appelés avant les retours anticipés). `Alt+R` n'est
+  // actif que s'il reste un montant à régler ; `Échap` quitte le mode sélection.
+  useShortcut([
+    {
+      keys: "alt+a",
+      description: "Nouvel acte",
+      group: "Plans & actes",
+      enabled: !selectMode,
+      handler: () => setPresDialog({ target: "new" }),
+    },
+    {
+      keys: "alt+p",
+      description: "Nouveau plan",
+      group: "Plans & actes",
+      enabled: !selectMode,
+      handler: () => setPlanDialog("new"),
+    },
+    {
+      keys: "alt+n",
+      description: selectMode ? "Générer la note" : "Note d'honoraires (sélection)",
+      group: "Plans & actes",
+      handler: () => (selectMode ? setNoteIds([...selection]) : setSelectMode(true)),
+    },
+    {
+      keys: "alt+r",
+      description: "Régler le reste dû",
+      group: "Plans & actes",
+      enabled: !selectMode && (clinical.data?.total_a_regler ?? 0) > 0,
+      handler: () => setCascade(true),
+    },
+    {
+      keys: "escape",
+      description: "Quitter la sélection",
+      group: "Plans & actes",
+      enabled: selectMode,
+      handler: exitSelect,
+    },
+  ]);
 
   if (clinical.isLoading) return <p className="pt-4 text-sm text-muted">Chargement…</p>;
   if (clinical.isError) return <p className="pt-4 text-sm text-red">{humanizeError(clinical.error)}</p>;
@@ -155,20 +246,54 @@ export function PlansActesTab({
     <div className="space-y-5 pt-4">
       {/* En-tête + schéma dentaire : collés en haut pendant le défilement de la liste */}
       <div className="sticky top-0 z-20 -mt-4 space-y-4 bg-bg pt-4 pb-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 className="flex-1 text-lg font-semibold text-ink">Plans &amp; actes</h2>
-          {data.total_a_regler > 0 && (
-            <Button onClick={() => setCascade(true)}>
-              <Wallet className="size-4" /> Régler ({fmtDevise(data.total_a_regler)})
-            </Button>
-          )}
-          <Button variant="secondary" onClick={() => setPlanDialog("new")}>
-            <Plus className="size-4" /> Plan
-          </Button>
-          <Button variant="secondary" onClick={() => setPresDialog({ target: "new" })}>
-            <Plus className="size-4" /> Acte
-          </Button>
-        </div>
+        {selectMode ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-navy/30 bg-navy/5 px-3 py-2">
+            <span className="flex-1 text-sm font-medium text-navy">
+              {selection.size === 0
+                ? "Cochez des actes, ou générez une note sans acte"
+                : `${selection.size} acte${selection.size > 1 ? "s" : ""} sélectionné${selection.size > 1 ? "s" : ""}`}
+            </span>
+            <Tooltip label="Générer la note" shortcut="alt+n">
+              <Button onClick={() => setNoteIds([...selection])}>
+                <FileText className="size-4" />
+                {selection.size > 0
+                  ? `Générer une note d'honoraires (${selection.size})`
+                  : "Générer une note sans acte"}
+              </Button>
+            </Tooltip>
+            <Tooltip label="Quitter la sélection" shortcut="escape">
+              <Button variant="secondary" onClick={exitSelect}>
+                <X className="size-4" /> Annuler
+              </Button>
+            </Tooltip>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="flex-1 text-lg font-semibold text-ink">Plans &amp; actes</h2>
+            {data.total_a_regler > 0 && (
+              <Tooltip label="Régler le reste dû" shortcut="alt+r">
+                <Button onClick={() => setCascade(true)}>
+                  <Wallet className="size-4" /> Régler ({fmtDevise(data.total_a_regler)})
+                </Button>
+              </Tooltip>
+            )}
+            <Tooltip label="Note d'honoraires" shortcut="alt+n">
+              <Button variant="secondary" onClick={() => setSelectMode(true)}>
+                <FileText className="size-4" /> Note d'honoraires
+              </Button>
+            </Tooltip>
+            <Tooltip label="Nouveau plan" shortcut="alt+p">
+              <Button variant="secondary" onClick={() => setPlanDialog("new")}>
+                <Plus className="size-4" /> Plan
+              </Button>
+            </Tooltip>
+            <Tooltip label="Nouvel acte" shortcut="alt+a">
+              <Button variant="secondary" onClick={() => setPresDialog({ target: "new" })}>
+                <Plus className="size-4" /> Acte
+              </Button>
+            </Tooltip>
+          </div>
+        )}
 
         {/* Schéma dentaire (lecture seule) */}
         <OdontogrammeClinique clinical={data} denture={denture} highlightFdis={hoverFdis ?? []} />
@@ -182,7 +307,7 @@ export function PlansActesTab({
             const partiel = n.montant_regle > 1e-6;
             return (
               <div key={n.id} className="flex items-center gap-3 border-t border-line py-2 first:border-t-0">
-                <span className="w-24 text-right font-semibold tabular-nums text-amber">{fmtDevise(n.reste)}</span>
+                <Montant value={n.reste} bold tone="amber" className="w-24 text-right" />
                 <div className="flex-1 text-sm">
                   <div className="text-ink">{n.notes || "Note"}</div>
                   <div className="text-xs text-muted">
@@ -231,7 +356,11 @@ export function PlansActesTab({
               onRegler={() => setPayActe(pres)}
               onEdit={() => setPresDialog({ target: pres })}
               onDelete={() => removePrestation(pres)}
+              onGenerateNote={() => setNoteIds([pres.id])}
               onHover={setHoverFdis}
+              selectMode={selectMode}
+              checked={selection.has(pres.id)}
+              onToggle={() => toggleSel(pres.id)}
             />
           ))
         )}
@@ -272,6 +401,11 @@ export function PlansActesTab({
                   onRegler={() => setPayActe(pres)}
                   onEdit={() => setPresDialog({ target: pres })}
                   onDelete={() => removePrestation(pres)}
+                  onGenerateNote={() => setNoteIds([pres.id])}
+                  onHover={setHoverFdis}
+                  selectMode={selectMode}
+                  checked={selection.has(pres.id)}
+                  onToggle={() => toggleSel(pres.id)}
                 />
               ))
             )}
@@ -280,6 +414,7 @@ export function PlansActesTab({
       })}
 
       <PlanDialog patientId={patientId} target={planDialog} defaultDenture={denture}
+                  onCreated={onActesCreated}
                   onClose={() => setPlanDialog(null)} />
       <PrestationDialog
         patientId={patientId}
@@ -287,11 +422,29 @@ export function PlansActesTab({
         presetPlanId={presDialog?.planId}
         plans={plans}
         defaultDenture={denture}
+        onCreated={onActesCreated}
         onClose={() => setPresDialog(null)}
       />
       <PayerActeDialog patientId={patientId} prestation={payActe} onClose={() => setPayActe(null)} />
       <PayerNoteDialog patientId={patientId} paiement={payNote} onClose={() => setPayNote(null)} />
       <ReglerDialog patientId={patientId} open={cascade} onClose={() => setCascade(false)} />
+
+      {/* Note d'honoraires depuis la sélection d'actes (multi-sélection ou menu ⋮).
+          Monté en permanence (comme les autres dialogues), `open` togglé : fermer via
+          open=false laisse Radix nettoyer son overlay (pas de remontage brutal qui
+          bloquerait l'UI). La ré-application de la pré-sélection passe par l'effet
+          `[open, form.data]` du dialogue. */}
+      <GenerateDialog
+        patientId={patientId}
+        open={noteIds !== null}
+        mode="note"
+        defaultDenture={denture}
+        initialSelection={noteIds ?? undefined}
+        onClose={() => {
+          setNoteIds(null);
+          exitSelect();
+        }}
+      />
     </div>
   );
 }

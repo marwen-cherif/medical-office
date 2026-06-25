@@ -1,11 +1,14 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronRight, Plus, Search, Store } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Pagination } from "@/components/common/Pagination";
+import { Tooltip } from "@/components/common/Tooltip";
+import { Kbd } from "@/components/common/Kbd";
 import { PrestataireFormDialog } from "@/components/dialogs/PrestataireFormDialog";
 import { humanizeError } from "@/lib/errors";
+import { useShortcut } from "@/lib/shortcuts";
 import { usePrestataires } from "@/hooks/prestataires";
 
 /**
@@ -17,9 +20,25 @@ export function Prestataires() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [showNew, setShowNew] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const list = usePrestataires(search, page);
   const items = list.data?.items ?? [];
+
+  useShortcut([
+    {
+      keys: "alt+n",
+      description: "Nouveau prestataire",
+      group: "Prestataires",
+      handler: () => setShowNew(true),
+    },
+    {
+      keys: "/",
+      description: "Rechercher",
+      group: "Prestataires",
+      handler: () => searchRef.current?.focus(),
+    },
+  ]);
 
   return (
     <div className="mx-auto max-w-5xl p-8">
@@ -34,7 +53,8 @@ export function Prestataires() {
         <div className="relative min-w-48 flex-1">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
           <Input
-            className="pl-9"
+            ref={searchRef}
+            className="pl-9 pr-9"
             placeholder="Rechercher un prestataire…"
             value={search}
             onChange={(e) => {
@@ -42,10 +62,13 @@ export function Prestataires() {
               setPage(0);
             }}
           />
+          <Kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">/</Kbd>
         </div>
-        <Button onClick={() => setShowNew(true)}>
-          <Plus className="size-4" /> Nouveau prestataire
-        </Button>
+        <Tooltip label="Nouveau prestataire" shortcut="alt+n">
+          <Button onClick={() => setShowNew(true)}>
+            <Plus className="size-4" /> Nouveau prestataire
+          </Button>
+        </Tooltip>
       </div>
 
       {list.isLoading && <p className="text-sm text-muted">Chargement…</p>}

@@ -19,7 +19,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { humanizeError } from "@/lib/errors";
-import { DEVISE_SYMBOLE, fmtDevise, MODE_OPTIONS, todayIso } from "@/lib/format";
+import { DEVISE_SYMBOLE, MODE_OPTIONS, montantInput, todayIso } from "@/lib/format";
+import { MontantRow } from "@/components/common/Montant";
 import { parseMontant, ResteApresReglement } from "@/components/common/ResteApresReglement";
 import { usePaiementReglement } from "@/hooks/clinical";
 import type { Paiement } from "@/api/types";
@@ -42,7 +43,7 @@ export function PayerNoteDialog({
 
   useEffect(() => {
     if (paiement) {
-      setMontant((paiement.reste ?? 0).toFixed(2));
+      setMontant(montantInput(paiement.reste));
       setMode("especes");
       setDate(todayIso());
       setError("");
@@ -71,56 +72,49 @@ export function PayerNoteDialog({
   return (
     <Dialog open={!!paiement} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Régler la note</DialogTitle>
-        </DialogHeader>
-        {paiement && (
-          <div className="space-y-3 py-2">
-            <p className="text-sm font-medium text-ink">{paiement.notes || "Note d'honoraires"}</p>
-            <div className="flex justify-between text-sm text-muted">
-              <span>Total dû</span>
-              <span className="tabular-nums">{fmtDevise(paiement.montant)}</span>
-            </div>
-            <div className="flex justify-between text-sm text-muted">
-              <span>Déjà réglé</span>
-              <span className="tabular-nums">{fmtDevise(paiement.montant_regle)}</span>
-            </div>
-            <div className="flex justify-between text-sm text-muted">
-              <span>Reste à recouvrer</span>
-              <span className="tabular-nums">{fmtDevise(paiement.reste)}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label htmlFor="pn-montant">Montant ({DEVISE_SYMBOLE})</Label>
-                <Input id="pn-montant" autoFocus inputMode="decimal" value={montant}
-                       onChange={(e) => setMontant(e.target.value)} />
+        <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+          <DialogHeader>
+            <DialogTitle>Régler la note</DialogTitle>
+          </DialogHeader>
+          {paiement && (
+            <div className="space-y-3 py-2">
+              <p className="text-sm font-medium text-ink">{paiement.notes || "Note d'honoraires"}</p>
+              <MontantRow label="Total dû" value={paiement.montant} />
+              <MontantRow label="Déjà réglé" value={paiement.montant_regle} />
+              <MontantRow label="Reste à recouvrer" value={paiement.reste} />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="pn-montant">Montant ({DEVISE_SYMBOLE})</Label>
+                  <Input id="pn-montant" autoFocus inputMode="decimal" value={montant}
+                         onChange={(e) => setMontant(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="pn-date">Date</Label>
+                  <DatePicker id="pn-date" value={date} onChange={setDate} />
+                </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="pn-date">Date</Label>
-                <DatePicker id="pn-date" value={date} onChange={setDate} />
+                <Label>Mode de règlement</Label>
+                <Select value={mode} onValueChange={setMode}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MODE_OPTIONS.map((m) => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
+              <ResteApresReglement reste={paiement.reste ?? 0} saisi={saisi} />
+              {error && <p className="text-xs text-red">{error}</p>}
             </div>
-            <div className="space-y-2">
-              <Label>Mode de règlement</Label>
-              <Select value={mode} onValueChange={setMode}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MODE_OPTIONS.map((m) => (
-                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <ResteApresReglement reste={paiement.reste ?? 0} saisi={saisi} />
-            {error && <p className="text-xs text-red">{error}</p>}
-          </div>
-        )}
-        <DialogFooter>
-          <Button variant="secondary" onClick={onClose}>Annuler</Button>
-          <Button onClick={submit} disabled={regler.isPending}>Enregistrer</Button>
-        </DialogFooter>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="secondary" onClick={onClose}>Annuler</Button>
+            <Button type="submit" disabled={regler.isPending}>Enregistrer</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

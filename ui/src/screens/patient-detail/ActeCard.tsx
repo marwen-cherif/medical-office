@@ -3,13 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Combobox } from "@/components/common/Combobox";
 import { Odontogramme } from "@/components/common/Odontogramme";
 import { DatePicker } from "@/components/common/DatePicker";
 import { useActes } from "@/hooks/queries";
@@ -45,6 +39,7 @@ export function ActeCard({
   const set = (patch: Partial<ActeValue>) => onChange({ ...value, ...patch });
 
   function pickRef(id: string) {
+    if (!id) return set({ acte_id: null }); // « Effacer » : détache du référentiel, garde la saisie
     const a = actes.data?.items.find((x) => String(x.id) === id);
     if (a) set({ acte_id: a.id, libelle: a.libelle, montant: String(a.prix) });
   }
@@ -55,18 +50,19 @@ export function ActeCard({
         <div className="flex-1 space-y-3">
           <div className="space-y-2">
             <Label>Acte du référentiel (optionnel)</Label>
-            <Select value={value.acte_id ? String(value.acte_id) : ""} onValueChange={pickRef}>
-              <SelectTrigger>
-                <SelectValue placeholder="Choisir un acte tarifé…" />
-              </SelectTrigger>
-              <SelectContent>
-                {(actes.data?.items ?? []).map((a) => (
-                  <SelectItem key={a.id} value={String(a.id)}>
-                    {a.libelle} — {fmtDevise(a.prix)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Combobox
+              value={value.acte_id ? String(value.acte_id) : ""}
+              onChange={pickRef}
+              placeholder="Choisir un acte tarifé…"
+              searchPlaceholder="Rechercher un acte (libellé, code)…"
+              emptyText="Aucun acte au catalogue."
+              allowClear
+              options={(actes.data?.items ?? []).map((a) => ({
+                value: String(a.id),
+                label: `${a.libelle} — ${fmtDevise(a.prix)}`,
+                keywords: a.code ?? undefined,
+              }))}
+            />
           </div>
           <div className="grid grid-cols-[1fr_8rem_9rem] gap-2">
             <div className="space-y-2">
@@ -85,7 +81,7 @@ export function ActeCard({
           </div>
         </div>
         {onRemove && (
-          <Button variant="ghost" size="icon" title="Retirer" onClick={onRemove} className="mt-6 text-red">
+          <Button type="button" variant="ghost" size="icon" title="Retirer" onClick={onRemove} className="mt-6 text-red">
             <Trash2 className="size-4" />
           </Button>
         )}
@@ -97,6 +93,22 @@ export function ActeCard({
       </div>
     </div>
   );
+}
+
+/**
+ * Valide une carte d'acte avant création. Renvoie un message d'erreur (FR) à afficher,
+ * ou `null` si la carte est valide. Factorisé pour que les trois issues d'enregistrement
+ * (enregistrer seul / + générer / + générer et imprimer) partagent la même règle :
+ * libellé obligatoire, montant numérique positif (vide ⇒ 0, accepté comme aujourd'hui).
+ */
+export function validateActe(v: ActeValue): string | null {
+  if (!v.libelle.trim()) return "Le libellé de l'acte est obligatoire.";
+  const raw = (v.montant || "").trim();
+  if (raw !== "") {
+    const n = Number(raw.replace(",", "."));
+    if (!Number.isFinite(n) || n < 0) return "Le montant de l'acte est invalide.";
+  }
+  return null;
 }
 
 /** Transforme une carte en payload d'API (montant numérique, dents jointes). */

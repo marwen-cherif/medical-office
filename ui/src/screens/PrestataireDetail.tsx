@@ -6,16 +6,19 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Pagination } from "@/components/common/Pagination";
 import { MoneySummary } from "@/components/common/MoneySummary";
+import { Tooltip } from "@/components/common/Tooltip";
 import { PrestataireFormDialog } from "@/components/dialogs/PrestataireFormDialog";
 import { DepenseDialog } from "@/components/dialogs/DepenseDialog";
 import { ReglerDepenseDialog } from "@/components/dialogs/ReglerDepenseDialog";
+import { ImportFactureDialog } from "@/components/dialogs/ImportFactureDialog";
 import { humanizeError } from "@/lib/errors";
+import { useShortcut } from "@/lib/shortcuts";
 import { depenseStatut, fmtDevise, isoToFr } from "@/lib/format";
+import { Montant } from "@/components/common/Montant";
 import {
   useDeleteDepense,
   useDeleteFacture,
   useFactures,
-  useImportFacture,
   usePrestataire,
   useProviderDepenses,
 } from "@/hooks/prestataires";
@@ -29,6 +32,14 @@ export function PrestataireDetail() {
 
   const detailQ = usePrestataire(id);
   const [edit, setEdit] = useState<Prestataire | null>(null);
+
+  useShortcut({
+    keys: "alt+e",
+    description: "Modifier le prestataire",
+    group: "Fiche prestataire",
+    enabled: !!detailQ.data,
+    handler: () => detailQ.data && setEdit(detailQ.data.prestataire),
+  });
 
   if (detailQ.isLoading) {
     return <p className="mx-auto max-w-5xl p-8 text-sm text-muted">Chargement…</p>;
@@ -58,9 +69,11 @@ export function PrestataireDetail() {
           <ArrowLeft className="size-4" />
         </Button>
         <h1 className="flex-1 text-2xl font-semibold text-ink">{p.display}</h1>
-        <Button variant="secondary" onClick={() => setEdit(p)}>
-          Modifier
-        </Button>
+        <Tooltip label="Modifier le prestataire" shortcut="alt+e">
+          <Button variant="secondary" onClick={() => setEdit(p)}>
+            Modifier
+          </Button>
+        </Tooltip>
       </div>
 
       <IdentityCard p={p} />
@@ -112,23 +125,16 @@ function IdentityCard({ p }: { p: Prestataire }) {
 function FacturesSection({ id }: { id: number }) {
   const [page, setPage] = useState(0);
   const facturesQ = useFactures(id, page);
-  const importFacture = useImportFacture(id);
   const delFacture = useDeleteFacture(id);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   const items = facturesQ.data?.items ?? [];
 
   function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
-    if (!file) return;
-    importFacture.mutate(
-      { file },
-      {
-        onSuccess: () => toast.success("Facture importée."),
-        onError: (err) => toast.error(humanizeError(err)),
-      },
-    );
+    if (file) setPendingFile(file);
   }
 
   function onDelete(factureId: number) {
@@ -142,11 +148,7 @@ function FacturesSection({ id }: { id: number }) {
     <section className="mt-8">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-ink">Factures</h2>
-        <Button
-          variant="secondary"
-          onClick={() => fileRef.current?.click()}
-          disabled={importFacture.isPending}
-        >
+        <Button variant="secondary" onClick={() => fileRef.current?.click()}>
           <Upload className="size-4" /> Importer une facture
         </Button>
         <input
@@ -201,6 +203,12 @@ function FacturesSection({ id }: { id: number }) {
       <div className="mt-3">
         <Pagination total={facturesQ.data?.total ?? 0} page={page} onPage={setPage} />
       </div>
+
+      <ImportFactureDialog
+        file={pendingFile}
+        prestataireId={id}
+        onClose={() => setPendingFile(null)}
+      />
     </section>
   );
 }
@@ -245,7 +253,7 @@ function DepensesSection({ id }: { id: number }) {
             return (
               <li key={d.id} className="flex items-center gap-3 px-4 py-3">
                 <div className="min-w-0 flex-1">
-                  <div className="font-semibold text-ink tabular-nums">{fmtDevise(d.montant)}</div>
+                  <Montant value={d.montant} bold tone="ink" className="block" />
                   <div className="text-xs text-muted tabular-nums">
                     réglé {fmtDevise(d.montant_regle)} · reste {fmtDevise(d.reste)}
                   </div>

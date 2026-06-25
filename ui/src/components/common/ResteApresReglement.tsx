@@ -1,4 +1,5 @@
 import { fmtDevise } from "@/lib/format";
+import { Montant } from "@/components/common/Montant";
 
 /** Parse un montant saisi (virgule ou point décimal) ; 0 si vide/illisible. */
 export function parseMontant(raw: string | null | undefined): number {
@@ -26,7 +27,7 @@ export function ResteApresReglement({
     <div className="space-y-1">
       <div className="flex justify-between text-sm font-semibold text-amber">
         <span>{label}</span>
-        <span className="tabular-nums">{fmtDevise(projete)}</span>
+        <Montant value={projete} />
       </div>
       {surplus > 1e-6 && (
         <p className="text-xs text-red">

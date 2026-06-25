@@ -3227,6 +3227,34 @@
               "default": 200,
               "title": "Limit"
             }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "tous",
+                "fiche",
+                "plans",
+                "actes",
+                "paiements",
+                "documents"
+              ],
+              "type": "string",
+              "default": "tous",
+              "title": "Category"
+            }
           }
         ],
         "responses": {
@@ -4712,7 +4740,7 @@
           "documents"
         ],
         "summary": "Generation Form",
-        "description": "Specification du formulaire pour un (patient, modele).\n\nMono-valeur : liste des champs a saisir (avec valeurs du brouillon le cas\necheant). Multi-lignes : actes existants groupes (pre-coches selon le brouillon)\npour selection. Les nouveaux actes sont saisis cote frontend (carte d'acte).",
+        "description": "Specification du formulaire pour un (patient, modele).\n\nMono-valeur : liste des champs a saisir (avec valeurs du brouillon le cas\necheant ; ou **pre-remplies depuis un acte** si `source_prestation_id` est fourni\n— note generee depuis un acte unique). Multi-lignes : actes existants groupes\n(pre-coches selon le brouillon) pour selection. Les nouveaux actes sont saisis\ncote frontend (carte d'acte).",
         "operationId": "generation_form_api_patients__patient_id__generation_form_get",
         "parameters": [
           {
@@ -4747,6 +4775,22 @@
                 }
               ],
               "title": "Document Id"
+            }
+          },
+          {
+            "name": "source_prestation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Prestation Id"
             }
           }
         ],
@@ -6424,6 +6468,150 @@
         }
       }
     },
+    "/api/factures/ia-disponible": {
+      "get": {
+        "tags": [
+          "prestataires"
+        ],
+        "summary": "Facture Ia Disponible",
+        "description": "Indique si l'extraction IA du montant de facture est configuree (vision).",
+        "operationId": "facture_ia_disponible_api_factures_ia_disponible_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FactureIaDisponibleOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/factures/ia-montant": {
+      "post": {
+        "tags": [
+          "prestataires"
+        ],
+        "summary": "Facture Ia Montant",
+        "description": "Lit le montant TTC d'une facture scannee par IA (pre-remplissage editable).\n\nNe cree / n'archive rien : renvoie seulement le montant lu (ou null). L'extraction\nne leve jamais (repli null si IA off / format inconnu / echec).",
+        "operationId": "facture_ia_montant_api_factures_ia_montant_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_facture_ia_montant_api_factures_ia_montant_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FactureIaMontantOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/factures/{facture_id}": {
       "delete": {
         "tags": [
@@ -7536,6 +7724,20 @@
         ],
         "title": "BatchIn"
       },
+      "Body_facture_ia_montant_api_factures_ia_montant_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_facture_ia_montant_api_factures_ia_montant_post"
+      },
       "Body_facture_import_api_prestataires__prestataire_id__factures_post": {
         "properties": {
           "file": {
@@ -7935,6 +8137,17 @@
               }
             ],
             "title": "Notes"
+          },
+          "facture_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Facture Id"
           }
         },
         "type": "object",
@@ -8449,6 +8662,14 @@
             "type": "array",
             "title": "New Actes",
             "default": []
+          },
+          "montants_notes": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Montants Notes",
+            "default": {}
           }
         },
         "type": "object",
@@ -8612,6 +8833,45 @@
           "error"
         ],
         "title": "ErrorResponse"
+      },
+      "FactureIaDisponibleOut": {
+        "properties": {
+          "disponible": {
+            "type": "boolean",
+            "title": "Disponible"
+          }
+        },
+        "type": "object",
+        "required": [
+          "disponible"
+        ],
+        "title": "FactureIaDisponibleOut",
+        "description": "Indique si l'extraction IA du montant de facture est configurée."
+      },
+      "FactureIaMontantOut": {
+        "properties": {
+          "disponible": {
+            "type": "boolean",
+            "title": "Disponible"
+          },
+          "montant": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Montant"
+          }
+        },
+        "type": "object",
+        "required": [
+          "disponible"
+        ],
+        "title": "FactureIaMontantOut",
+        "description": "Montant TTC lu par IA (pré-remplissage éditable) ; `montant` null si non trouvé."
       },
       "FactureListOut": {
         "properties": {
@@ -8887,6 +9147,11 @@
             "type": "boolean",
             "title": "Checked",
             "default": true
+          },
+          "montant_note": {
+            "type": "number",
+            "title": "Montant Note",
+            "default": 0.0
           }
         },
         "type": "object",
@@ -9043,6 +9308,11 @@
               }
             ],
             "title": "Categorie"
+          },
+          "is_multiligne": {
+            "type": "boolean",
+            "title": "Is Multiligne",
+            "default": false
           }
         },
         "type": "object",
@@ -9102,6 +9372,14 @@
             "type": "array",
             "title": "New Actes",
             "default": []
+          },
+          "montants_notes": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Montants Notes",
+            "default": {}
           },
           "do_print": {
             "type": "boolean",

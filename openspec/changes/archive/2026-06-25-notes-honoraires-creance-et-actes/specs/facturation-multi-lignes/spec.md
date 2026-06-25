@@ -32,23 +32,37 @@ Le système SHALL permettre d'**initier une note d'honoraires** directement depu
 Actes/Plans** d'un patient, par deux points d'entrée : (1) **sélectionner plusieurs actes**
 (isolés et/ou appartenant à des plans) puis lancer « Générer une note d'honoraires » pour la
 sélection, et (2) une action **« Générer une note d'honoraires »** dans le **menu d'actions
-(« ⋮ ») d'une ligne d'acte**, pour cet acte unique. Dans les deux cas, le dialogue de note SHALL
-s'ouvrir **pré-rempli** avec les actes choisis **pré-cochés**, en réutilisant le flux multi-lignes
-existant (sélection / désélection, montants éditables, totaux calculés). Ces points d'entrée ne
-SHALL **pas** créer de nouvelle dette : les actes en restent la source.
+(« ⋮ ») d'une ligne d'acte**, pour cet acte unique. Le dialogue de note SHALL s'ouvrir
+**pré-rempli**, le **type de modèle privilégié dépendant du nombre d'actes** :
+
+- **plusieurs actes** → un **modèle multi-lignes** (les actes choisis **pré-cochés**, montants
+  éditables, totaux calculés) ;
+- **un seul acte** → un **modèle mono-valeur** **pré-rempli avec les données de l'acte**
+  (libellé, montant, date, dents, note) ;
+- **aucun acte** (depuis la page Actes/Plans) → un **modèle mono-valeur** vierge (note autonome).
+
+L'utilisateur SHALL pouvoir changer le modèle proposé. Quel que soit le point d'entrée, une note
+générée **depuis au moins un acte** ne SHALL **pas** créer de nouvelle dette : les actes en
+restent la source (y compris une note **mono-valeur** issue d'un acte unique).
 
 #### Scenario: Note depuis une sélection multiple d'actes
 - **WHEN** l'utilisateur coche deux actes isolés et un acte d'un plan sur la page Actes/Plans,
   puis lance « Générer une note d'honoraires »
-- **THEN** le dialogue de note s'ouvre avec ces trois actes pré-cochés, prêt à générer
+- **THEN** le dialogue s'ouvre sur un modèle multi-lignes avec ces trois actes pré-cochés, prêt à générer
 
 #### Scenario: Note depuis la ligne d'un acte
 - **WHEN** l'utilisateur ouvre le menu d'actions « ⋮ » d'un acte et choisit « Générer une note
   d'honoraires »
-- **THEN** le dialogue de note s'ouvre avec ce seul acte pré-coché
+- **THEN** le dialogue s'ouvre sur un modèle mono-valeur dont les champs sont pré-remplis avec les
+  données de cet acte (libellé, montant, date…), et aucune créance « note » n'est créée à la génération
+
+#### Scenario: Note sans acte depuis la page Actes/Plans
+- **WHEN** l'utilisateur lance « Générer une note d'honoraires » sans avoir coché d'acte
+- **THEN** le dialogue s'ouvre sur un modèle mono-valeur vierge ; générer cette note autonome crée
+  une créance « note » (comme une note mono-valeur classique)
 
 #### Scenario: Génération depuis actes sans nouvelle dette
-- **WHEN** une note est générée depuis des actes sélectionnés sur la page Actes/Plans
+- **WHEN** une note est générée depuis des actes sélectionnés sur la page Actes/Plans (un ou plusieurs)
 - **THEN** aucune créance « note » n'est créée et le total à recouvrer du patient reste celui de
   ses actes
 

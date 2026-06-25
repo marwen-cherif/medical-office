@@ -40,7 +40,10 @@ export function RowActions({
   if (items.length === 0) return null;
 
   return (
-    <DropdownMenu>
+    // modal={false} : sinon le menu pose `pointer-events: none` sur le <body> et,
+    // si une action ouvre un Dialog, ce verrou reste collé après fermeture (UI
+    // bloquée). Non-modal, le Dialog gère seul son propre verrouillage.
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="icon" title={label} aria-label={label}>
           <MoreHorizontal className="size-4" />

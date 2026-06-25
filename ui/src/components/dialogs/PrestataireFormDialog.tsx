@@ -81,44 +81,46 @@ export function PrestataireFormDialog({
   return (
     <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{isEdit ? "Modifier le prestataire" : "Nouveau prestataire"}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 py-2">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-2">
-              <Label htmlFor="p-nom">Nom / Raison sociale</Label>
-              <Input id="p-nom" autoFocus value={form.nom} onChange={(e) => set("nom")(e.target.value)} />
+        <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+          <DialogHeader>
+            <DialogTitle>{isEdit ? "Modifier le prestataire" : "Nouveau prestataire"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="p-nom">Nom / Raison sociale</Label>
+                <Input id="p-nom" autoFocus value={form.nom} onChange={(e) => set("nom")(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="p-prenom">Prénom</Label>
+                <Input id="p-prenom" value={form.prenom} onChange={(e) => set("prenom")(e.target.value)} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="p-email">Email</Label>
+                <Input id="p-email" value={form.email} onChange={(e) => set("email")(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="p-tel">Téléphone</Label>
+                <Input id="p-tel" value={form.telephone} onChange={(e) => set("telephone")(e.target.value)} />
+              </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="p-prenom">Prénom</Label>
-              <Input id="p-prenom" value={form.prenom} onChange={(e) => set("prenom")(e.target.value)} />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-2">
-              <Label htmlFor="p-email">Email</Label>
-              <Input id="p-email" value={form.email} onChange={(e) => set("email")(e.target.value)} />
+              <Label htmlFor="p-adresse">Adresse</Label>
+              <Textarea id="p-adresse" rows={2} value={form.adresse} onChange={(e) => set("adresse")(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="p-tel">Téléphone</Label>
-              <Input id="p-tel" value={form.telephone} onChange={(e) => set("telephone")(e.target.value)} />
+              <Label htmlFor="p-notes">Notes</Label>
+              <Textarea id="p-notes" rows={2} value={form.notes} onChange={(e) => set("notes")(e.target.value)} />
             </div>
+            {error && <p className="text-xs text-red">{error}</p>}
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="p-adresse">Adresse</Label>
-            <Textarea id="p-adresse" rows={2} value={form.adresse} onChange={(e) => set("adresse")(e.target.value)} />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="p-notes">Notes</Label>
-            <Textarea id="p-notes" rows={2} value={form.notes} onChange={(e) => set("notes")(e.target.value)} />
-          </div>
-          {error && <p className="text-xs text-red">{error}</p>}
-        </div>
-        <DialogFooter>
-          <Button variant="secondary" onClick={onClose}>Annuler</Button>
-          <Button onClick={submit} disabled={create.isPending || update.isPending}>Enregistrer</Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button type="button" variant="secondary" onClick={onClose}>Annuler</Button>
+            <Button type="submit" disabled={create.isPending || update.isPending}>Enregistrer</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

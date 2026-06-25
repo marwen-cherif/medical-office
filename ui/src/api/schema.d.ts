@@ -778,8 +778,10 @@ export interface paths {
          * @description Specification du formulaire pour un (patient, modele).
          *
          *     Mono-valeur : liste des champs a saisir (avec valeurs du brouillon le cas
-         *     echeant). Multi-lignes : actes existants groupes (pre-coches selon le brouillon)
-         *     pour selection. Les nouveaux actes sont saisis cote frontend (carte d'acte).
+         *     echeant ; ou **pre-remplies depuis un acte** si `source_prestation_id` est fourni
+         *     — note generee depuis un acte unique). Multi-lignes : actes existants groupes
+         *     (pre-coches selon le brouillon) pour selection. Les nouveaux actes sont saisis
+         *     cote frontend (carte d'acte).
          */
         get: operations["generation_form_api_patients__patient_id__generation_form_get"];
         put?: never;
@@ -1036,6 +1038,49 @@ export interface paths {
          * @description Importe (archive) une facture fournisseur uploadee.
          */
         post: operations["facture_import_api_prestataires__prestataire_id__factures_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/factures/ia-disponible": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Facture Ia Disponible
+         * @description Indique si l'extraction IA du montant de facture est configuree (vision).
+         */
+        get: operations["facture_ia_disponible_api_factures_ia_disponible_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/factures/ia-montant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Facture Ia Montant
+         * @description Lit le montant TTC d'une facture scannee par IA (pre-remplissage editable).
+         *
+         *     Ne cree / n'archive rien : renvoie seulement le montant lu (ou null). L'extraction
+         *     ne leve jamais (repli null si IA off / format inconnu / echec).
+         */
+        post: operations["facture_ia_montant_api_factures_ia_montant_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1306,6 +1351,11 @@ export interface components {
             /** Mailjet Template Id */
             mailjet_template_id?: number | null;
         };
+        /** Body_facture_ia_montant_api_factures_ia_montant_post */
+        Body_facture_ia_montant_api_factures_ia_montant_post: {
+            /** File */
+            file: string;
+        };
         /** Body_facture_import_api_prestataires__prestataire_id__factures_post */
         Body_facture_import_api_prestataires__prestataire_id__factures_post: {
             /** File */
@@ -1440,6 +1490,8 @@ export interface components {
             mode?: string | null;
             /** Notes */
             notes?: string | null;
+            /** Facture Id */
+            facture_id?: number | null;
         };
         /** DepenseListOut */
         DepenseListOut: {
@@ -1608,6 +1660,13 @@ export interface components {
              * @default []
              */
             new_actes: components["schemas"]["NewActeIn"][];
+            /**
+             * Montants Notes
+             * @default {}
+             */
+            montants_notes: {
+                [key: string]: number;
+            };
         };
         /** DuplicateWarning */
         DuplicateWarning: {
@@ -1655,6 +1714,24 @@ export interface components {
         /** ErrorResponse */
         ErrorResponse: {
             error: components["schemas"]["ErrorBody"];
+        };
+        /**
+         * FactureIaDisponibleOut
+         * @description Indique si l'extraction IA du montant de facture est configurée.
+         */
+        FactureIaDisponibleOut: {
+            /** Disponible */
+            disponible: boolean;
+        };
+        /**
+         * FactureIaMontantOut
+         * @description Montant TTC lu par IA (pré-remplissage éditable) ; `montant` null si non trouvé.
+         */
+        FactureIaMontantOut: {
+            /** Disponible */
+            disponible: boolean;
+            /** Montant */
+            montant?: number | null;
         };
         /** FactureListOut */
         FactureListOut: {
@@ -1777,6 +1854,11 @@ export interface components {
              * @default true
              */
             checked: boolean;
+            /**
+             * Montant Note
+             * @default 0
+             */
+            montant_note: number;
         };
         /** GenActesSource */
         GenActesSource: {
@@ -1842,6 +1924,11 @@ export interface components {
             label: string;
             /** Categorie */
             categorie?: string | null;
+            /**
+             * Is Multiligne
+             * @default false
+             */
+            is_multiligne: boolean;
         };
         /** GenerateIn */
         GenerateIn: {
@@ -1876,6 +1963,13 @@ export interface components {
              * @default []
              */
             new_actes: components["schemas"]["NewActeIn"][];
+            /**
+             * Montants Notes
+             * @default {}
+             */
+            montants_notes: {
+                [key: string]: number;
+            };
             /**
              * Do Print
              * @default false
@@ -5007,6 +5101,8 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                offset?: number;
+                category?: "tous" | "fiche" | "plans" | "actes" | "paiements" | "documents";
             };
             header?: never;
             path: {
@@ -6126,6 +6222,7 @@ export interface operations {
             query: {
                 template: string;
                 document_id?: number | null;
+                source_prestation_id?: number | null;
             };
             header?: never;
             path: {
@@ -7320,6 +7417,131 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FactureOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    facture_ia_disponible_api_factures_ia_disponible_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FactureIaDisponibleOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    facture_ia_montant_api_factures_ia_montant_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_facture_ia_montant_api_factures_ia_montant_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FactureIaMontantOut"];
                 };
             };
             /** @description Bad Request */

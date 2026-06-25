@@ -1,18 +1,20 @@
 import { useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { humanizeError } from "@/lib/errors";
 import { humanize, isoToFrDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useAudit } from "@/hooks/clinical";
+import { useAudit, type AuditCategory } from "@/hooks/clinical";
 import type { AuditEntry } from "@/api/types";
 
-// Catégorisation des actions pour les filtres (calque _AUDIT_FILTERS de Flet).
-const FILTERS: { key: string; label: string; match: (a: string) => boolean }[] = [
-  { key: "tous", label: "Tous", match: () => true },
-  { key: "fiche", label: "Fiche", match: (a) => a.startsWith("fiche") },
-  { key: "plans", label: "Plans", match: (a) => a.startsWith("plan") },
-  { key: "actes", label: "Actes", match: (a) => a.startsWith("acte") },
-  { key: "paiements", label: "Paiements", match: (a) => a.startsWith("paiement") || a.includes("regle") },
-  { key: "documents", label: "Documents", match: (a) => a.includes("document") || a.includes("note") || a.includes("brouillon") },
+// Filtres de l'historique : le filtrage est fait côté serveur (cf. route audit
+// + AUDIT_CATEGORIES) pour ne pas charger tout l'historique d'un coup.
+const FILTERS: { key: AuditCategory; label: string }[] = [
+  { key: "tous", label: "Tous" },
+  { key: "fiche", label: "Fiche" },
+  { key: "plans", label: "Plans" },
+  { key: "actes", label: "Actes" },
+  { key: "paiements", label: "Paiements" },
+  { key: "documents", label: "Documents" },
 ];
 
 function describe(detail: unknown): string {
@@ -50,12 +52,11 @@ function dayLabel(ts: string): string {
 }
 
 export function HistoriqueTab({ patientId }: { patientId: number }) {
-  const q = useAudit(patientId);
-  const [filter, setFilter] = useState("tous");
+  const [filter, setFilter] = useState<AuditCategory>("tous");
+  const q = useAudit(patientId, filter);
 
   const grouped = useMemo(() => {
-    const f = FILTERS.find((x) => x.key === filter) ?? FILTERS[0];
-    const rows = (q.data ?? []).filter((r: AuditEntry) => f.match(r.action));
+    const rows = q.data?.pages.flat() ?? [];
     const map = new Map<string, AuditEntry[]>();
     for (const r of rows) {
       const day = dayLabel(r.ts);
@@ -63,7 +64,7 @@ export function HistoriqueTab({ patientId }: { patientId: number }) {
       map.get(day)!.push(r);
     }
     return [...map.entries()];
-  }, [q.data, filter]);
+  }, [q.data]);
 
   if (q.isLoading) return <p className="pt-4 text-sm text-muted">Chargement…</p>;
   if (q.isError) return <p className="pt-4 text-sm text-red">{humanizeError(q.error)}</p>;
@@ -87,7 +88,7 @@ export function HistoriqueTab({ patientId }: { patientId: number }) {
         ))}
       </div>
 
-      {grouped.length === 0 && (
+      {grouped.length === 0 && !q.hasNextPage && (
         <div className="rounded-[var(--radius)] border border-line bg-white py-10 text-center text-muted">
           Aucun événement.
         </div>
@@ -114,6 +115,18 @@ export function HistoriqueTab({ patientId }: { patientId: number }) {
           </div>
         </section>
       ))}
+
+      {q.hasNextPage && (
+        <div className="flex justify-center pt-1">
+          <Button
+            variant="secondary"
+            onClick={() => q.fetchNextPage()}
+            disabled={q.isFetchingNextPage}
+          >
+            {q.isFetchingNextPage ? "Chargement…" : "Charger plus"}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

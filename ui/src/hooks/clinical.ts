@@ -1,14 +1,20 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { client, unwrap } from "@/lib/api";
 import { PAGE_SIZE } from "@/components/common/Pagination";
 import type { CascadeIn, PaiementIn, PlanIn, PrestationIn, ReglementIn } from "@/api/types";
+
+/** Taille de page de l'historique (chargement progressif « Charger plus »). */
+export const AUDIT_PAGE_SIZE = 50;
 
 export const clinicalKeys = {
   clinical: (id: number) => ["clinical", id] as const,
   encaissements: (id: number, page: number) => ["encaissements", id, page] as const,
   creances: (id: number, notes: boolean) => ["creances", id, notes] as const,
-  audit: (id: number) => ["audit", id] as const,
+  audit: (id: number, category: AuditCategory) => ["audit", id, category] as const,
 };
+
+/** Catégories de l'historique (calque serveur ; cf. AUDIT_CATEGORIES). */
+export type AuditCategory = "tous" | "fiche" | "plans" | "actes" | "paiements" | "documents";
 
 /** Invalide tout ce qui dépend du solde/actes d'un patient après une mutation. */
 function invalidatePatient(qc: ReturnType<typeof useQueryClient>, id: number) {
@@ -60,16 +66,23 @@ export function useCreances(id: number | null, includeNotes: boolean) {
   });
 }
 
-export function useAudit(id: number | null) {
-  return useQuery({
+export function useAudit(id: number | null, category: AuditCategory = "tous") {
+  return useInfiniteQuery({
     enabled: id != null,
-    queryKey: clinicalKeys.audit(id ?? 0),
-    queryFn: async () =>
+    queryKey: clinicalKeys.audit(id ?? 0, category),
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) =>
       unwrap(
         await client.GET("/api/patients/{patient_id}/audit", {
-          params: { path: { patient_id: id! }, query: { limit: 200 } },
+          params: {
+            path: { patient_id: id! },
+            query: { limit: AUDIT_PAGE_SIZE, offset: pageParam, category },
+          },
         }),
       ),
+    // Page pleine ⇒ il reste potentiellement des événements plus anciens.
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length < AUDIT_PAGE_SIZE ? undefined : allPages.length * AUDIT_PAGE_SIZE,
   });
 }
 

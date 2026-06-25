@@ -6,9 +6,7 @@ Permettre de générer une **note d'honoraires unique** regroupant plusieurs act
 patient (actes isolés et actes de plans de traitement) dans un seul document Word multi-lignes,
 à partir d'un contrat de balises fixe et documenté, sans ressaisie, sans configuration de
 colonnes par modèle et sans créer de paiement (le dû reste suivi sur les actes, source unique).
-
 ## Requirements
-
 ### Requirement: Note d'honoraires multi-lignes générée depuis les actes
 
 Le système SHALL permettre de générer une **note d'honoraires unique** regroupant
@@ -158,31 +156,6 @@ rendu en entier.
 - **WHEN** une note contient 4 lignes
 - **THEN** `<NB_ACTES>` rendu vaut « 4 »
 
-### Requirement: Aucun paiement créé à la génération
-
-La génération d'une note d'honoraires multi-lignes ne SHALL **jamais** créer de paiement ni
-proposer d'en créer : la note **référence** les actes, dont le dû et les règlements restent
-suivis sur les actes eux-mêmes (« source unique du dû », `plans-de-traitement`). Le total de
-la note SHALL renseigner `documents.montant` **uniquement** comme valeur d'affichage/email, et
-ne SHALL PAS apparaître comme une créance distincte des actes.
-
-Les **nouveaux actes** ajoutés depuis la note (cf. « Ajout d'actes isolés depuis la note »)
-SHALL être créés comme **actes** (`prestations`), jamais comme paiements : leur dû alimente la
-dette **par l'acte** (source unique), ce qui n'est pas un double-comptage. Un acte **déjà
-existant** simplement coché n'augmente pas la dette du fait de la note.
-
-#### Scenario: Génération sans paiement
-
-- **WHEN** l'utilisateur génère une note d'honoraires regroupant des actes
-- **THEN** aucun paiement n'est créé, aucune case « créer un paiement » n'est proposée, et le
-  dû du patient reste celui porté par ses actes
-
-#### Scenario: Pas de double-comptage
-
-- **WHEN** une note de total 390,000 est générée depuis des actes déjà suivis comme créances
-- **THEN** le montant à recouvrer du patient n'augmente pas du fait de la note (il reste celui
-  des actes)
-
 ### Requirement: Persistance des lignes sans migration destructive
 
 Le système SHALL sérialiser les lignes retenues (actes et lignes libres) dans la colonne
@@ -208,3 +181,70 @@ rendu.
 - **WHEN** une note regroupe des lignes datées 01/05, 02/05, 05/05, 01/06
 - **THEN** `documents.acte_date` est renseignée de façon déterministe (la 1re date des lignes)
   afin de conserver un nom de fichier et un classement stables
+
+### Requirement: Montant de ligne propre à la note, distinct du montant de l'acte
+
+Le **montant de chaque ligne adossée à un acte existant** d'une note multi-lignes SHALL être **modifiable** indépendamment, avec pour **valeur par défaut** le montant de l'acte correspondant. Le montant saisi sur la ligne SHALL être **purement d'affichage** : il alimente la
+balise `<L_MONTANT>` et les **totaux calculés** de la note, et ne SHALL **jamais** modifier le
+montant de l'acte sous-jacent ni la dette du patient (l'acte reste la source du dû). Le montant
+réglé et le reste d'une ligne adossée à un acte SHALL continuer de **refléter l'acte** (lecture
+seule). À la réouverture d'un brouillon, le montant **édité** de chaque ligne SHALL être restitué.
+
+#### Scenario: Montant de note différent du montant de l'acte
+- **WHEN** un acte de 950 est retenu dans une note et l'utilisateur saisit 600 comme montant de
+  sa ligne, puis génère
+- **THEN** la note affiche 600 sur cette ligne et dans ses totaux, tandis que l'acte conserve son
+  montant 950 et que la dette du patient reste de 950
+
+#### Scenario: Montant de ligne par défaut repris de l'acte
+- **WHEN** un acte de 950 est retenu sans que l'utilisateur n'édite le montant de sa ligne
+- **THEN** la ligne affiche 950 (valeur par défaut reprise de l'acte)
+
+#### Scenario: Édition du montant de note sans effet sur la dette
+- **WHEN** l'utilisateur modifie le montant d'une ligne adossée à un acte puis génère la note
+- **THEN** le montant de l'acte et le total à recouvrer du patient restent inchangés
+
+#### Scenario: Montant édité restitué à la réouverture du brouillon
+- **WHEN** un brouillon où une ligne a été éditée à 600 (acte à 950) est rouvert
+- **THEN** la ligne réaffiche 600 (le montant édité), pas 950
+
+### Requirement: Initier une note d'honoraires depuis une sélection d'actes
+
+Le système SHALL permettre d'**initier une note d'honoraires** directement depuis la **page
+Actes/Plans** d'un patient, par deux points d'entrée : (1) **sélectionner plusieurs actes**
+(isolés et/ou appartenant à des plans) puis lancer « Générer une note d'honoraires » pour la
+sélection, et (2) une action **« Générer une note d'honoraires »** dans le **menu d'actions
+(« ⋮ ») d'une ligne d'acte**, pour cet acte unique. Le dialogue de note SHALL s'ouvrir
+**pré-rempli**, le **type de modèle privilégié dépendant du nombre d'actes** :
+
+- **plusieurs actes** → un **modèle multi-lignes** (les actes choisis **pré-cochés**, montants
+  éditables, totaux calculés) ;
+- **un seul acte** → un **modèle mono-valeur** **pré-rempli avec les données de l'acte**
+  (libellé, montant, date, dents, note) ;
+- **aucun acte** (depuis la page Actes/Plans) → un **modèle mono-valeur** vierge (note autonome).
+
+L'utilisateur SHALL pouvoir changer le modèle proposé. Quel que soit le point d'entrée, une note
+générée **depuis au moins un acte** ne SHALL **pas** créer de nouvelle dette : les actes en
+restent la source (y compris une note **mono-valeur** issue d'un acte unique).
+
+#### Scenario: Note depuis une sélection multiple d'actes
+- **WHEN** l'utilisateur coche deux actes isolés et un acte d'un plan sur la page Actes/Plans,
+  puis lance « Générer une note d'honoraires »
+- **THEN** le dialogue s'ouvre sur un modèle multi-lignes avec ces trois actes pré-cochés, prêt à générer
+
+#### Scenario: Note depuis la ligne d'un acte
+- **WHEN** l'utilisateur ouvre le menu d'actions « ⋮ » d'un acte et choisit « Générer une note
+  d'honoraires »
+- **THEN** le dialogue s'ouvre sur un modèle mono-valeur dont les champs sont pré-remplis avec les
+  données de cet acte (libellé, montant, date…), et aucune créance « note » n'est créée à la génération
+
+#### Scenario: Note sans acte depuis la page Actes/Plans
+- **WHEN** l'utilisateur lance « Générer une note d'honoraires » sans avoir coché d'acte
+- **THEN** le dialogue s'ouvre sur un modèle mono-valeur vierge ; générer cette note autonome crée
+  une créance « note » (comme une note mono-valeur classique)
+
+#### Scenario: Génération depuis actes sans nouvelle dette
+- **WHEN** une note est générée depuis des actes sélectionnés sur la page Actes/Plans (un ou plusieurs)
+- **THEN** aucune créance « note » n'est créée et le total à recouvrer du patient reste celui de
+  ses actes
+

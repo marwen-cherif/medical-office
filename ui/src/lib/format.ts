@@ -25,18 +25,34 @@ export const DEVISE: DeviseConfig =
 /** Symbole de la devise courante (`€`, `DT`, …) — pour les libellés de champs. */
 export const DEVISE_SYMBOLE = DEVISE.symbole;
 
-/** Montant FR : espace fine pour les milliers, virgule décimale, décimales selon la devise. */
+/** Montant FR : espace (visible) pour les milliers, virgule décimale, décimales selon la devise. */
 export function fmtMontant(value: number | null | undefined): string {
   const n = value ?? 0;
-  return n.toLocaleString("fr-FR", {
-    minimumFractionDigits: DEVISE.decimales,
-    maximumFractionDigits: DEVISE.decimales,
-  });
+  return (
+    n
+      .toLocaleString("fr-FR", {
+        minimumFractionDigits: DEVISE.decimales,
+        maximumFractionDigits: DEVISE.decimales,
+      })
+      // `fr-FR` sépare les milliers par une espace fine insécable (U+202F) ou
+      // insécable (U+00A0) qui, selon la police, ne s'affiche pas : le montant
+      // paraît « collé » (10000,801). On la normalise en espace ordinaire visible.
+      .replace(/[\u202f\u00a0]/g, " ")
+  );
 }
 
 /** Montant suivi du symbole de la devise courante (`1 800,00 €`, `1 800,000 DT`). */
 export function fmtDevise(value: number | null | undefined): string {
   return `${fmtMontant(value)} ${DEVISE.symbole}`;
+}
+
+/**
+ * Valeur pour un champ de saisie de montant : décimales de la devise, point
+ * décimal (jamais de séparateur de milliers). Remplace les `toFixed(2)` codés en
+ * dur, qui tronquaient la 3ᵉ décimale en TND.
+ */
+export function montantInput(value: number | null | undefined): string {
+  return (value ?? 0).toFixed(DEVISE.decimales);
 }
 
 /** ISO `YYYY-MM-DD` → `DD/MM/YYYY` (chaîne vide si absente/illisible). */

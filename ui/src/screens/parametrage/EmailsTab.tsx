@@ -137,31 +137,33 @@ export function EmailsTab() {
 
       <Dialog open={!!editTarget} onOpenChange={(o) => !o && setEditTarget(null)}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {editTarget === "new" ? "Nouveau modèle d'email" : "Modifier le modèle d'email"}
-            </DialogTitle>
-            <DialogDescription>
-              L'identifiant correspond au template transactionnel défini dans Mailjet.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-2">
-              <Label htmlFor="mt-name">Nom</Label>
-              <Input id="mt-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); onSave(); }}>
+            <DialogHeader>
+              <DialogTitle>
+                {editTarget === "new" ? "Nouveau modèle d'email" : "Modifier le modèle d'email"}
+              </DialogTitle>
+              <DialogDescription>
+                L'identifiant correspond au template transactionnel défini dans Mailjet.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label htmlFor="mt-name">Nom</Label>
+                <Input id="mt-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="mt-id">ID template Mailjet</Label>
+                <Input id="mt-id" inputMode="numeric" value={mailjetId}
+                  onChange={(e) => setMailjetId(e.target.value)} placeholder="ex. 1234567" />
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="mt-id">ID template Mailjet</Label>
-              <Input id="mt-id" inputMode="numeric" value={mailjetId}
-                onChange={(e) => setMailjetId(e.target.value)} placeholder="ex. 1234567" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setEditTarget(null)}>Annuler</Button>
-            <Button onClick={onSave} disabled={create.isPending || update.isPending}>
-              Enregistrer
-            </Button>
-          </DialogFooter>
+            <DialogFooter>
+              <Button type="button" variant="secondary" onClick={() => setEditTarget(null)}>Annuler</Button>
+              <Button type="submit" disabled={create.isPending || update.isPending}>
+                Enregistrer
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

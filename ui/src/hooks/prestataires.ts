@@ -32,6 +32,19 @@ export function usePrestataires(search: string, page: number) {
   });
 }
 
+/** Tous les prestataires (pour un sélecteur recherchable, sans pagination). */
+export function useAllPrestataires() {
+  return useQuery({
+    queryKey: ["prestataires", "all"],
+    queryFn: async () =>
+      unwrap(
+        await client.GET("/api/prestataires", {
+          params: { query: { search: "", limit: 1000, offset: 0 } },
+        }),
+      ),
+  });
+}
+
 export function usePrestataire(id: number | null) {
   return useQuery({
     enabled: id != null,
@@ -111,6 +124,32 @@ export function useImportFacture(prestataireId: number) {
       return resp.json();
     },
     onSuccess: () => invalidate(qc, prestataireId),
+  });
+}
+
+/** Extraction IA configurée ? (config.ini — stable au runtime, mis en cache). */
+export function useFactureIaDisponible() {
+  return useQuery({
+    queryKey: ["facture-ia-disponible"],
+    staleTime: Infinity,
+    queryFn: async () => unwrap(await client.GET("/api/factures/ia-disponible")),
+  });
+}
+
+/** Lit le montant TTC d'une facture par IA (pré-remplissage éditable). Ne crée rien. */
+export function useExtractFactureMontant() {
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const resp = await fetch(`${backend.baseUrl}/api/factures/ia-montant`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${backend.token}` },
+        body: fd,
+      });
+      if (!resp.ok) throw await resp.json();
+      return resp.json() as Promise<{ disponible: boolean; montant: number | null }>;
+    },
   });
 }
 

@@ -22,6 +22,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { humanizeError } from "@/lib/errors";
+import { CategoryField } from "@/components/common/CategoryField";
 import {
   useCategories,
   useCreateTemplate,
@@ -45,6 +46,7 @@ export function ModelesTab() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newCategory, setNewCategory] = useState("");
   const [renameTarget, setRenameTarget] = useState<Template | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [categoryTarget, setCategoryTarget] = useState<Template | null>(null);
@@ -64,17 +66,21 @@ export function ModelesTab() {
   const catColor = (nom: string) =>
     categories.data?.find((c) => c.nom === nom)?.couleur ?? undefined;
 
-  function onCreate() {
+  async function onCreate() {
     const name = newName.trim();
     if (!name) return;
-    createTpl.mutate(name, {
-      onSuccess: () => {
-        toast.success("Modèle créé.");
-        setCreateOpen(false);
-        setNewName("");
-      },
-      onError: (e) => toast.error(humanizeError(e)),
-    });
+    try {
+      const tpl = await createTpl.mutateAsync(name);
+      const cat = newCategory.trim();
+      // Catégorie (facultative) portée par le modèle, créée paresseusement au besoin.
+      if (cat) await setCategory.mutateAsync({ name: tpl.name, categorie: cat });
+      toast.success("Modèle créé.");
+      setCreateOpen(false);
+      setNewName("");
+      setNewCategory("");
+    } catch (e) {
+      toast.error(humanizeError(e));
+    }
   }
 
   function onRename() {
@@ -128,7 +134,13 @@ export function ModelesTab() {
           {templates.data?.length ?? 0} modèle(s). Un modèle contenant des balises{" "}
           <code className="rounded bg-bg px-1">&lt;L_*&gt;</code> est une note multi-lignes.
         </p>
-        <Button onClick={() => setCreateOpen(true)}>
+        <Button
+          onClick={() => {
+            setNewName("");
+            setNewCategory("");
+            setCreateOpen(true);
+          }}
+        >
           <FilePlus2 className="size-4" /> Nouveau modèle
         </Button>
       </div>
@@ -209,63 +221,69 @@ export function ModelesTab() {
       {/* Création */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Nouveau modèle</DialogTitle>
-            <DialogDescription>
-              Un fichier .docx vide avec quelques balises est créé. Modifiez-le ensuite dans Word.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="tpl-name">Nom du modèle</Label>
-            <Input id="tpl-name" value={newName} onChange={(e) => setNewName(e.target.value)}
-              placeholder="ex. note_honoraires" autoFocus />
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setCreateOpen(false)}>Annuler</Button>
-            <Button onClick={onCreate} disabled={createTpl.isPending}>Créer</Button>
-          </DialogFooter>
+          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); onCreate(); }}>
+            <DialogHeader>
+              <DialogTitle>Nouveau modèle</DialogTitle>
+              <DialogDescription>
+                Un fichier .docx vide avec quelques balises est créé. Modifiez-le ensuite dans Word.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <Label htmlFor="tpl-name">Nom du modèle</Label>
+              <Input id="tpl-name" value={newName} onChange={(e) => setNewName(e.target.value)}
+                placeholder="ex. note_honoraires" autoFocus />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="tpl-new-cat">Catégorie (facultatif)</Label>
+              <CategoryField id="tpl-new-cat" value={newCategory} onChange={setNewCategory} />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="secondary" onClick={() => setCreateOpen(false)}>Annuler</Button>
+              <Button type="submit" disabled={createTpl.isPending || setCategory.isPending}>Créer</Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
       {/* Renommer */}
       <Dialog open={!!renameTarget} onOpenChange={(o) => !o && setRenameTarget(null)}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Renommer le modèle</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="tpl-rename">Nouveau nom</Label>
-            <Input id="tpl-rename" value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)} autoFocus />
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setRenameTarget(null)}>Annuler</Button>
-            <Button onClick={onRename} disabled={renameTpl.isPending}>Renommer</Button>
-          </DialogFooter>
+          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); onRename(); }}>
+            <DialogHeader>
+              <DialogTitle>Renommer le modèle</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-2">
+              <Label htmlFor="tpl-rename">Nouveau nom</Label>
+              <Input id="tpl-rename" value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)} autoFocus />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="secondary" onClick={() => setRenameTarget(null)}>Annuler</Button>
+              <Button type="submit" disabled={renameTpl.isPending}>Renommer</Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
       {/* Catégorie */}
       <Dialog open={!!categoryTarget} onOpenChange={(o) => !o && setCategoryTarget(null)}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Catégorie du modèle</DialogTitle>
-            <DialogDescription>
-              Texte libre. Laisser vide pour retirer la catégorie.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="tpl-cat">Catégorie</Label>
-            <Input id="tpl-cat" value={categoryValue} list="cat-suggestions"
-              onChange={(e) => setCategoryValue(e.target.value)} autoFocus />
-            <datalist id="cat-suggestions">
-              {categories.data?.map((c) => <option key={c.nom} value={c.nom} />)}
-            </datalist>
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setCategoryTarget(null)}>Annuler</Button>
-            <Button onClick={onSaveCategory} disabled={setCategory.isPending}>Enregistrer</Button>
-          </DialogFooter>
+          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); onSaveCategory(); }}>
+            <DialogHeader>
+              <DialogTitle>Catégorie du modèle</DialogTitle>
+              <DialogDescription>
+                Texte libre. Laisser vide pour retirer la catégorie.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <Label htmlFor="tpl-cat">Catégorie</Label>
+              <CategoryField id="tpl-cat" value={categoryValue} onChange={setCategoryValue} />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="secondary" onClick={() => setCategoryTarget(null)}>Annuler</Button>
+              <Button type="submit" disabled={setCategory.isPending}>Enregistrer</Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 

@@ -73,7 +73,7 @@ export function ActeFormDialog({
   return (
     <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
-        <form onSubmit={handleSubmit(onSubmit)}>
+        <form className="grid gap-4" onSubmit={handleSubmit(onSubmit)}>
           <DialogHeader>
             <DialogTitle>{target === "new" ? "Nouvel acte" : "Modifier l'acte"}</DialogTitle>
           </DialogHeader>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronRight, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,8 +11,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Pagination } from "@/components/common/Pagination";
+import { Tooltip } from "@/components/common/Tooltip";
+import { Kbd } from "@/components/common/Kbd";
 import { PatientFormDialog } from "@/components/dialogs/PatientFormDialog";
 import { humanizeError } from "@/lib/errors";
+import { useShortcut } from "@/lib/shortcuts";
 import { usePatients } from "@/hooks/patients";
 import type { Patient } from "@/api/types";
 
@@ -26,8 +29,24 @@ export function Patients() {
   const [filtre, setFiltre] = useState("tous");
   const [page, setPage] = useState(0);
   const [dialog, setDialog] = useState<Patient | "new" | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const list = usePatients(search, filtre, page);
+
+  useShortcut([
+    {
+      keys: "alt+n",
+      description: "Nouveau patient",
+      group: "Patients",
+      handler: () => setDialog("new"),
+    },
+    {
+      keys: "/",
+      description: "Rechercher",
+      group: "Patients",
+      handler: () => searchRef.current?.focus(),
+    },
+  ]);
 
   return (
     <div className="mx-auto max-w-5xl p-8">
@@ -42,7 +61,8 @@ export function Patients() {
         <div className="relative min-w-56 flex-1">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
           <Input
-            className="pl-9"
+            ref={searchRef}
+            className="pl-9 pr-9"
             placeholder="Rechercher un patient…"
             value={search}
             onChange={(e) => {
@@ -50,6 +70,7 @@ export function Patients() {
               setPage(0);
             }}
           />
+          <Kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">/</Kbd>
         </div>
         <Select
           value={filtre}
@@ -66,9 +87,11 @@ export function Patients() {
             <SelectItem value="impayes">Avec impayés</SelectItem>
           </SelectContent>
         </Select>
-        <Button onClick={() => setDialog("new")}>
-          <Plus className="size-4" /> Nouveau patient
-        </Button>
+        <Tooltip label="Nouveau patient" shortcut="alt+n">
+          <Button onClick={() => setDialog("new")}>
+            <Plus className="size-4" /> Nouveau patient
+          </Button>
+        </Tooltip>
       </div>
 
       {list.isLoading && <p className="text-sm text-muted">Chargement…</p>}

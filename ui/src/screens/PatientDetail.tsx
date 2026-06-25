@@ -4,9 +4,11 @@ import { ArrowLeft, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MoneySummary } from "@/components/common/MoneySummary";
+import { Tooltip } from "@/components/common/Tooltip";
 import { PatientFormDialog } from "@/components/dialogs/PatientFormDialog";
 import { humanizeError } from "@/lib/errors";
 import { isoToFr } from "@/lib/format";
+import { useShortcut } from "@/lib/shortcuts";
 import { usePatient } from "@/hooks/patients";
 import type { Patient } from "@/api/types";
 import { PlansActesTab } from "./patient-detail/PlansActesTab";
@@ -39,6 +41,16 @@ export function PatientDetail() {
   const detail = usePatient(Number.isFinite(id) ? id : null);
   const [edit, setEdit] = useState<Patient | "new" | null>(null);
 
+  // Hook appelé avant les retours anticipés (règles des hooks) ; le handler lit la
+  // donnée la plus récente et reste inactif tant que le patient n'est pas chargé.
+  useShortcut({
+    keys: "alt+e",
+    description: "Modifier le patient",
+    group: "Fiche patient",
+    enabled: !!detail.data,
+    handler: () => detail.data && setEdit(detail.data.patient),
+  });
+
   if (detail.isLoading) return <div className="p-8 text-muted">Chargement…</div>;
   if (detail.isError) return <div className="p-8 text-red">{humanizeError(detail.error)}</div>;
   if (!detail.data) return <div className="p-8 text-muted">Patient introuvable.</div>;
@@ -53,9 +65,11 @@ export function PatientDetail() {
           <ArrowLeft className="size-5" />
         </Button>
         <h1 className="flex-1 text-2xl font-semibold text-ink">{patient.display}</h1>
-        <Button variant="secondary" onClick={() => setEdit(patient)}>
-          <Pencil className="size-4" /> Modifier
-        </Button>
+        <Tooltip label="Modifier le patient" shortcut="alt+e">
+          <Button variant="secondary" onClick={() => setEdit(patient)}>
+            <Pencil className="size-4" /> Modifier
+          </Button>
+        </Tooltip>
       </div>
 
       <div className="flex flex-col gap-6 lg:flex-row">

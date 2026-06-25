@@ -17,6 +17,7 @@ import type { LucideIcon } from "lucide-react";
 import { DateRangeFilter } from "@/components/common/DateRangeFilter";
 import { humanizeError } from "@/lib/errors";
 import { fmtDevise, humanize, isoToFrDateTime, monthRange } from "@/lib/format";
+import { Montant } from "@/components/common/Montant";
 import { useDashboard } from "@/hooks/dashboard";
 import type { DocTypeCount, Kpis } from "@/api/types";
 
@@ -109,7 +110,7 @@ function LegendRow({
     <div className="flex items-center gap-2 text-sm">
       <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
       <span className="text-muted">{label}</span>
-      <span className="ml-auto tabular-nums text-ink">{fmtDevise(amount)}</span>
+      <Montant value={amount} tone="ink" className="ml-auto" />
       <span className="w-10 text-right tabular-nums text-xs text-muted">{pct}%</span>
     </div>
   );

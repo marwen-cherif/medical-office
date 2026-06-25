@@ -789,6 +789,21 @@ def get_paiement(conn: sqlite3.Connection, paiement_id: int) -> Optional[Paiemen
     return _row_to_paiement(row) if row else None
 
 
+def get_paiement_by_document(
+    conn: sqlite3.Connection, document_id: int
+) -> Optional[Paiement]:
+    """Paiement (creance « note ») rattache a un document, ou None.
+
+    Sert a l'idempotence de la creance d'une note autonome : avant d'en creer une,
+    on verifie qu'aucun paiement n'est deja lie a ce document (pas de doublon a la
+    regeneration). En presence improbable de plusieurs, renvoie le plus ancien."""
+    row = conn.execute(
+        "SELECT * FROM paiements WHERE document_id = ? ORDER BY id LIMIT 1",
+        (document_id,),
+    ).fetchone()
+    return _row_to_paiement(row) if row else None
+
+
 def create_paiement(conn: sqlite3.Connection, p: Paiement) -> Paiement:
     # Regle metier : un paiement porte toujours un montant strictement positif.
     if p.montant is None or p.montant <= 0:
@@ -1661,18 +1676,41 @@ def list_audit(
     return [(r["ts"], r["action"], r["detail"] or "") for r in rows]
 
 
+# Categories de l'onglet Historique : cle UI -> clause SQL sur `action`.
+# Calque cote serveur des filtres de HistoriqueTab, pour filtrer sans charger
+# tout l'historique. Les clauses sont des litteraux (aucune entree utilisateur
+# n'entre dans le SQL ; la cle est validee par .get()), donc pas d'injection.
+AUDIT_CATEGORIES: dict[str, str] = {
+    "fiche": "action LIKE 'fiche%'",
+    "plans": "action LIKE 'plan%'",
+    "actes": "action LIKE 'acte%'",
+    "paiements": "(action LIKE 'paiement%' OR action LIKE '%regle%')",
+    "documents": "(action LIKE '%document%' OR action LIKE '%note%' "
+                 "OR action LIKE '%brouillon%')",
+}
+
+
 def list_audit_patient(
-    conn: sqlite3.Connection, patient_id: int, limit: int = 200,
+    conn: sqlite3.Connection, patient_id: int, limit: int = 200, offset: int = 0,
+    category: str = "tous",
 ) -> list[tuple[str, str, str]]:
     """Evenements d'un patient, du plus recent au plus ancien (onglet Historique).
 
     Renvoie (ts, action, detail) ; `detail` est la chaine brute (JSON pour les
     lignes recentes), a decoder via parse_audit_detail cote presentation.
+    Pagine par `offset` (chargement progressif « Charger plus » cote UI) et
+    filtre par `category` (cf. AUDIT_CATEGORIES ; cle inconnue = pas de filtre).
     """
+    where = "patient_id = ?"
+    params: list = [patient_id]
+    clause = AUDIT_CATEGORIES.get(category)
+    if clause:
+        where += f" AND {clause}"
+    params.extend([limit, offset])
     rows = conn.execute(
-        "SELECT ts, action, detail FROM audit_log WHERE patient_id = ? "
-        "ORDER BY id DESC LIMIT ?",
-        (patient_id, limit),
+        f"SELECT ts, action, detail FROM audit_log WHERE {where} "
+        "ORDER BY id DESC LIMIT ? OFFSET ?",
+        params,
     ).fetchall()
     return [(r["ts"], r["action"], r["detail"] or "") for r in rows]
 

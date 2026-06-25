@@ -309,6 +309,75 @@ def get_lignes(variables: dict) -> Optional[list[dict]]:
     return lignes if isinstance(lignes, list) else None
 
 
+def is_note_autonome(variables: dict) -> bool:
+    """Vrai si la note ne reference AUCUN acte — i.e. une note mono-valeur (D2).
+
+    Une note multi-lignes porte toujours la cle `__lignes__` (actes existants ou
+    crees a la volee) : elle est donc adossee a des actes et n'est jamais autonome.
+    Seule une note autonome engendre une creance « note » a la generation (D1)."""
+    return get_lignes(variables) is None
+
+
+def _variables_of(document: Document) -> dict:
+    """Decode `document.variables` (JSON) en dict, tolerant (sinon dict vide)."""
+    if not document.variables:
+        return {}
+    try:
+        data = json.loads(document.variables)
+        return data if isinstance(data, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def create_note_creance(
+    conn: sqlite3.Connection, document: Document, *,
+    is_note: bool, has_actes: bool = False,
+) -> Optional["repo.Paiement"]:
+    """Cree la creance « note » d'une note AUTONOME a la generation (design D1-D3).
+
+    Une note autonome (sans acte rattache) porte elle-meme le du : on cree un
+    `paiement` en_attente rattache au document (`paiements.document_id`), visible page
+    Actes/Plans et dans Finances sans nouveau code de lecture (D1).
+
+    Gating strict contre le double-comptage : ne cree rien sauf si `is_note` est vrai
+    (un document d'un autre type n'engendre jamais de creance), la note ne reference
+    AUCUN acte, `document.montant > 0`, et aucun paiement n'est deja rattache au
+    document (idempotence par `document_id`, D3). « Aucun acte » = note multi-lignes
+    sans lignes (`is_note_autonome`) **et** aucun acte selectionne/ajoute transmis a la
+    generation (`has_actes`) : une note **mono-valeur generee depuis un acte** est donc
+    adossee (pas de creance), l'acte restant la source du du. La creance est ensuite
+    INDEPENDANTE : regenerer/supprimer la note ne la touche pas (D3).
+
+    Renvoie le paiement cree, ou None si aucune condition n'est remplie (no-op)."""
+    if not is_note:
+        return None
+    if has_actes or not is_note_autonome(_variables_of(document)):
+        return None  # note adossee a des actes : le du est porte par les actes
+    montant = float(document.montant or 0)
+    if montant <= 0:
+        return None
+    if repo.get_paiement_by_document(conn, document.id) is not None:
+        return None  # creance deja creee pour ce document : pas de doublon (D3)
+    paiement = repo.create_paiement(
+        conn,
+        repo.Paiement(
+            id=None,
+            patient_id=document.patient_id,
+            document_id=document.id,
+            montant=montant,
+            statut="en_attente",
+            notes=document.acte or "Note d'honoraires",
+            date_echeance=None,
+        ),
+    )
+    repo.log_audit(
+        conn, "creance_note_creee",
+        {"document_id": document.id, "paiement_id": paiement.id, "montant": montant},
+        patient_id=document.patient_id,
+    )
+    return paiement
+
+
 def _first_ligne_date(lignes: list[dict]) -> Optional[date]:
     """1re date parseable des lignes (ordre d'affichage), pour acte_date (design D8)."""
     for l in lignes:

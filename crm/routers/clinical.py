@@ -7,7 +7,7 @@ Reutilise `crm/repo.py` sans le modifier. Source unique du du = les actes
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -231,10 +231,15 @@ def patient_creances(patient_id: int, include_notes: bool = False) -> list[Crean
                        statut=c.statut) for c in cr]
 
 
+AuditCategory = Literal["tous", "fiche", "plans", "actes", "paiements", "documents"]
+
+
 @router.get("/patients/{patient_id}/audit", response_model=list[AuditOut])
-def patient_audit(patient_id: int, limit: int = 200) -> list[AuditOut]:
+def patient_audit(patient_id: int, limit: int = 200, offset: int = 0,
+                  category: AuditCategory = "tous") -> list[AuditOut]:
     with core.db() as conn:
-        rows = repo.list_audit_patient(conn, patient_id, limit=limit)
+        rows = repo.list_audit_patient(conn, patient_id, limit=limit, offset=offset,
+                                       category=category)
     return [AuditOut(ts=ts, action=action, detail=repo.parse_audit_detail(detail))
             for ts, action, detail in rows]
 

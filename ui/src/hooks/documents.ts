@@ -9,8 +9,8 @@ export const docKeys = {
   patientDocs: (id: number, page: number) => ["patient-docs", id, page] as const,
   filtered: (f: DocFilter, page: number) => ["documents", f, page] as const,
   genTemplates: (mode: string) => ["gen-templates", mode] as const,
-  genForm: (id: number, template: string, docId?: number | null) =>
-    ["gen-form", id, template, docId ?? null] as const,
+  genForm: (id: number, template: string, docId?: number | null, srcId?: number | null) =>
+    ["gen-form", id, template, docId ?? null, srcId ?? null] as const,
 };
 
 export type DocFilter = { search: string; statut: string; date_from: string; date_to: string };
@@ -68,16 +68,21 @@ export function useGenerationForm(
   id: number | null,
   template: string | null,
   documentId?: number | null,
+  sourcePrestationId?: number | null,
 ) {
   return useQuery({
     enabled: id != null && !!template,
-    queryKey: docKeys.genForm(id ?? 0, template ?? "", documentId),
+    queryKey: docKeys.genForm(id ?? 0, template ?? "", documentId, sourcePrestationId),
     queryFn: async () =>
       unwrap(
         await client.GET("/api/patients/{patient_id}/generation/form", {
           params: {
             path: { patient_id: id! },
-            query: { template: template!, document_id: documentId ?? undefined },
+            query: {
+              template: template!,
+              document_id: documentId ?? undefined,
+              source_prestation_id: sourcePrestationId ?? undefined,
+            },
           },
         }),
       ),

@@ -73,15 +73,23 @@ trois endroits attendus sans nouveau code de lecture.
 
 ### D2 — Définition de « note autonome » et déclenchement
 
-Une note est **autonome** ⇔ elle ne référence **aucun acte** : en pratique une note **mono-valeur**
-(`generator.get_lignes(variables) is None`). Une note **multi-lignes** référence toujours des
-actes (existants ou créés à la volée) → **adossée**, jamais de créance « note ». La créance est
-créée :
+Une note est **autonome** ⇔ elle ne référence **aucun acte**. La détection combine deux signaux à
+la génération :
+
+- `generator.is_note_autonome(variables)` = `get_lignes(variables) is None` (note **multi-lignes**
+  ⇒ référence toujours des actes ⇒ adossée) ;
+- `has_actes` = au moins un acte transmis au flux `generate` (`body.selected_prestation_ids` ou
+  `body.new_actes`). Ce signal couvre le cas où une note **mono-valeur** est **générée depuis un
+  acte unique** (point d'entrée page Actes/Plans, cf. D5) : elle est alors **adossée** (l'acte
+  porte le dû), donc **pas** de créance, bien qu'elle soit mono-valeur.
+
+La créance est créée :
 
 - **uniquement** quand `body.is_note` est vrai (les documents d'un autre type n'engendrent jamais
   de créance) ;
+- **uniquement** si la note est autonome **et** `has_actes` est faux ;
 - **uniquement** si `documents.montant > 0` (rien à facturer sinon) ;
-- **à la génération** (route `generate` / `render_document`), pas à l'enregistrement du brouillon.
+- **à la génération** (route `generate`), pas à l'enregistrement du brouillon.
 
 ### D3 — Idempotence + indépendance de la créance (cycle de vie)
 
@@ -129,8 +137,18 @@ Aucune nouvelle route backend : les deux points d'entrée **pré-remplissent** l
   ce seul acte.
 
 Le sélecteur de modèle du dialogue reste filtré sur la **catégorie « Notes d'honoraires »** (mode
-`note`) — seuls des modèles **multi-lignes** permettent de rendre les actes en lignes. Si la
-catégorie ne contient aucun modèle multi-lignes, on l'indique clairement.
+`note`). Le **modèle privilégié à l'ouverture dépend du nombre d'actes** (l'utilisateur peut le
+changer) :
+
+- **≥ 2 actes** → premier modèle **multi-lignes** (rend les actes en lignes) ;
+- **1 acte** → premier modèle **mono-valeur**, dont les champs sont **pré-remplis depuis l'acte**.
+  `generation_form` accepte `source_prestation_id` et mappe les balises standard (ACTE ← libellé,
+  MONTANT ← montant, DATE ← date, DENTS, NOTE) ;
+- **0 acte** (« note sans acte ») → premier modèle **mono-valeur** vierge (note autonome).
+
+`GenTemplateOut` expose `is_multiligne` (calculé via `classify_placeholders`, sans Word) pour ce
+choix côté frontend. Le `RowActions` (menu ⋮) est rendu **non-modal** (`modal={false}`) : sinon le
+verrou `pointer-events` du menu reste sur le `<body>` après ouverture d'un dialogue (UI bloquée).
 
 - *Alternative écartée* : une route dédiée « générer note pour actes ». Superflue — le contrat
   `selected_prestation_ids` existe déjà et couvre exactement ce besoin.

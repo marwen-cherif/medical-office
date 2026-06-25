@@ -1,5 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Shell } from "@/components/Shell";
+import { ShortcutsProvider } from "@/lib/shortcuts";
+import { ShortcutsHelpDialog } from "@/components/common/ShortcutsHelpDialog";
 import { Parametrage } from "@/screens/Parametrage";
 import { TableauDeBord } from "@/screens/TableauDeBord";
 import { Patients } from "@/screens/Patients";
@@ -12,8 +14,9 @@ import { JobDetail } from "@/screens/JobDetail";
 
 export default function App() {
   return (
-    <Shell>
-      <Routes>
+    <ShortcutsProvider>
+      <Shell>
+        <Routes>
         <Route path="/" element={<Navigate to="/tableau-de-bord" replace />} />
         <Route path="/tableau-de-bord" element={<TableauDeBord />} />
         <Route path="/patients" element={<Patients />} />
@@ -25,7 +28,9 @@ export default function App() {
         <Route path="/prestataires/:id" element={<PrestataireDetail />} />
         <Route path="/parametrage" element={<Parametrage />} />
         <Route path="*" element={<Navigate to="/tableau-de-bord" replace />} />
-      </Routes>
-    </Shell>
+        </Routes>
+      </Shell>
+      <ShortcutsHelpDialog />
+    </ShortcutsProvider>
   );
 }

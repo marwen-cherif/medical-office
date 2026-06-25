@@ -72,67 +72,69 @@ export function VariablesDialog({
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Variables — {template.label}</DialogTitle>
-          <DialogDescription>
-            Les balises patient sont remplies automatiquement. Configurez le libellé, le type et
-            la valeur par défaut des balises personnalisées.
-          </DialogDescription>
-        </DialogHeader>
+        <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); onSave(); }}>
+          <DialogHeader>
+            <DialogTitle>Variables — {template.label}</DialogTitle>
+            <DialogDescription>
+              Les balises patient sont remplies automatiquement. Configurez le libellé, le type et
+              la valeur par défaut des balises personnalisées.
+            </DialogDescription>
+          </DialogHeader>
 
-        {placeholders.isLoading && <p className="text-sm text-muted">Chargement…</p>}
-        {placeholders.isError && (
-          <p className="text-sm text-red">{humanizeError(placeholders.error)}</p>
-        )}
-
-        {autoTags.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            <span className="text-xs text-muted">Auto :</span>
-            {autoTags.map((t) => (
-              <Badge key={t} variant="muted">{t}</Badge>
-            ))}
-          </div>
-        )}
-
-        <div className="max-h-[50vh] space-y-3 overflow-auto">
-          {customTags.length === 0 && !placeholders.isLoading && (
-            <p className="text-sm text-muted">Aucune balise personnalisée à configurer.</p>
+          {placeholders.isLoading && <p className="text-sm text-muted">Chargement…</p>}
+          {placeholders.isError && (
+            <p className="text-sm text-red">{humanizeError(placeholders.error)}</p>
           )}
-          {customTags.map((tag) => {
-            const row = rows[tag];
-            if (!row) return null;
-            return (
-              <div key={tag} className="grid grid-cols-[auto_1fr_8rem_1fr] items-center gap-2">
-                <Badge variant="outline" className="font-mono">{tag}</Badge>
-                <Input
-                  placeholder="Libellé"
-                  value={row.label}
-                  onChange={(e) => update(tag, { label: e.target.value })}
-                />
-                <Select value={row.type} onValueChange={(v) => update(tag, { type: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {TYPES.map((t) => (
-                      <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input
-                  placeholder="Valeur par défaut"
-                  value={row.default_value}
-                  onChange={(e) => update(tag, { default_value: e.target.value })}
-                />
-              </div>
-            );
-          })}
-        </div>
 
-        <DialogFooter>
-          <Button variant="secondary" onClick={onClose}>Annuler</Button>
-          <Button onClick={onSave} disabled={save.isPending || customTags.length === 0}>
-            Enregistrer
-          </Button>
-        </DialogFooter>
+          {autoTags.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              <span className="text-xs text-muted">Auto :</span>
+              {autoTags.map((t) => (
+                <Badge key={t} variant="muted">{t}</Badge>
+              ))}
+            </div>
+          )}
+
+          <div className="max-h-[50vh] space-y-3 overflow-auto">
+            {customTags.length === 0 && !placeholders.isLoading && (
+              <p className="text-sm text-muted">Aucune balise personnalisée à configurer.</p>
+            )}
+            {customTags.map((tag) => {
+              const row = rows[tag];
+              if (!row) return null;
+              return (
+                <div key={tag} className="grid grid-cols-[auto_1fr_8rem_1fr] items-center gap-2">
+                  <Badge variant="outline" className="font-mono">{tag}</Badge>
+                  <Input
+                    placeholder="Libellé"
+                    value={row.label}
+                    onChange={(e) => update(tag, { label: e.target.value })}
+                  />
+                  <Select value={row.type} onValueChange={(v) => update(tag, { type: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {TYPES.map((t) => (
+                        <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    placeholder="Valeur par défaut"
+                    value={row.default_value}
+                    onChange={(e) => update(tag, { default_value: e.target.value })}
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="secondary" onClick={onClose}>Annuler</Button>
+            <Button type="submit" disabled={save.isPending || customTags.length === 0}>
+              Enregistrer
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

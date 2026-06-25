@@ -77,6 +77,17 @@ class FactureListOut(BaseModel):
     total: int
 
 
+class FactureIaDisponibleOut(BaseModel):
+    """Indique si l'extraction IA du montant de facture est configurée."""
+    disponible: bool
+
+
+class FactureIaMontantOut(BaseModel):
+    """Montant TTC lu par IA (pré-remplissage éditable) ; `montant` null si non trouvé."""
+    disponible: bool
+    montant: Optional[float] = None
+
+
 class DepenseOut(BaseModel):
     id: int
     prestataire_id: int
@@ -107,6 +118,7 @@ class DepenseIn(BaseModel):
     date_echeance: Optional[str] = None
     mode: Optional[str] = None
     notes: Optional[str] = None
+    facture_id: Optional[int] = None  # lie la depense a une facture importee
 
 
 class ReglementDepenseIn(BaseModel):
@@ -271,6 +283,62 @@ async def facture_import(prestataire_id: int, file: UploadFile = File(...),
             pass
 
 
+# --- Extraction IA du montant (pre-remplissage, vision) -----------------------
+#
+# Porte la fonctionnalite de l'oracle Flet (`_import_facture_dialog`) : a l'ouverture
+# du dialogue d'import, le montant TTC est lu sur le scan par IA puis pre-rempli dans
+# un champ EDITABLE (jamais auto-valide). Reutilise le moteur `src/ai` sans le modifier.
+# Aucun secret ne transite : seul le montant lu est renvoye.
+
+def _facture_ia_cfg_provider():
+    """Config + provider IA de la feature 'facture_montant', ou (None, None) si IA off.
+
+    Indisponible = config.ini absent, fonctionnalite absente/desactivee, provider
+    inconnu ou cle d'API vide (cf. `provider_for_feature`). Ne leve jamais.
+    """
+    try:
+        from src.ai.factory import provider_for_feature
+        from src.config import load_config
+        cfg = load_config()
+        return cfg, provider_for_feature(cfg, "facture_montant")
+    except Exception:  # noqa: BLE001 -- config.ini absent / IA non configuree
+        return None, None
+
+
+@router.get("/factures/ia-disponible", response_model=FactureIaDisponibleOut)
+def facture_ia_disponible() -> FactureIaDisponibleOut:
+    """Indique si l'extraction IA du montant de facture est configuree (vision)."""
+    _, provider = _facture_ia_cfg_provider()
+    return FactureIaDisponibleOut(disponible=provider is not None)
+
+
+@router.post("/factures/ia-montant", response_model=FactureIaMontantOut)
+async def facture_ia_montant(file: UploadFile = File(...)) -> FactureIaMontantOut:
+    """Lit le montant TTC d'une facture scannee par IA (pre-remplissage editable).
+
+    Ne cree / n'archive rien : renvoie seulement le montant lu (ou null). L'extraction
+    ne leve jamais (repli null si IA off / format inconnu / echec).
+    """
+    cfg, provider = _facture_ia_cfg_provider()
+    if cfg is None or provider is None:
+        return FactureIaMontantOut(disponible=False, montant=None)
+    data = await file.read()
+    suffix = Path(file.filename or "facture").suffix or ".pdf"
+    tmp = Path(tempfile.gettempdir()) / f"crm_ia_{file.filename or 'facture'}"
+    if not tmp.suffix:
+        tmp = tmp.with_suffix(suffix)
+    try:
+        tmp.write_bytes(data)
+        from src.ai.features.facture_montant import extract_facture_montant
+        montant = extract_facture_montant(cfg, tmp)  # ne leve jamais (None en repli)
+        return FactureIaMontantOut(disponible=True, montant=montant)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
 @router.delete("/factures/{facture_id}", response_model=core.OkOut)
 def facture_delete(facture_id: int) -> core.OkOut:
     with core.db() as conn:
@@ -307,6 +375,7 @@ def depense_create(body: DepenseIn) -> DepenseOut:
             dep = repo.create_depense(
                 conn, body.prestataire_id, body.montant,
                 montant_regle=body.montant_regle, motif=body.motif,
+                facture_id=body.facture_id,
                 date_echeance=body.date_echeance, mode=body.mode,
                 libelle=body.libelle, notes=body.notes)
             repo.log_audit(conn, "depense_creee",

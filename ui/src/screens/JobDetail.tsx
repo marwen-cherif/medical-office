@@ -3,7 +3,9 @@ import { toast } from "sonner";
 import { ArrowLeft, FolderOpen, Printer, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip } from "@/components/common/Tooltip";
 import { humanizeError } from "@/lib/errors";
+import { useShortcut } from "@/lib/shortcuts";
 import { humanize, JOB_ITEM_STATUTS, jobStatut } from "@/lib/format";
 import { useJob, useRelaunchJob } from "@/hooks/jobs";
 import { useOpenDocument, usePrintDocument } from "@/hooks/documents";
@@ -45,6 +47,15 @@ export function JobDetail() {
       },
     );
   }
+
+  const canRelaunch = !!q.data && q.data.job.errors > 0 && q.data.job.statut !== "en_cours";
+  useShortcut({
+    keys: "alt+r",
+    description: "Relancer les erreurs",
+    group: "Travaux",
+    enabled: canRelaunch && !relaunch.isPending,
+    handler: () => q.data && onRelaunch(q.data.job.id),
+  });
 
   return (
     <div className="mx-auto max-w-4xl p-8">
@@ -99,13 +110,15 @@ function JobDetailBody({
           Job #{job.id} — {isGen ? "Génération" : "Envoi email"} · {humanize(job.doc_type)}
         </h1>
         {canRelaunch && (
-          <Button
-            variant="secondary"
-            disabled={relaunchPending}
-            onClick={() => onRelaunch(job.id)}
-          >
-            <RotateCcw className="size-4" /> Relancer les erreurs
-          </Button>
+          <Tooltip label="Relancer les erreurs" shortcut="alt+r">
+            <Button
+              variant="secondary"
+              disabled={relaunchPending}
+              onClick={() => onRelaunch(job.id)}
+            >
+              <RotateCcw className="size-4" /> Relancer les erreurs
+            </Button>
+          </Tooltip>
         )}
       </div>
 
