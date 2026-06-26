@@ -3,6 +3,7 @@ pymupdf>=1.24
 pywin32>=306
 pillow>=10        # impression directe des documents (rendu image -> imprimante)
 requests>=2.31
+openpyxl>=3.1     # import/export du referentiel d'actes en .xlsx (crm/import_actes.py)
 pyinstaller>=6.0
 
 # Interface graphique du CRM (crm_app.py / crm_web.py)

@@ -28,39 +28,6 @@ export function unwrap<T>(res: { data?: T; error?: unknown }): T {
 }
 
 /**
- * Télécharge un fichier binaire (ex. export .xlsx) via fetch authentifié, puis
- * déclenche l'enregistrement côté navigateur — openapi-fetch ne gère pas les
- * réponses binaires. `query` est sérialisé en chaîne de requête. Le nom du fichier
- * provient de l'en-tête `Content-Disposition` (repli sur `fallbackName`).
- */
-export async function downloadFile(
-  path: string,
-  fallbackName: string,
-  query?: Record<string, string | number | boolean | undefined>,
-): Promise<void> {
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(query ?? {})) {
-    if (v !== undefined) qs.set(k, String(v));
-  }
-  const url = `${backend.baseUrl}${path}${qs.toString() ? `?${qs}` : ""}`;
-  const resp = await fetch(url, { headers: { Authorization: `Bearer ${backend.token}` } });
-  if (!resp.ok) throw await resp.json();
-  const blob = await resp.blob();
-  const disposition = resp.headers.get("Content-Disposition") ?? "";
-  const match = /filename="?([^"]+)"?/.exec(disposition);
-  const filename = match?.[1] ?? fallbackName;
-
-  const href = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = href;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(href);
-}
-
-/**
  * Consomme un flux Server-Sent Events (opérations longues) via fetch streaming —
  * `EventSource` ne permet pas l'en-tête Authorization, on lit donc le corps à la
  * main. Appelle les callbacks au fil des événements ; résout à `done`, rejette à

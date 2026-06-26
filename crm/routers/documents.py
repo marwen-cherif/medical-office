@@ -140,6 +140,11 @@ class DraftIn(BaseModel):
     # seul : pose le `montant` de la ligne sans toucher l'acte (D4). Absent => defaut
     # = montant de l'acte (retro-compatible).
     montants_notes: dict[int, float] = {}
+    # Note autonome mono-valeur : suivi en attente optionnel (defaut True = comportement
+    # actuel) et montant de creance surchargeable, INDEPENDANT du montant du document
+    # (None => document.montant). Lus uniquement au flux `generate` ; ignores au brouillon.
+    tracer_creance: bool = True
+    montant_creance: Optional[float] = None
 
 
 class GenerateIn(DraftIn):
@@ -526,7 +531,9 @@ def generate(patient_id: int, body: GenerateIn) -> core.JobAcceptedOut:
             # No-op pour un document d'un autre type ; idempotent si la note est regeneree.
             has_actes = bool(body.selected_prestation_ids or body.new_actes)
             generator.create_note_creance(conn, doc, is_note=body.is_note,
-                                          has_actes=has_actes)
+                                          has_actes=has_actes,
+                                          track=body.tracer_creance,
+                                          montant_override=body.montant_creance)
             printer = None
             if body.do_print:
                 printer = _check_printer(conn)

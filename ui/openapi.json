@@ -2483,73 +2483,73 @@
       }
     },
     "/api/actes/export": {
-      "get": {
+      "post": {
         "tags": [
           "actes"
         ],
         "summary": "Actes Export",
-        "description": "Exporte le referentiel d'actes en .xlsx (telechargement).\n\nLe classeur porte une colonne ID (cle de rapprochement au reimport) : on edite\ndes lignes / on en ajoute, puis on reimporte via POST /api/actes/import.\n`include_inactive` ajoute les actes desactives.",
-        "operationId": "actes_export_api_actes_export_get",
-        "parameters": [
-          {
-            "name": "include_inactive",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Include Inactive"
+        "description": "Exporte le referentiel d'actes en .xlsx sur le poste, puis ouvre le fichier\navec l'application par defaut (Excel).\n\nModele « cote serveur » comme l'ouverture des documents/factures (`os.startfile`) :\nle sidecar tourne sur la machine de l'utilisateur. On evite ainsi la limite de la\nWebView Tauri, qui ne declenche pas le telechargement d'un blob `<a download>`\n(qui ne marche qu'en navigateur, d'ou « ok en dev web, KO dans l'exe »).\n\nLe classeur porte une colonne ID (cle de rapprochement au reimport) : on edite des\nlignes / on en ajoute, puis on reimporte via POST /api/actes/import.\n`include_inactive` ajoute les actes desactives.",
+        "operationId": "actes_export_api_actes_export_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActeExportIn"
+              }
             }
-          }
-        ],
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ActeExportOut"
+                }
               }
             }
           },
           "400": {
+            "description": "Bad Request",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            },
-            "description": "Bad Request"
+            }
           },
           "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            },
-            "description": "Unauthorized"
+            }
           },
           "404": {
+            "description": "Not Found",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            },
-            "description": "Not Found"
+            }
           },
           "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            },
-            "description": "Conflict"
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -7909,6 +7909,36 @@
         ],
         "title": "ActeCategoriesOut"
       },
+      "ActeExportIn": {
+        "properties": {
+          "include_inactive": {
+            "type": "boolean",
+            "title": "Include Inactive",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ActeExportIn"
+      },
+      "ActeExportOut": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "count"
+        ],
+        "title": "ActeExportOut",
+        "description": "Resultat d'un export : chemin du .xlsx ecrit sur le poste + nombre d'actes."
+      },
       "ActeImportOut": {
         "properties": {
           "created": {
@@ -9114,6 +9144,22 @@
             "type": "object",
             "title": "Montants Notes",
             "default": {}
+          },
+          "tracer_creance": {
+            "type": "boolean",
+            "title": "Tracer Creance",
+            "default": true
+          },
+          "montant_creance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Montant Creance"
           }
         },
         "type": "object",
@@ -9824,6 +9870,22 @@
             "type": "object",
             "title": "Montants Notes",
             "default": {}
+          },
+          "tracer_creance": {
+            "type": "boolean",
+            "title": "Tracer Creance",
+            "default": true
+          },
+          "montant_creance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Montant Creance"
           },
           "do_print": {
             "type": "boolean",
@@ -11260,6 +11322,28 @@
           "printer_name": {
             "type": "string",
             "title": "Printer Name"
+          },
+          "paper": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paper"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
           }
         },
         "type": "object",

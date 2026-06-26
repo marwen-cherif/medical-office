@@ -369,6 +369,7 @@ def _variables_of(document: Document) -> dict:
 def create_note_creance(
     conn: sqlite3.Connection, document: Document, *,
     is_note: bool, has_actes: bool = False,
+    track: bool = True, montant_override: Optional[float] = None,
 ) -> Optional["repo.Paiement"]:
     """Cree la creance « note » d'une note AUTONOME a la generation (design D1-D3).
 
@@ -378,19 +379,27 @@ def create_note_creance(
 
     Gating strict contre le double-comptage : ne cree rien sauf si `is_note` est vrai
     (un document d'un autre type n'engendre jamais de creance), la note ne reference
-    AUCUN acte, `document.montant > 0`, et aucun paiement n'est deja rattache au
+    AUCUN acte, le montant effectif est `> 0`, et aucun paiement n'est deja rattache au
     document (idempotence par `document_id`, D3). « Aucun acte » = note multi-lignes
     sans lignes (`is_note_autonome`) **et** aucun acte selectionne/ajoute transmis a la
     generation (`has_actes`) : une note **mono-valeur generee depuis un acte** est donc
     adossee (pas de creance), l'acte restant la source du du. La creance est ensuite
     INDEPENDANTE : regenerer/supprimer la note ne la touche pas (D3).
 
+    `track` (option utilisateur exposee a la generation, defaut True) : si faux, no-op —
+    la note est generee sans creance. `montant_override` (defaut None) : montant de la
+    creance, INDEPENDANT du montant affiche/imprime du document — None retombe sur
+    `document.montant`. Ce montant ne touche jamais le rendu du document.
+
     Renvoie le paiement cree, ou None si aucune condition n'est remplie (no-op)."""
     if not is_note:
         return None
     if has_actes or not is_note_autonome(_variables_of(document)):
         return None  # note adossee a des actes : le du est porte par les actes
-    montant = float(document.montant or 0)
+    if not track:
+        return None  # suivi en attente desactive par l'utilisateur (D1)
+    montant = (float(montant_override) if montant_override is not None
+               else float(document.montant or 0))
     if montant <= 0:
         return None
     if repo.get_paiement_by_document(conn, document.id) is not None:

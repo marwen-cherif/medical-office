@@ -6,9 +6,9 @@
  * latence HTTP localhost (cf. design R3).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { client, unwrap, streamJob, downloadFile, type JobEvent } from "@/lib/api";
+import { client, unwrap, streamJob, type JobEvent } from "@/lib/api";
 import { backend } from "@/lib/bridge";
-import type { ActeImport, ActeIn, Field, MailTemplateIn } from "@/api/types";
+import type { ActeExport, ActeImport, ActeIn, Field, MailTemplateIn } from "@/api/types";
 
 export const keys = {
   templates: ["templates"] as const,
@@ -258,13 +258,19 @@ export function useTestPrinter() {
   return useMutation({
     mutationFn: async ({
       printerName,
+      paper = null,
+      color = null,
       onEvent,
     }: {
       printerName: string;
+      paper?: string | null;
+      color?: string | null;
       onEvent: (e: JobEvent) => void;
     }) => {
       const accepted = unwrap(
-        await client.POST("/api/printers/test", { body: { printer_name: printerName } }),
+        await client.POST("/api/printers/test", {
+          body: { printer_name: printerName, paper, color },
+        }),
       );
       await streamJob(accepted.job_id, onEvent);
     },
@@ -347,13 +353,21 @@ export function useSetActeActive() {
   });
 }
 
-/** Exporte le référentiel d'actes en .xlsx (téléchargement authentifié). */
+/**
+ * Exporte le référentiel d'actes en .xlsx. Le serveur (sidecar, sur le poste)
+ * écrit le fichier puis l'ouvre avec l'application par défaut (Excel) — même
+ * modèle que l'ouverture des documents/factures. On évite ainsi la limite de la
+ * WebView Tauri, qui ne déclenche pas un téléchargement `<a download>` (lequel ne
+ * marche qu'en navigateur). Renvoie le chemin du fichier écrit.
+ */
 export function useExportActes() {
   return useMutation({
-    mutationFn: async (includeInactive: boolean) =>
-      downloadFile("/api/actes/export", "referentiel_actes.xlsx", {
-        include_inactive: includeInactive,
-      }),
+    mutationFn: async (includeInactive: boolean): Promise<ActeExport> =>
+      unwrap(
+        await client.POST("/api/actes/export", {
+          body: { include_inactive: includeInactive },
+        }),
+      ),
   });
 }
 

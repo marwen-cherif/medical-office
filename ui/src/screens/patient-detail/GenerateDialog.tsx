@@ -38,6 +38,12 @@ import { ActeCard, acteToPayload, emptyActe, type ActeValue } from "./ActeCard";
 
 type Mode = "note" | "generic";
 
+/** Balise montant d'un modèle mono-valeur (alimente le montant du document / la créance). */
+function isMontantTag(tag: string): boolean {
+  const t = tag.toUpperCase();
+  return t.includes("MONTANT") || t.includes("PRIX") || t.includes("TARIF");
+}
+
 /** Montant de note retenu pour un acte : saisie éditée si présente, sinon le défaut. */
 function noteMontantValue(l: GenActeLine, raw: string | undefined): number {
   if (raw == null || raw === "") return l.montant_note ?? l.montant;
@@ -147,6 +153,11 @@ export function GenerateDialog({
   const [montants, setMontants] = useState<Record<number, string>>({});
   const [cards, setCards] = useState<ActeValue[]>([]);
   const [error, setError] = useState("");
+  // Note autonome mono-valeur : suivi en attente optionnel (créance) + montant à suivre.
+  // `montantCreance === null` ⇒ suit le montant du document (pré-rempli) ; dès que l'utilisateur
+  // saisit, la valeur est découplée du montant imprimé (design D3, montant indépendant).
+  const [tracerCreance, setTracerCreance] = useState(true);
+  const [montantCreance, setMontantCreance] = useState<string | null>(null);
 
   // Note depuis UN seul acte : on pré-remplit un modèle mono-valeur avec les données
   // de cet acte (le backend mappe ACTE/MONTANT/DATE/…). Plusieurs actes => multi-lignes.
@@ -211,6 +222,9 @@ export function GenerateDialog({
       const init: Record<string, string> = {};
       (form.data.fields ?? []).forEach((f) => (init[f.tag] = f.value ?? ""));
       setMono(init);
+      // Note autonome : suivi coché par défaut, montant suivant le montant du document.
+      setTracerCreance(true);
+      setMontantCreance(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, form.data]);
@@ -222,6 +236,15 @@ export function GenerateDialog({
       ...(form.data.actes?.plans ?? []).flatMap((g) => g.prestations),
     ];
   }, [form.data]);
+
+  // Note autonome mono-valeur (sans acte) : seule cible du suivi optionnel en créance.
+  const isAutonomousNote =
+    mode === "note" && !!form.data && !form.data.is_multiligne && singleActeId == null;
+  // Montant du document (balise MONTANT/PRIX/TARIF) — défaut pré-rempli du montant à suivre.
+  const docMontantStr = useMemo(() => {
+    const tag = (form.data?.fields ?? []).find((f) => isMontantTag(f.tag))?.tag;
+    return tag ? (mono[tag] ?? "") : "";
+  }, [form.data, mono]);
 
   // Montant de note retenu pour un acte : saisie éditée si présente, sinon le défaut.
   const lineMontant = (l: GenActeLine) => noteMontantValue(l, montants[l.id]);
@@ -273,6 +296,17 @@ export function GenerateDialog({
       // Note mono-valeur générée depuis un acte : on transmet l'acte source pour que
       // le backend la considère adossée (pas de créance ; l'acte porte le dû).
       selected_prestation_ids: singleActeId != null ? [singleActeId] : [],
+      // Note autonome : suivi en attente optionnel + montant de créance indépendant du
+      // montant imprimé. `montant_creance: null` ⇒ le backend retombe sur document.montant.
+      ...(isAutonomousNote
+        ? {
+            tracer_creance: tracerCreance,
+            montant_creance:
+              tracerCreance && montantCreance !== null
+                ? Number(montantCreance.replace(",", ".")) || 0
+                : null,
+          }
+        : {}),
       ...(do_print ? { do_print: true } : {}),
     };
   }
@@ -460,6 +494,35 @@ export function GenerateDialog({
                     )}
                   </div>
                 ))}
+                {/* Note autonome : suivi en attente optionnel (créance) + montant à suivre,
+                    indépendant du montant imprimé sur le document (design D3). */}
+                {isAutonomousNote && (
+                  <div className="space-y-2 rounded-[var(--radius)] border border-line bg-bg/40 p-3">
+                    <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-ink">
+                      <Checkbox
+                        checked={tracerCreance}
+                        onCheckedChange={(v) => setTracerCreance(v === true)}
+                      />
+                      <span>Tracer la note en attente (créance)</span>
+                    </label>
+                    {tracerCreance && (
+                      <div className="space-y-1">
+                        <Label htmlFor="montant-creance">Montant à suivre</Label>
+                        <Input
+                          id="montant-creance"
+                          className="h-9 w-40 text-right tabular-nums"
+                          inputMode="decimal"
+                          value={montantCreance ?? docMontantStr}
+                          placeholder={docMontantStr || "0"}
+                          onChange={(e) => setMontantCreance(e.target.value)}
+                        />
+                        <p className="text-xs text-muted">
+                          Montant de la créance suivie, indépendant du montant imprimé sur la note.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

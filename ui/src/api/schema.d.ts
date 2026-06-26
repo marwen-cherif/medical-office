@@ -422,17 +422,23 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Actes Export
-         * @description Exporte le referentiel d'actes en .xlsx (telechargement).
+         * @description Exporte le referentiel d'actes en .xlsx sur le poste, puis ouvre le fichier
+         *     avec l'application par defaut (Excel).
          *
-         *     Le classeur porte une colonne ID (cle de rapprochement au reimport) : on edite
-         *     des lignes / on en ajoute, puis on reimporte via POST /api/actes/import.
+         *     Modele « cote serveur » comme l'ouverture des documents/factures (`os.startfile`) :
+         *     le sidecar tourne sur la machine de l'utilisateur. On evite ainsi la limite de la
+         *     WebView Tauri, qui ne declenche pas le telechargement d'un blob `<a download>`
+         *     (qui ne marche qu'en navigateur, d'ou « ok en dev web, KO dans l'exe »).
+         *
+         *     Le classeur porte une colonne ID (cle de rapprochement au reimport) : on edite des
+         *     lignes / on en ajoute, puis on reimporte via POST /api/actes/import.
          *     `include_inactive` ajoute les actes desactives.
          */
-        get: operations["actes_export_api_actes_export_get"];
-        put?: never;
-        post?: never;
+        post: operations["actes_export_api_actes_export_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1366,6 +1372,24 @@ export interface components {
             /** Items */
             items: string[];
         };
+        /** ActeExportIn */
+        ActeExportIn: {
+            /**
+             * Include Inactive
+             * @default false
+             */
+            include_inactive: boolean;
+        };
+        /**
+         * ActeExportOut
+         * @description Resultat d'un export : chemin du .xlsx ecrit sur le poste + nombre d'actes.
+         */
+        ActeExportOut: {
+            /** Path */
+            path: string;
+            /** Count */
+            count: number;
+        };
         /**
          * ActeImportOut
          * @description Compte-rendu d'un import .xlsx du referentiel d'actes.
@@ -1787,6 +1811,13 @@ export interface components {
             montants_notes: {
                 [key: string]: number;
             };
+            /**
+             * Tracer Creance
+             * @default true
+             */
+            tracer_creance: boolean;
+            /** Montant Creance */
+            montant_creance?: number | null;
         };
         /** DuplicateWarning */
         DuplicateWarning: {
@@ -2090,6 +2121,13 @@ export interface components {
             montants_notes: {
                 [key: string]: number;
             };
+            /**
+             * Tracer Creance
+             * @default true
+             */
+            tracer_creance: boolean;
+            /** Montant Creance */
+            montant_creance?: number | null;
             /**
              * Do Print
              * @default false
@@ -2547,6 +2585,10 @@ export interface components {
         PrinterTestIn: {
             /** Printer Name */
             printer_name: string;
+            /** Paper */
+            paper?: string | null;
+            /** Color */
+            color?: string | null;
         };
         /** PrintersOut */
         PrintersOut: {
@@ -4666,16 +4708,18 @@ export interface operations {
             };
         };
     };
-    actes_export_api_actes_export_get: {
+    actes_export_api_actes_export_post: {
         parameters: {
-            query?: {
-                include_inactive?: boolean;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActeExportIn"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -4683,7 +4727,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ActeExportOut"];
                 };
             };
             /** @description Bad Request */

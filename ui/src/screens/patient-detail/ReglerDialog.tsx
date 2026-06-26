@@ -94,7 +94,7 @@ export function ReglerDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto">
         <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
           <DialogHeader>
             <DialogTitle>Régler (cascade)</DialogTitle>
@@ -143,7 +143,7 @@ export function ReglerDialog({
                     ) : (
                       <FileText className="size-4 text-muted" />
                     )}
-                    <span className="flex-1 truncate text-ink">
+                    <span className="min-w-0 flex-1 truncate text-ink">
                       {c.libelle}
                       {c.date ? <span className="text-muted"> · {isoToFr(c.date)}</span> : null}
                     </span>

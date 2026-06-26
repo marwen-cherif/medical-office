@@ -44,26 +44,30 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
+import logging.handlers
 import os
 import secrets
 import socket
 import sys
 import threading
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Any, Callable, Optional
 
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import uvicorn
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import backup, import_actes, print_settings, printing, repo, templates, version
-from .db import SchemaTooNewError, connect
+from .db import SchemaTooNewError, app_dir, connect
 
 # Ligne de handshake imprimee sur stdout au demarrage : la coquille Tauri y lit le
 # port effectif et le jeton de session (cf. design D5 / Open Questions).
@@ -100,6 +104,11 @@ ERR_TEMPLATE_EXISTS = "TEMPLATE_EXISTS"
 ERR_NOT_FOUND = "NOT_FOUND"
 ERR_SCHEMA_TOO_NEW = "SCHEMA_TOO_NEW"
 ERR_VALIDATION = "VALIDATION_ERROR"
+# Codes SANS traduction FR figee cote frontend (errors.ts) : le message brut du
+# backend passe tel quel a l'utilisateur. A reserver aux erreurs « inattendues »
+# (diagnostic) ou techniques ou un message generique masquerait la vraie cause.
+ERR_INTERNAL = "INTERNAL"
+ERR_XLSX = "XLSX_FAILED"   # import/export .xlsx (openpyxl absent, fichier illisible/verrouille...)
 
 
 class ErrorBody(BaseModel):
@@ -366,6 +375,8 @@ class PrinterSelectIn(BaseModel):
 
 class PrinterTestIn(BaseModel):
     printer_name: str
+    paper: Optional[str] = None
+    color: Optional[str] = None
 
 
 class PrintConfigIn(BaseModel):
@@ -420,6 +431,16 @@ class ActeImportOut(BaseModel):
     errors: list[str]
 
 
+class ActeExportIn(BaseModel):
+    include_inactive: bool = False
+
+
+class ActeExportOut(BaseModel):
+    """Resultat d'un export : chemin du .xlsx ecrit sur le poste + nombre d'actes."""
+    path: str
+    count: int
+
+
 class JobAcceptedOut(BaseModel):
     job_id: str
 
@@ -443,6 +464,14 @@ class HealthOut(BaseModel):
 async def lifespan(app: FastAPI):
     # La boucle asyncio sert au pont thread worker -> SSE.
     STATE.loop = asyncio.get_running_loop()
+    # Mode reload (dev) : le worker recharge importe `app` SANS passer par run() — on
+    # initialise donc ici si besoin (jeton via env CRM_TOKEN, base SQLite). Sur le
+    # chemin normal/prod (run()), STATE.token et STATE.conn sont deja poses avant que
+    # le serveur demarre : ces deux gardes sont alors de simples no-op.
+    if not STATE.token:
+        STATE.token = os.environ.get("CRM_TOKEN", "")
+    if STATE.conn is None:
+        _init_db()
     yield
     STATE.executor.shutdown(wait=False)
 
@@ -506,6 +535,46 @@ async def _api_error_handler(request: Request, exc: ApiError):
         status_code=exc.status,
         content={"error": {"code": exc.code, "message": exc.message}},
     )
+
+
+_log = logging.getLogger("crm.server")
+
+
+@app.exception_handler(Exception)
+async def _unhandled_handler(request: Request, exc: Exception):
+    """Filet pour TOUTE exception non geree : sans lui, Starlette renvoie une 500
+    brute `{detail: ...}` (sans `error.code`), que le frontend affiche « Une erreur
+    est survenue » — opaque, surtout que le sidecar tourne sans console (Tauri).
+
+    On journalise la trace complete (cf. `_setup_file_logging`) et on renvoie la
+    structure d'erreur attendue avec le **vrai** message (code `INTERNAL`, non
+    traduit cote frontend -> le message brut s'affiche)."""
+    _log.error("Erreur non geree sur %s %s :\n%s", request.method, request.url.path,
+               "".join(traceback.format_exception(exc)))
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": ERR_INTERNAL,
+                           "message": f"Erreur interne : {type(exc).__name__}: {exc}"}},
+    )
+
+
+def _setup_file_logging() -> None:
+    """Journalise dans un fichier (best-effort) a cote de la base, pour diagnostiquer
+    un sidecar gele sans console (Tauri). Ne bloque jamais le demarrage."""
+    try:
+        from .db import default_db_path
+        log_dir = default_db_path().parent / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(
+            log_dir / "server.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        root = logging.getLogger()
+        root.setLevel(logging.INFO)
+        root.addHandler(handler)
+        _log.info("Demarrage du backend (version %s).", version.__version__)
+    except Exception:  # noqa: BLE001 -- la journalisation ne doit jamais empecher le run
+        pass
 
 
 def _err_from_engine(exc: Exception) -> ApiError:
@@ -782,11 +851,15 @@ def printers_test(body: PrinterTestIn) -> JobAcceptedOut:
     if name not in printing.list_printers():
         raise ApiError(ERR_PRINTER_NOT_FOUND,
                        f"Imprimante introuvable : {name}", status=404)
+    # Valeurs inconnues normalisees a None (= « defaut imprimante ») ; le rendu
+    # tolere de toute facon un format/couleur inconnu (repli sur le defaut).
+    paper = body.paper if body.paper in print_settings.PAPERS else None
+    color = body.color if body.color in print_settings.COLORS else None
 
     def task(report):
         report(0.1, f"Préparation du test sur {name}…")
         try:
-            printing.print_test_page(name)
+            printing.print_test_page(name, paper=paper, color=color)
         except Exception as exc:  # noqa: BLE001
             raise ApiError(ERR_PRINT_FAILED, f"Échec de l'impression : {exc}")
         report(1.0, "Page de test envoyée.")
@@ -895,29 +968,43 @@ def actes_set_active(acte_id: int, body: ActeActiveIn) -> OkOut:
     return OkOut()
 
 
-_XLSX_MEDIA = (
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+@app.post("/api/actes/export", response_model=ActeExportOut, tags=["actes"])
+def actes_export(body: ActeExportIn) -> ActeExportOut:
+    """Exporte le referentiel d'actes en .xlsx sur le poste, puis ouvre le fichier
+    avec l'application par defaut (Excel).
 
+    Modele « cote serveur » comme l'ouverture des documents/factures (`os.startfile`) :
+    le sidecar tourne sur la machine de l'utilisateur. On evite ainsi la limite de la
+    WebView Tauri, qui ne declenche pas le telechargement d'un blob `<a download>`
+    (qui ne marche qu'en navigateur, d'ou « ok en dev web, KO dans l'exe »).
 
-@app.get("/api/actes/export", tags=["actes"])
-def actes_export(include_inactive: bool = False) -> Response:
-    """Exporte le referentiel d'actes en .xlsx (telechargement).
-
-    Le classeur porte une colonne ID (cle de rapprochement au reimport) : on edite
-    des lignes / on en ajoute, puis on reimporte via POST /api/actes/import.
+    Le classeur porte une colonne ID (cle de rapprochement au reimport) : on edite des
+    lignes / on en ajoute, puis on reimporte via POST /api/actes/import.
     `include_inactive` ajoute les actes desactives.
     """
-    with db() as conn:
-        data, _n = import_actes.export_actes_bytes(
-            include_inactive=include_inactive, conn=conn)
-    return Response(
-        content=data,
-        media_type=_XLSX_MEDIA,
-        headers={
-            "Content-Disposition": 'attachment; filename="referentiel_actes.xlsx"',
-        },
-    )
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    path = app_dir() / "exports" / f"referentiel_actes_{stamp}.xlsx"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with db() as conn:
+            count = import_actes.export_actes(
+                path, include_inactive=body.include_inactive, conn=conn)
+    except RuntimeError as exc:  # openpyxl absent dans le build, etc. : message clair
+        raise ApiError(ERR_XLSX, str(exc), status=400)
+    except OSError as exc:  # dossier non inscriptible, fichier verrouille (ouvert dans Excel)
+        raise ApiError(ERR_XLSX,
+                       f"Impossible d'ecrire le fichier d'export : {exc}", status=400)
+    except Exception as exc:  # noqa: BLE001
+        raise _err_from_engine(exc)
+    try:  # ouverture best-effort : le fichier est ecrit meme si Excel ne s'ouvre pas
+        if os.name == "nt":
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        else:  # pragma: no cover
+            import subprocess
+            subprocess.Popen(["xdg-open", str(path)])
+    except Exception:  # noqa: BLE001
+        pass
+    return ActeExportOut(path=str(path), count=count)
 
 
 @app.post("/api/actes/import", response_model=ActeImportOut, tags=["actes"])
@@ -942,7 +1029,7 @@ async def actes_import(file: UploadFile = File(...),
         return ActeImportOut(created=summary.created, updated=summary.updated,
                              skipped=summary.skipped, errors=summary.errors)
     except RuntimeError as exc:  # openpyxl absent / feuille introuvable
-        raise ApiError(ERR_VALIDATION, str(exc), status=400)
+        raise ApiError(ERR_XLSX, str(exc), status=400)
     except Exception as exc:  # noqa: BLE001
         raise _err_from_engine(exc)
     finally:
@@ -1120,10 +1207,32 @@ def _watch_parent_and_exit() -> None:
     threading.Thread(target=_runner, name="crm-parent-watch", daemon=True).start()
 
 
-def run(host: str = "127.0.0.1", port: int = 0, token: Optional[str] = None) -> None:
-    """Demarre le backend : init base, handshake stdout, boucle ASGI (bloquant)."""
+def run(host: str = "127.0.0.1", port: int = 0, token: Optional[str] = None,
+        reload: bool = False) -> None:
+    """Demarre le backend : init base, handshake stdout, boucle ASGI (bloquant).
+
+    `reload=True` est reserve au DEV : il delegue a uvicorn la surveillance des
+    fichiers Python (`crm/`, `src/`) et le redemarrage a chaud du worker. Le jeton est
+    propage au sous-process recharge via l'environnement (`CRM_TOKEN`) et la base est
+    initialisee par le `lifespan` cote worker (run() ne pose alors ni socket ni base).
+    Un port FIXE est requis (un port ephemere n'est pas rechargeable). Le chemin de
+    PROD (exe PyInstaller / coquille Tauri) n'emprunte jamais cette branche.
+    """
     _watch_parent_and_exit()  # filet anti-orphelin (cf. fonction)
+    _setup_file_logging()     # journal fichier (diagnostic sidecar sans console)
     token = token or os.environ.get("CRM_TOKEN") or secrets.token_urlsafe(32)
+    if reload:
+        if port == 0:
+            port = 8765  # le watcher exige un port fixe (ephemere non rechargeable)
+        os.environ["CRM_TOKEN"] = token  # herite par le sous-process recharge
+        handshake = {"host": host, "port": port, "token": token,
+                     "version": version.__version__}
+        print(HANDSHAKE_PREFIX + json.dumps(handshake), flush=True)
+        root = Path(__file__).resolve().parent.parent  # crm/server.py -> racine projet
+        uvicorn.run("crm.server:app", host=host, port=port, reload=True,
+                    reload_dirs=[str(root / "crm"), str(root / "src")],
+                    log_level="warning", access_log=False)
+        return
     _init_db()
     server, sock, actual_port = create_server(host, port, token)
     _set_process_title(f"Cabinet CRM — Backend (port {actual_port})")
@@ -1143,8 +1252,10 @@ def main(argv: Optional[list[str]] = None) -> None:
                         help="Port (0 = ephemere, choisi par l'OS).")
     parser.add_argument("--token", default=None,
                         help="Jeton de session (genere si absent).")
+    parser.add_argument("--reload", action="store_true",
+                        help="DEV : recharge a chaud le code Python (port fixe requis).")
     args = parser.parse_args(argv)
-    run(host=args.host, port=args.port, token=args.token)
+    run(host=args.host, port=args.port, token=args.token, reload=args.reload)
 
 
 if __name__ == "__main__":

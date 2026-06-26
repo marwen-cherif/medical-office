@@ -37,6 +37,10 @@ export function ImprimanteTab() {
   const [docType, setDocType] = useState<string | null>(null);
   const [paper, setPaper] = useState<string>("__default__");
   const [color, setColor] = useState<string>("__default__");
+  // Format / couleur appliqués uniquement à la page de test (indépendants des
+  // réglages mémorisés par type), pour vérifier qu'une imprimante honore l'A5/N&B.
+  const [testPaper, setTestPaper] = useState<string>("__default__");
+  const [testColor, setTestColor] = useState<string>("__default__");
   const [progress, setProgress] = useState<{ value: number; message: string } | null>(null);
 
   const current = selected ?? printers.data?.selected ?? printers.data?.default ?? "";
@@ -90,6 +94,8 @@ export function ImprimanteTab() {
     testPrinter.mutate(
       {
         printerName: current,
+        paper: testPaper === "__default__" ? null : testPaper,
+        color: testColor === "__default__" ? null : testColor,
         onEvent: (e: JobEvent) => {
           if (e.type === "progress") setProgress({ value: e.value, message: e.message });
         },
@@ -140,6 +146,30 @@ export function ImprimanteTab() {
               <p className="text-xs text-muted">Par défaut Windows : {printers.data.default}</p>
             )}
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label>Format (test)</Label>
+              <Select value={testPaper} onValueChange={setTestPaper}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PAPERS.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Couleur (test)</Label>
+              <Select value={testColor} onValueChange={setTestColor}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {COLORS.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <p className="text-xs text-muted">
+            Imprime une page de test au format et à la couleur choisis pour vérifier que
+            l'imprimante les prend en charge.
+          </p>
           <div className="flex gap-2">
             <Button onClick={onSavePrinter} disabled={setPrinter.isPending || !current}>
               <Save className="size-4" /> Enregistrer

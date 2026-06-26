@@ -264,8 +264,19 @@ def print_file(
     _print_images(_pages_as_images(path), printer_name, doc_name or path.stem, devmode)
 
 
-def print_test_page(printer_name: str) -> None:
-    """Imprime une page de test pour verifier le choix de l'imprimante."""
+def print_test_page(
+    printer_name: str,
+    *,
+    paper: str | None = None,
+    color: str | None = None,
+) -> None:
+    """Imprime une page de test pour verifier le choix de l'imprimante.
+
+    `paper` (`"A4"`/`"A5"`) et `color` (`"color"`/`"mono"`) appliquent format et
+    couleur via le DEVMODE (cf. _build_devmode) — permet de verifier qu'un pilote
+    honore bien ces reglages avant de les memoriser par type de document. A None
+    (ou valeur inconnue), on imprime au reglage par defaut de l'imprimante.
+    """
     img = Image.new("RGB", (1240, 1754), "white")  # ~A4 a 150 dpi
     draw = ImageDraw.Draw(img)
     try:
@@ -276,5 +287,12 @@ def print_test_page(printer_name: str) -> None:
     draw.text((120, 140), "Test d'impression", fill="black", font=title_font)
     draw.text((120, 260), "Cabinet Dr Aslem Gouiaa", fill="black", font=body_font)
     draw.text((120, 330), f"Imprimante : {printer_name}", fill="black", font=body_font)
-    draw.rectangle((110, 120, 1130, 420), outline="black", width=3)
-    _print_images([img], printer_name, "Test d'impression")
+    # Recapitule les reglages testes pour controle visuel sur la feuille imprimee.
+    paper_label = {"A4": "A4", "A5": "A5"}.get(paper or "", "défaut imprimante")
+    color_label = {"color": "Couleur", "mono": "Noir & blanc"}.get(
+        color or "", "défaut imprimante")
+    draw.text((120, 400), f"Format : {paper_label}", fill="black", font=body_font)
+    draw.text((120, 470), f"Couleur : {color_label}", fill="black", font=body_font)
+    draw.rectangle((110, 120, 1130, 560), outline="black", width=3)
+    devmode = _build_devmode(printer_name, paper, color)
+    _print_images([img], printer_name, "Test d'impression", devmode)

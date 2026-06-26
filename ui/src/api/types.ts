@@ -15,6 +15,7 @@ export type Acte = S["ActeOut"];
 export type ActeIn = S["ActeIn"];
 export type ActeList = S["ActeListOut"];
 export type ActeImport = S["ActeImportOut"];
+export type ActeExport = S["ActeExportOut"];
 
 // --- Patients ----------------------------------------------------------------
 export type Patient = S["PatientOut"];

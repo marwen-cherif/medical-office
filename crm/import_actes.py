@@ -113,6 +113,26 @@ class ImportSummary:
             self.errors = []
 
 
+# --- Dependance openpyxl (import tardif, message clair si absente) -------------
+
+def _require_openpyxl():
+    """Importe openpyxl ou leve une RuntimeError au message explicite.
+
+    En dev : `pip install openpyxl`. Dans l'exe gele : la dependance doit etre
+    embarquee par PyInstaller (cf. *.spec, collecte explicite d'openpyxl) — un
+    message clair vaut mieux qu'un « erreur est survenue » generique.
+    """
+    try:
+        import openpyxl  # noqa: F401
+        return openpyxl
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError(
+            "Le module « openpyxl » (fichiers .xlsx) est introuvable. "
+            "En developpement : pip install openpyxl. Dans l'application installee : "
+            "il manque au build (a signaler)."
+        ) from exc
+
+
 # --- Lecture / normalisation des cellules --------------------------------------
 
 def _parse_montant(value: object) -> Optional[float]:
@@ -257,14 +277,7 @@ def _read_rows(path: Path, feuille: Optional[str]) -> list[_Row]:
 
     Le no_ligne (1-based, tel qu'affiche dans Excel) sert aux messages d'erreur.
     """
-    try:
-        import openpyxl  # import tardif : dependance optionnelle
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError(
-            "Le module 'openpyxl' est requis pour lire un .xlsx "
-            "(pip install openpyxl)."
-        ) from exc
-
+    openpyxl = _require_openpyxl()
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
         if feuille:
@@ -437,7 +450,7 @@ _EXPORT_HEADERS = ["ID", "Libelle", "Prix", "Code", "Categorie", "Actif"]
 
 def _build_workbook(actes: list[repo.Acte]):
     """Construit le classeur d'export a partir d'une liste d'actes (deja triee)."""
-    import openpyxl
+    openpyxl = _require_openpyxl()
     from openpyxl.styles import Font
 
     wb = openpyxl.Workbook()
@@ -510,7 +523,7 @@ def write_template(path: Path) -> None:
     pour de nouveaux actes). Libelle obligatoire ; Prix au format francais accepte
     (« 1 800,00 ») ; Code / Categorie / Actif facultatifs (la Categorie classe les
     actes, ex. « Prothese », « Chirurgie » ; Actif = oui/non)."""
-    import openpyxl
+    openpyxl = _require_openpyxl()
     from openpyxl.styles import Font
 
     wb = openpyxl.Workbook()

@@ -15,12 +15,15 @@ hiddenimports = [
     'win32com.client', 'pythoncom', 'fitz', 'docx', 'requests',
     'win32print', 'win32ui', 'win32gui', 'win32con',  # impression directe (crm/printing.py)
     'crm._build_info',                # genere par build (numero de build) ; absent = avertissement
+    'et_xmlfile',                     # dependance d'openpyxl (import/export actes .xlsx)
     'uvicorn.logging', 'uvicorn.loops.auto', 'uvicorn.protocols.http.auto',
     'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan.on',
 ]
 # FastAPI/uvicorn/pydantic + moteur : on collecte tout pour ne rien oublier
-# (starlette, anyio, pydantic_core, etc. sont tires transitvement).
-for pkg in ('fastapi', 'uvicorn', 'pydantic', 'starlette', 'win32com', 'docx', 'PIL'):
+# (starlette, anyio, pydantic_core, etc. sont tires transitvement). openpyxl est
+# importe tardivement (crm/import_actes.py) -> PyInstaller le rate sans collecte
+# explicite : indispensable a l'export/import du referentiel d'actes en .xlsx.
+for pkg in ('fastapi', 'uvicorn', 'pydantic', 'starlette', 'win32com', 'docx', 'PIL', 'openpyxl'):
     d, b, h = collect_all(pkg)
     datas += d; binaries += b; hiddenimports += h
 

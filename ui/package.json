@@ -6,7 +6,7 @@
   "description": "Frontend React (Vite + Tailwind v4 + shadcn) du Cabinet CRM — adossé au sidecar FastAPI.",
   "scripts": {
     "dev": "vite",
-    "server": "python ../crm_server.py --port 8765 --token devtoken",
+    "server": "python ../crm_server.py --port 8765 --token devtoken --reload",
     "dev:all": "concurrently -n api,web -c blue,green -k \"npm:server\" \"npm:dev\"",
     "build": "tsc -b && vite build",
     "preview": "vite preview",

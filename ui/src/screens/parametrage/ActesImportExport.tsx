@@ -27,6 +27,11 @@ export function ActesImportExport({ includeInactive }: { includeInactive: boolea
 
   function onExport() {
     exportActes.mutate(includeInactive, {
+      onSuccess: (r) =>
+        toast.success(
+          `Référentiel exporté (${r.count} acte(s)). Le fichier s'ouvre dans Excel.`,
+          { description: r.path },
+        ),
       onError: (e) => toast.error(humanizeError(e)),
     });
   }

@@ -13,6 +13,9 @@ venv/
 # Sortie et fichiers utilisateur (garder le dossier via .gitkeep)
 output/*
 
+# Exports generes (referentiel d'actes en .xlsx, etc. - ne pas versionner)
+exports/
+
 # Sauvegardes de la base (donnees patients - ne pas versionner)
 backups/
 

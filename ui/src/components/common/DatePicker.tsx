@@ -22,9 +22,12 @@ export type DatePickerProps = {
   fromYear?: number;
   toYear?: number;
   /**
-   * Mode modal du popover. Indispensable (et activé par défaut) quand le sélecteur
-   * vit dans un `Dialog` : sans lui, le piège à focus du Dialog reprend la main et
-   * referme le calendrier aussitôt ouvert.
+   * Mode modal du popover (défaut : `false`). Le calendrier s'ouvre SANS voler le
+   * focus (cf. `onOpenAutoFocus` plus bas) : le champ texte garde le focus et reste
+   * saisissable, et le piège à focus d'un `Dialog` parent n'est jamais déclenché —
+   * inutile donc de rendre le calendrier modal pour qu'il reste ouvert (un popover
+   * modal poserait en plus `pointer-events: none` sur le `<body>` et bloquerait la
+   * saisie). `modal` reste exposé si un appelant veut verrouiller l'arrière-plan.
    */
   modal?: boolean;
 };
@@ -46,7 +49,7 @@ export function DatePicker({
   dropdown,
   fromYear = 1920,
   toYear,
-  modal = true,
+  modal = false,
 }: DatePickerProps) {
   const [open, setOpen] = React.useState(false);
   // Texte affiché dans le champ (`JJ/MM/AAAA`). On le pilote nous-mêmes pour
@@ -105,6 +108,12 @@ export function DatePicker({
         onFocus={() => {
           focused.current = true;
         }}
+        // Cliquer dans le champ ouvre le calendrier (comme un input date natif), sans
+        // passer par l'icône. Le focus reste sur l'input (popover non modal +
+        // onOpenAutoFocus empêché) : on peut donc continuer à taper la date.
+        onClick={() => {
+          if (!disabled) setOpen(true);
+        }}
         onChange={handleInput}
         onBlur={handleBlur}
         className="min-w-0 flex-1 bg-transparent text-ink outline-none placeholder:text-muted disabled:cursor-not-allowed"
@@ -120,10 +129,15 @@ export function DatePicker({
             <CalendarDays className="size-4" />
           </button>
         </PopoverTrigger>
-        <PopoverContent align={align} className="w-auto">
+        <PopoverContent
+          align={align}
+          className="w-auto"
+          // Ouverture sans capter le focus : le champ texte garde le focus (saisie
+          // possible) et le piège à focus d'un Dialog parent n'est pas déclenché.
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
           <Calendar
             mode="single"
-            autoFocus
             selected={selected}
             defaultMonth={selected}
             captionLayout={dropdown ? "dropdown" : "label"}

@@ -14,10 +14,12 @@ hiddenimports = [
     'uvicorn', 'websockets',
     'win32print', 'win32ui', 'win32gui', 'win32con',  # impression directe (crm/printing.py)
     'crm._build_info',  # genere par build-crm.bat (numero de build) ; absent = avertissement
+    'et_xmlfile',       # dependance d'openpyxl (import/export actes .xlsx)
 ]
 # Embarque le coeur de Flet (datas : controls/material/icons.json, etc.), les assets
-# web de Flet + le serveur (uvicorn/fastapi) + back-end.
-for pkg in ('flet', 'flet_web', 'uvicorn', 'fastapi', 'win32com', 'docx', 'PIL'):
+# web de Flet + le serveur (uvicorn/fastapi) + back-end. openpyxl est importe tardivement
+# (crm/import_actes.py) -> a collecter explicitement pour l'import/export du referentiel.
+for pkg in ('flet', 'flet_web', 'uvicorn', 'fastapi', 'win32com', 'docx', 'PIL', 'openpyxl'):
     d, b, h = collect_all(pkg)
     datas += d; binaries += b; hiddenimports += h
 
