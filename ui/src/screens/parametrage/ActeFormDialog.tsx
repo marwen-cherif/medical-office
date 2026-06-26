@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { humanizeError } from "@/lib/errors";
 import { DEVISE_SYMBOLE } from "@/lib/format";
-import { useCreateActe, useUpdateActe } from "@/hooks/queries";
+import { useActeCategories, useCreateActe, useUpdateActe } from "@/hooks/queries";
 import type { Acte } from "@/api/types";
 
 // Validation côté UI (react-hook-form + zod). Les règles métier de fond restent
@@ -25,6 +25,7 @@ const schema = z.object({
   libelle: z.string().trim().min(1, "Le libellé est obligatoire."),
   prix: z.coerce.number({ invalid_type_error: "Prix invalide." }).min(0, "Le prix doit être positif ou nul."),
   code: z.string().trim().optional(),
+  categorie: z.string().trim().optional(),
 });
 type FormValues = z.input<typeof schema>;
 
@@ -37,6 +38,7 @@ export function ActeFormDialog({
 }) {
   const create = useCreateActe();
   const update = useUpdateActe();
+  const cats = useActeCategories(true); // suggestions : toutes catégories connues
   const {
     register,
     handleSubmit,
@@ -44,12 +46,18 @@ export function ActeFormDialog({
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { libelle: "", prix: 0, code: "" },
+    defaultValues: { libelle: "", prix: 0, code: "", categorie: "" },
   });
 
   useEffect(() => {
-    if (target === "new") reset({ libelle: "", prix: 0, code: "" });
-    else if (target) reset({ libelle: target.libelle, prix: target.prix, code: target.code ?? "" });
+    if (target === "new") reset({ libelle: "", prix: 0, code: "", categorie: "" });
+    else if (target)
+      reset({
+        libelle: target.libelle,
+        prix: target.prix,
+        code: target.code ?? "",
+        categorie: target.categorie ?? "",
+      });
   }, [target, reset]);
 
   function onSubmit(values: FormValues) {
@@ -57,6 +65,7 @@ export function ActeFormDialog({
       libelle: values.libelle.trim(),
       prix: Number(values.prix),
       code: values.code?.trim() || null,
+      categorie: values.categorie?.trim() || null,
       sort_order: target !== "new" && target ? target.sort_order : 0,
     };
     const onDone = {
@@ -93,6 +102,20 @@ export function ActeFormDialog({
                 <Label htmlFor="a-code">Code (optionnel)</Label>
                 <Input id="a-code" {...register("code")} />
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="a-cat">Catégorie (optionnel)</Label>
+              <Input
+                id="a-cat"
+                list="acte-categories"
+                placeholder="ex. Prothèse, Chirurgie…"
+                {...register("categorie")}
+              />
+              <datalist id="acte-categories">
+                {(cats.data?.items ?? []).map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
             </div>
           </div>
           <DialogFooter>

@@ -21,11 +21,15 @@ fn main() {
 
             // Démarre le sidecar Python sur un port éphémère ; on lit son stdout
             // pour récupérer le handshake (port effectif + jeton de session).
+            // `CRM_PARENT_PID` = notre PID : le sidecar surveille ce process et se
+            // termine si l'app meurt (même brutalement), évitant les sidecars
+            // orphelins qui se disputent le `cabinet.db` (cf. crm/server.py).
             let sidecar = handle
                 .shell()
                 .sidecar("crm-server")
                 .expect("binaire sidecar « crm-server » introuvable (externalBin)")
-                .args(["--port", "0"]);
+                .args(["--port", "0"])
+                .env("CRM_PARENT_PID", std::process::id().to_string());
             let (mut rx, child) = sidecar.spawn().expect("échec du démarrage du sidecar");
 
             // Mémorise l'enfant pour pouvoir le tuer à la sortie.

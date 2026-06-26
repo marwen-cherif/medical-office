@@ -1,5 +1,8 @@
+import { useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { client, unwrap, streamJob, type JobEvent } from "@/lib/api";
+import { humanizeError } from "@/lib/errors";
 import { PAGE_SIZE } from "@/components/common/Pagination";
 import type { DraftIn, GenerateIn, SendIn } from "@/api/types";
 
@@ -107,20 +110,52 @@ export function useSaveDraft(patientId: number) {
 
 // --- Opérations longues (SSE) ------------------------------------------------
 
+/**
+ * Lance la génération côté serveur et renvoie le `job_id` SANS attendre la fin.
+ *
+ * Le POST est rapide (202 + job_id) : il valide de façon synchrone (ex. imprimante
+ * pour « Générer et imprimer ») puis planifie le rendu Word dans le worker sérialisé.
+ * Le suivi de l'opération longue est délégué à `useTrackJob` (toast en arrière-plan),
+ * pour ne pas bloquer le dialogue ni l'interface. L'invalidation des listes a donc
+ * lieu à la FIN du job (dans le tracker), pas au retour du POST (rien n'est encore
+ * persisté à ce stade — le brouillon est créé dans la tâche worker).
+ */
 export function useGenerate(patientId: number) {
-  const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ body, onEvent }: { body: GenerateIn; onEvent?: (e: JobEvent) => void }) => {
+    mutationFn: async (body: GenerateIn) => {
       const accepted = unwrap(
         await client.POST("/api/patients/{patient_id}/documents/generate", {
           params: { path: { patient_id: patientId } },
           body,
         }),
       );
-      await streamJob(accepted.job_id, onEvent ?? (() => {}));
+      return accepted.job_id;
     },
-    onSuccess: () => invalidateAfterDoc(qc, patientId),
   });
+}
+
+/**
+ * Suit une opération longue (job SSE) **en arrière-plan**, détaché du composant qui
+ * l'a lancée : un toast « … en cours » se promeut en succès/erreur à la fin, et les
+ * listes concernées sont rafraîchies. Le streaming et le toast (sonner) sont globaux,
+ * donc ils survivent à la fermeture du dialogue — l'utilisateur peut continuer à
+ * travailler pendant le rendu Word.
+ */
+export function useTrackJob() {
+  const qc = useQueryClient();
+  return useCallback(
+    (jobId: string, opts: { loading: string; success: string; patientId?: number }) => {
+      const toastId = toast.loading(opts.loading);
+      streamJob(jobId, (e) => {
+        if (e.type === "progress" && e.message) toast.loading(e.message, { id: toastId });
+      })
+        .then(() => toast.success(opts.success, { id: toastId }))
+        .catch((err) => toast.error(humanizeError(err), { id: toastId }))
+        // Rafraîchir même en cas d'erreur : le statut du document a pu passer à « erreur ».
+        .finally(() => invalidateAfterDoc(qc, opts.patientId));
+    },
+    [qc],
+  );
 }
 
 export function useRenderDocument() {

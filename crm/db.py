@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 class SchemaTooNewError(RuntimeError):
@@ -283,7 +283,9 @@ CREATE TABLE IF NOT EXISTS categories (
 -- aucune donnee existante (documents/paiements) touchee. Retrait NON destructif
 -- via `actif` (l'acte disparait des listes de saisie mais reste en base, pour ne
 -- pas casser un eventuel snapshot historique). `slug_libelle` = recherche
--- insensible aux accents (meme approche que patients/prestataires). Voir
+-- insensible aux accents (meme approche que patients/prestataires). La colonne
+-- `categorie` (texte libre, classement des actes) est ajoutee en v13 via _migrate
+-- (ALTER), pas ici — comme `documents.categorie`. Voir
 -- openspec/changes/referentiel-actes.
 CREATE TABLE IF NOT EXISTS actes (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -517,6 +519,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "AND id NOT IN (SELECT paiement_id FROM paiement_reglements)"
         )
         _meta_set(conn, "paiements_reglements_backfill_v12")
+    # v13 : categorisation du referentiel d'actes. Colonne additive nullable
+    # `actes.categorie` (texte libre porte par l'application, comme la categorie des
+    # modeles de documents — pas une balise du .docx). Aucun backfill : les actes
+    # existants gardent categorie NULL (« Sans categorie »). Idempotent (garde
+    # _column_exists). Le bump SCHEMA_VERSION 12 -> 13 declenche le snapshot
+    # pre-migration dans connect() pour toute base ouverte en v12.
+    if not _column_exists(conn, "actes", "categorie"):
+        conn.execute("ALTER TABLE actes ADD COLUMN categorie TEXT")
 
 
 def _set_version(conn: sqlite3.Connection) -> None:

@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowLeft, Check, Plus, Receipt, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, Check, FolderOpen, Plus, Receipt, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Pagination } from "@/components/common/Pagination";
@@ -19,6 +19,7 @@ import {
   useDeleteDepense,
   useDeleteFacture,
   useFactures,
+  useOpenFacture,
   usePrestataire,
   useProviderDepenses,
 } from "@/hooks/prestataires";
@@ -126,6 +127,7 @@ function FacturesSection({ id }: { id: number }) {
   const [page, setPage] = useState(0);
   const facturesQ = useFactures(id, page);
   const delFacture = useDeleteFacture(id);
+  const openFacture = useOpenFacture();
   const fileRef = useRef<HTMLInputElement>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
 
@@ -135,6 +137,12 @@ function FacturesSection({ id }: { id: number }) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (file) setPendingFile(file);
+  }
+
+  function onOpen(factureId: number) {
+    openFacture.mutate(factureId, {
+      onError: (err) => toast.error(humanizeError(err)),
+    });
   }
 
   function onDelete(factureId: number) {
@@ -175,12 +183,26 @@ function FacturesSection({ id }: { id: number }) {
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-navy/10 text-navy">
                   <Receipt className="size-4" />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium text-ink">
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 text-left"
+                  title="Ouvrir la facture"
+                  onClick={() => onOpen(f.id)}
+                >
+                  <div className="truncate font-medium text-ink hover:underline">
                     {f.nom_original || f.fichier}
                   </div>
                   <div className="truncate text-sm text-muted">{sub || "—"}</div>
-                </div>
+                </button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Ouvrir la facture"
+                  disabled={openFacture.isPending}
+                  onClick={() => onOpen(f.id)}
+                >
+                  <FolderOpen className="size-4" />
+                </Button>
                 <Button
                   variant="ghost"
                   size="icon"

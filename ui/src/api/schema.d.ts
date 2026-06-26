@@ -346,11 +346,35 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Actes List */
+        /**
+         * Actes List
+         * @description Liste des actes. `categorie` filtre sur une categorie exacte ; la valeur
+         *     sentinelle « (sans) » ne retient que les actes sans categorie.
+         */
         get: operations["actes_list_api_actes_get"];
         put?: never;
         /** Actes Create */
         post: operations["actes_create_api_actes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/actes/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Actes Categories
+         * @description Categories distinctes presentes dans le referentiel (filtre + suggestions).
+         */
+        get: operations["actes_categories_api_actes_categories_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -385,6 +409,53 @@ export interface paths {
         put?: never;
         /** Actes Set Active */
         post: operations["actes_set_active_api_actes__acte_id__active_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/actes/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Actes Export
+         * @description Exporte le referentiel d'actes en .xlsx (telechargement).
+         *
+         *     Le classeur porte une colonne ID (cle de rapprochement au reimport) : on edite
+         *     des lignes / on en ajoute, puis on reimporte via POST /api/actes/import.
+         *     `include_inactive` ajoute les actes desactives.
+         */
+        get: operations["actes_export_api_actes_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/actes/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Actes Import
+         * @description Importe un .xlsx du referentiel (cle de rapprochement : ID -> code -> libelle).
+         *
+         *     Met a jour les actes existants, cree les nouvelles lignes. Une sauvegarde de la
+         *     base est prise avant ecriture (sauf en simulation `dry_run`).
+         */
+        post: operations["actes_import_api_actes_import_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1087,6 +1158,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/factures/{facture_id}/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Facture Open
+         * @description Ouvre la facture archivée avec l'application par défaut (côté machine serveur,
+         *     = poste de l'utilisateur). Calque `_open_path` de l'app Flet et `open_document`.
+         */
+        post: operations["facture_open_api_factures__facture_id__open_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/factures/{facture_id}": {
         parameters: {
             query?: never;
@@ -1269,6 +1361,25 @@ export interface components {
             /** Actif */
             actif: boolean;
         };
+        /** ActeCategoriesOut */
+        ActeCategoriesOut: {
+            /** Items */
+            items: string[];
+        };
+        /**
+         * ActeImportOut
+         * @description Compte-rendu d'un import .xlsx du referentiel d'actes.
+         */
+        ActeImportOut: {
+            /** Created */
+            created: number;
+            /** Updated */
+            updated: number;
+            /** Skipped */
+            skipped: number;
+            /** Errors */
+            errors: string[];
+        };
         /** ActeIn */
         ActeIn: {
             /** Libelle */
@@ -1280,6 +1391,8 @@ export interface components {
             prix: number;
             /** Code */
             code?: string | null;
+            /** Categorie */
+            categorie?: string | null;
             /**
              * Sort Order
              * @default 0
@@ -1304,6 +1417,8 @@ export interface components {
             prix: number;
             /** Code */
             code?: string | null;
+            /** Categorie */
+            categorie?: string | null;
             /**
              * Sort Order
              * @default 0
@@ -1350,6 +1465,11 @@ export interface components {
             document_ids: number[];
             /** Mailjet Template Id */
             mailjet_template_id?: number | null;
+        };
+        /** Body_actes_import_api_actes_import_post */
+        Body_actes_import_api_actes_import_post: {
+            /** File */
+            file: string;
         };
         /** Body_facture_ia_montant_api_factures_ia_montant_post */
         Body_facture_ia_montant_api_factures_ia_montant_post: {
@@ -4202,6 +4322,7 @@ export interface operations {
             query?: {
                 search?: string;
                 include_inactive?: boolean;
+                categorie?: string | null;
                 limit?: number | null;
                 offset?: number;
             };
@@ -4287,6 +4408,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActeOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    actes_categories_api_actes_categories_get: {
+        parameters: {
+            query?: {
+                include_inactive?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActeCategoriesOut"];
                 };
             };
             /** @description Bad Request */
@@ -4429,6 +4617,144 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OkOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    actes_export_api_actes_export_get: {
+        parameters: {
+            query?: {
+                include_inactive?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    actes_import_api_actes_import_post: {
+        parameters: {
+            query?: {
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_actes_import_api_actes_import_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActeImportOut"];
                 };
             };
             /** @description Bad Request */
@@ -7542,6 +7868,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FactureIaMontantOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    facture_open_api_factures__facture_id__open_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                facture_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkOut"];
                 };
             };
             /** @description Bad Request */

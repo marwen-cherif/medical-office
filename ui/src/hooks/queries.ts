@@ -6,8 +6,9 @@
  * latence HTTP localhost (cf. design R3).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { client, unwrap, streamJob, type JobEvent } from "@/lib/api";
-import type { ActeIn, Field, MailTemplateIn } from "@/api/types";
+import { client, unwrap, streamJob, downloadFile, type JobEvent } from "@/lib/api";
+import { backend } from "@/lib/bridge";
+import type { ActeImport, ActeIn, Field, MailTemplateIn } from "@/api/types";
 
 export const keys = {
   templates: ["templates"] as const,
@@ -17,8 +18,10 @@ export const keys = {
   mailTemplates: ["mail-templates"] as const,
   printers: ["printers"] as const,
   printTypes: ["settings", "print-types"] as const,
-  actes: (search: string, includeInactive: boolean) =>
-    ["actes", { search, includeInactive }] as const,
+  actes: (search: string, includeInactive: boolean, categorie?: string) =>
+    ["actes", { search, includeInactive, categorie: categorie ?? null }] as const,
+  acteCategories: (includeInactive: boolean) =>
+    ["actes", "categories", { includeInactive }] as const,
 };
 
 // --- templates ---------------------------------------------------------------
@@ -270,13 +273,39 @@ export function useTestPrinter() {
 
 // --- actes -------------------------------------------------------------------
 
-export function useActes(search: string, includeInactive: boolean) {
+export function useActes(
+  search: string,
+  includeInactive: boolean,
+  categorie?: string,
+) {
   return useQuery({
-    queryKey: keys.actes(search, includeInactive),
+    queryKey: keys.actes(search, includeInactive, categorie),
     queryFn: async () =>
       unwrap(
         await client.GET("/api/actes", {
-          params: { query: { search, include_inactive: includeInactive } },
+          params: {
+            query: {
+              search,
+              include_inactive: includeInactive,
+              // `categorie` absent => toutes catégories ; sentinelle « (sans) »
+              // gérée côté serveur (actes sans catégorie).
+              ...(categorie ? { categorie } : {}),
+            },
+          },
+        }),
+      ),
+  });
+}
+
+// Catégories distinctes du référentiel : alimente le filtre déroulant et les
+// suggestions de saisie. Invalidé avec les actes (clé préfixée « actes »).
+export function useActeCategories(includeInactive = false) {
+  return useQuery({
+    queryKey: keys.acteCategories(includeInactive),
+    queryFn: async () =>
+      unwrap(
+        await client.GET("/api/actes/categories", {
+          params: { query: { include_inactive: includeInactive } },
         }),
       ),
   });
@@ -314,6 +343,39 @@ export function useSetActeActive() {
           body: { actif },
         }),
       ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["actes"] }),
+  });
+}
+
+/** Exporte le référentiel d'actes en .xlsx (téléchargement authentifié). */
+export function useExportActes() {
+  return useMutation({
+    mutationFn: async (includeInactive: boolean) =>
+      downloadFile("/api/actes/export", "referentiel_actes.xlsx", {
+        include_inactive: includeInactive,
+      }),
+  });
+}
+
+/**
+ * Importe un .xlsx du référentiel (upload multipart — fetch direct, comme
+ * useImportFacture). Renvoie le compte-rendu (créés / mis à jour / ignorés +
+ * lignes en erreur) et invalide la liste des actes.
+ */
+export function useImportActes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File): Promise<ActeImport> => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const resp = await fetch(`${backend.baseUrl}/api/actes/import`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${backend.token}` },
+        body: fd,
+      });
+      if (!resp.ok) throw await resp.json();
+      return resp.json() as Promise<ActeImport>;
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["actes"] }),
   });
 }

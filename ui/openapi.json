@@ -2005,6 +2005,7 @@
           "actes"
         ],
         "summary": "Actes List",
+        "description": "Liste des actes. `categorie` filtre sur une categorie exacte ; la valeur\nsentinelle « (sans) » ne retient que les actes sans categorie.",
         "operationId": "actes_list_api_actes_get",
         "parameters": [
           {
@@ -2025,6 +2026,22 @@
               "type": "boolean",
               "default": false,
               "title": "Include Inactive"
+            }
+          },
+          {
+            "name": "categorie",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Categorie"
             }
           },
           {
@@ -2140,6 +2157,90 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ActeOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/actes/categories": {
+      "get": {
+        "tags": [
+          "actes"
+        ],
+        "summary": "Actes Categories",
+        "description": "Categories distinctes presentes dans le referentiel (filtre + suggestions).",
+        "operationId": "actes_categories_api_actes_categories_get",
+        "parameters": [
+          {
+            "name": "include_inactive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Inactive"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActeCategoriesOut"
                 }
               }
             }
@@ -2324,6 +2425,182 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OkOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/actes/export": {
+      "get": {
+        "tags": [
+          "actes"
+        ],
+        "summary": "Actes Export",
+        "description": "Exporte le referentiel d'actes en .xlsx (telechargement).\n\nLe classeur porte une colonne ID (cle de rapprochement au reimport) : on edite\ndes lignes / on en ajoute, puis on reimporte via POST /api/actes/import.\n`include_inactive` ajoute les actes desactives.",
+        "operationId": "actes_export_api_actes_export_get",
+        "parameters": [
+          {
+            "name": "include_inactive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Inactive"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/actes/import": {
+      "post": {
+        "tags": [
+          "actes"
+        ],
+        "summary": "Actes Import",
+        "description": "Importe un .xlsx du referentiel (cle de rapprochement : ID -> code -> libelle).\n\nMet a jour les actes existants, cree les nouvelles lignes. Une sauvegarde de la\nbase est prise avant ecriture (sauf en simulation `dry_run`).",
+        "operationId": "actes_import_api_actes_import_post",
+        "parameters": [
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Dry Run"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_actes_import_api_actes_import_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActeImportOut"
                 }
               }
             }
@@ -6612,6 +6889,89 @@
         }
       }
     },
+    "/api/factures/{facture_id}/open": {
+      "post": {
+        "tags": [
+          "prestataires"
+        ],
+        "summary": "Facture Open",
+        "description": "Ouvre la facture archivée avec l'application par défaut (côté machine serveur,\n= poste de l'utilisateur). Calque `_open_path` de l'app Flet et `open_document`.",
+        "operationId": "facture_open_api_factures__facture_id__open_post",
+        "parameters": [
+          {
+            "name": "facture_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Facture Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/factures/{facture_id}": {
       "delete": {
         "tags": [
@@ -7533,6 +7893,54 @@
         ],
         "title": "ActeActiveIn"
       },
+      "ActeCategoriesOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ActeCategoriesOut"
+      },
+      "ActeImportOut": {
+        "properties": {
+          "created": {
+            "type": "integer",
+            "title": "Created"
+          },
+          "updated": {
+            "type": "integer",
+            "title": "Updated"
+          },
+          "skipped": {
+            "type": "integer",
+            "title": "Skipped"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "created",
+          "updated",
+          "skipped",
+          "errors"
+        ],
+        "title": "ActeImportOut",
+        "description": "Compte-rendu d'un import .xlsx du referentiel d'actes."
+      },
       "ActeIn": {
         "properties": {
           "libelle": {
@@ -7554,6 +7962,17 @@
               }
             ],
             "title": "Code"
+          },
+          "categorie": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categorie"
           },
           "sort_order": {
             "type": "integer",
@@ -7609,6 +8028,17 @@
               }
             ],
             "title": "Code"
+          },
+          "categorie": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categorie"
           },
           "sort_order": {
             "type": "integer",
@@ -7723,6 +8153,20 @@
           "document_ids"
         ],
         "title": "BatchIn"
+      },
+      "Body_actes_import_api_actes_import_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_actes_import_api_actes_import_post"
       },
       "Body_facture_ia_montant_api_factures_ia_montant_post": {
         "properties": {

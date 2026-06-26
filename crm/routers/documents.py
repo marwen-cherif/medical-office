@@ -191,17 +191,26 @@ def _humanize(tag: str) -> str:
 
 def _resolve_fields(conn, template: templates.Template) -> list[repo.TemplateField]:
     """Variables a demander : config enregistree, sinon auto-detection ; exclut les
-    balises auto-remplies depuis la fiche patient (NOM, PRENOM, ...)."""
+    balises auto-remplies depuis la fiche patient (NOM, PRENOM, ...) et les balises de
+    note derivees (NB_DENTS, ODONTOGRAMME), calculees a la generation.
+
+    Si le modele porte un schema `<ODONTOGRAMME>` (ou `<DENTS>`) mais qu'aucun champ
+    `DENTS` n'est present, un champ `DENTS` synthetique est ajoute : c'est lui qui, cote
+    frontend, est rendu en bloc de selection FDI et alimente `<DENTS>`/`<NB_DENTS>` et le
+    schema (indispensable pour une note autonome ou le modele n'a que `<ODONTOGRAMME>`)."""
     from src.doc_filler import extract_placeholders
-    fields = repo.list_template_fields(conn, template.name)
-    if fields:
-        return [f for f in fields if f.tag.upper() not in generator.AUTO_PATIENT_TAGS]
-    out: list[repo.TemplateField] = []
-    for tag in extract_placeholders(template.path):
-        if tag in generator.AUTO_PATIENT_TAGS:
-            continue
-        out.append(repo.TemplateField(template.name, tag, _humanize(tag),
-                                      _guess_type(tag), ""))
+    skip = generator.AUTO_PATIENT_TAGS | generator.DERIVED_NOTE_TAGS
+    placeholders = extract_placeholders(template.path)  # balises en MAJUSCULES
+    saved = repo.list_template_fields(conn, template.name)
+    if saved:
+        out = [f for f in saved if f.tag.upper() not in skip]
+    else:
+        out = [repo.TemplateField(template.name, tag, _humanize(tag), _guess_type(tag), "")
+               for tag in placeholders if tag not in skip]
+    # Champ DENTS synthetique si le modele a un schema/dents sans champ DENTS explicite.
+    needs_dents = "ODONTOGRAMME" in placeholders or "DENTS" in placeholders
+    if needs_dents and not any(f.tag.upper() == "DENTS" for f in out):
+        out.append(repo.TemplateField(template.name, "DENTS", "Dents concernées", "text", ""))
     return out
 
 

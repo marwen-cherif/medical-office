@@ -5,6 +5,7 @@ Reutilise `crm/repo.py` + `crm/generator.import_facture` sans les modifier.
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -337,6 +338,29 @@ async def facture_ia_montant(file: UploadFile = File(...)) -> FactureIaMontantOu
             tmp.unlink()
         except OSError:
             pass
+
+
+@router.post("/factures/{facture_id}/open", response_model=core.OkOut)
+def facture_open(facture_id: int) -> core.OkOut:
+    """Ouvre la facture archivée avec l'application par défaut (côté machine serveur,
+    = poste de l'utilisateur). Calque `_open_path` de l'app Flet et `open_document`."""
+    with core.db() as conn:
+        fac = repo.get_facture(conn, facture_id)
+    if fac is None or not fac.fichier:
+        raise core.ApiError(core.ERR_NOT_FOUND, "Facture introuvable.", status=404)
+    path = Path(fac.fichier)
+    if not path.exists():
+        raise core.ApiError(core.ERR_NOT_FOUND,
+                            "Le fichier n'existe plus sur le disque.", status=404)
+    try:
+        if os.name == "nt":
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        else:  # pragma: no cover
+            import subprocess
+            subprocess.Popen(["xdg-open", str(path)])
+    except Exception as exc:  # noqa: BLE001
+        raise core.ApiError(core.ERR_VALIDATION, f"Ouverture impossible : {exc}")
+    return core.OkOut()
 
 
 @router.delete("/factures/{facture_id}", response_model=core.OkOut)

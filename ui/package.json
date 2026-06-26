@@ -13,6 +13,7 @@
     "typecheck": "tsc -b --noEmit",
     "gen:api": "openapi-typescript ./openapi.json -o ./src/api/schema.d.ts",
     "dev:tauri": "tauri dev",
+    "build:tauri": "tauri build",
     "tauri": "tauri"
   },
   "dependencies": {

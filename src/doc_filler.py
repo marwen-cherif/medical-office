@@ -9,9 +9,21 @@ from pathlib import Path
 
 from docx import Document
 from docx.oxml.ns import qn
+from docx.shared import Cm, Emu
 
 # wdFormatPDF constant
 WD_FORMAT_PDF = 17
+
+# Balises *image* : remplacees par une image en ligne (et non par du texte). Une
+# balise image presente dans un modele mais non fournie est simplement videe (pas de
+# balise litterale dans le rendu). Cf. capability schema-dentaire-notes (<ODONTOGRAMME>).
+IMAGE_TAGS = {"ODONTOGRAMME"}
+
+# Boite max d'une image inseree (l'image est mise a l'echelle en preservant son ratio
+# pour tenir dedans, quel que soit son format portrait/paysage). Un schema dentaire est
+# portrait : la hauteur est en general le facteur limitant.
+_IMG_MAX_W_CM = 9.5
+_IMG_MAX_H_CM = 13.0
 
 
 class WordSession:
@@ -48,17 +60,22 @@ class WordSession:
         replacements: dict[str, str],
         pdf_output: Path,
         line_rows: list[dict[str, str]] | None = None,
+        images: dict[str, Path] | None = None,
     ) -> Path:
         """Remplace les placeholders via python-docx, exporte en PDF via Word COM.
 
         `line_rows` (optionnel) : note multi-lignes -> la ligne-modele `<L_*>` est
         repetee une fois par entree (cf. `_fill_docx`/`expand_table_rows`).
+        `images` (optionnel) : map balise->chemin image (sans chevrons, ex.
+        `{"ODONTOGRAMME": Path(...)}`) ; chaque balise image est remplacee par
+        l'image en ligne (cf. `_insert_images`).
         """
         pdf_output.parent.mkdir(parents=True, exist_ok=True)
 
         with tempfile.TemporaryDirectory() as tmp:
             filled_docx = Path(tmp) / "filled.docx"
-            _fill_docx(template_path, replacements, filled_docx, line_rows=line_rows)
+            _fill_docx(template_path, replacements, filled_docx,
+                       line_rows=line_rows, images=images)
 
             doc = self._word.Documents.Open(str(filled_docx), ReadOnly=False)
             try:
@@ -206,17 +223,124 @@ def expand_table_rows(doc, line_rows: list[dict[str, str]], template_rows=None) 
     parent.remove(tr)
 
 
+# --- Insertion d'images en remplacement d'une balise (schema-dentaire-notes) -----
+# Capacite additive : une balise document (ex. <ODONTOGRAMME>) est remplacee par une
+# image en ligne, a son emplacement, en gerant les balises eclatees sur plusieurs runs
+# Word. Couvre corps, cellules de tableau et en-tetes/pieds (parcours python-docx, ou
+# l'on dispose d'objets Run pour `add_picture`). Une balise seule dans son paragraphe
+# (usage recommande) est le cas nominal.
+
+
+def _image_size_emu(path: Path, max_w_emu: int, max_h_emu: int) -> tuple[int, int]:
+    """Dimensions (EMU) d'une image mise a l'echelle pour tenir dans la boite max en
+    preservant son ratio. Pillow (deja embarque) lit les dimensions en pixels."""
+    from PIL import Image
+
+    with Image.open(str(path)) as im:
+        pw, ph = im.size
+    if pw <= 0 or ph <= 0:
+        return max_w_emu, max_h_emu
+    scale = min(max_w_emu / pw, max_h_emu / ph)
+    return Emu(int(pw * scale)), Emu(int(ph * scale))
+
+
+def _walk_paragraphs(container):
+    """Tous les paragraphes d'un conteneur python-docx (corps, cellule, en-tete/pied),
+    en descendant recursivement dans les cellules de tableau."""
+    yield from container.paragraphs
+    for tbl in container.tables:
+        for row in tbl.rows:
+            for cell in row.cells:
+                yield from _walk_paragraphs(cell)
+
+
+def _insert_image_in_paragraph(paragraph, sized: dict[str, tuple[Path, int, int]]) -> None:
+    """Remplace, dans `paragraph`, la 1re occurrence de chaque balise image par son
+    image en ligne. Localise la balise meme eclatee sur plusieurs runs (meme principe
+    que `_replace_in_para_elem`), preserve le texte avant/apres, et insere l'image
+    dans le run de debut (l'ordre prefixe / image / suffixe est conserve)."""
+    runs = paragraph.runs
+    if not runs:
+        return
+    texts = [r.text or "" for r in runs]
+    full = "".join(texts)
+    for tag, (path, w_emu, h_emu) in sized.items():
+        ph = f"<{tag}>"
+        start = full.find(ph)
+        if start < 0:
+            continue
+        end = start + len(ph)
+        char_run: list[int] = []
+        for i, t in enumerate(texts):
+            char_run.extend([i] * len(t))
+        first = char_run[start]
+        last = char_run[end - 1]
+        first_run_start = sum(len(texts[i]) for i in range(first))
+        prefix = texts[first][: start - first_run_start]
+        last_run_start = sum(len(texts[i]) for i in range(last))
+        suffix = texts[last][end - last_run_start:]
+
+        runs[first].text = prefix
+        for i in range(first + 1, last + 1):
+            runs[i].text = suffix if i == last else ""
+        runs[first].add_picture(str(path), width=w_emu, height=h_emu)
+        if first == last and suffix:
+            runs[first].add_text(suffix)
+        return  # une balise image (document) au plus par paragraphe
+
+
+def _insert_images(doc, images: dict[str, Path]) -> None:
+    """Insere chaque image fournie a l'emplacement de sa balise, dans tout le document
+    (corps, tableaux, en-tetes/pieds, et **zones de texte** du corps — les modeles « lettre »
+    placent souvent le corps dans une zone de texte). Les balises image non fournies ont
+    deja ete videes par le remplissage texte (cf. `_fill_docx`)."""
+    from docx.text.paragraph import Paragraph
+
+    max_w, max_h = Cm(_IMG_MAX_W_CM), Cm(_IMG_MAX_H_CM)
+    sized = {
+        tag: (path, *_image_size_emu(path, max_w, max_h)) for tag, path in images.items()
+    }
+    containers = [doc]
+    for section in doc.sections:
+        containers.append(section.header)
+        containers.append(section.footer)
+    for container in containers:
+        for para in _walk_paragraphs(container):
+            _insert_image_in_paragraph(para, sized)
+
+    # Zones de texte du corps (w:txbxContent) : non traversees par python-docx
+    # (`doc.paragraphs`). On enveloppe chaque w:p en Paragraph rattache au document
+    # (sa `part` porte l'image inseree via add_picture). Couvre aussi les zones de texte
+    # nichees dans un tableau du corps (iter recursif).
+    for txbx in doc.element.body.iter(qn("w:txbxContent")):
+        for p_elem in txbx.iter(qn("w:p")):
+            _insert_image_in_paragraph(Paragraph(p_elem, doc), sized)
+
+
 def _fill_docx(
     template_path: Path,
     replacements: dict[str, str],
     output_path: Path,
     line_rows: list[dict[str, str]] | None = None,
+    images: dict[str, Path] | None = None,
 ) -> None:
     """Remplace les placeholders du docx (corps, zones de texte, en-tetes/pieds,
     cellules de tableau) et, si `line_rows` est fourni, repete la ligne-modele.
+    Si `images` est fourni, remplace les balises image par l'image correspondante ;
+    toute balise image NON fournie est videe (jamais rendue litteralement).
 
     `line_rows=None` => comportement historique mono-valeur (aucune expansion).
+    `images=None` => aucune insertion d'image (comportement historique).
     """
+    images = images or {}
+    # Vide les balises image non fournies (ensemble vide de dents, etc.) pour qu'aucune
+    # balise litterale ne subsiste ; les balises image fournies restent litterales (la
+    # passe d'insertion les localise apres le remplissage texte). Copie defensive.
+    replacements = dict(replacements)
+    for tag in IMAGE_TAGS:
+        if tag not in images:
+            replacements.setdefault(f"<{tag}>", "")
+
     doc = Document(str(template_path))
 
     # Ligne(s)-modele : reperees une fois pour les exclure de la passe document
@@ -253,6 +377,11 @@ def _fill_docx(
     # Expansion de la ligne-modele (note multi-lignes) si demandee.
     if line_rows is not None:
         expand_table_rows(doc, line_rows, template_rows=template_rows)
+
+    # Insertion des images (apres le texte et l'expansion) : remplace chaque balise
+    # image fournie par l'image en ligne, a son emplacement.
+    if images:
+        _insert_images(doc, images)
 
     doc.save(str(output_path))
 

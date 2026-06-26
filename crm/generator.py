@@ -8,6 +8,7 @@ Reutilise src.doc_filler, src.pdf_to_jpg et src.mailer sans les modifier.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -16,8 +17,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
+from src import odontogram_render
 from src.config import Config
-from src.doc_filler import WordSession, format_montant
+from src.doc_filler import WordSession, classify_placeholders, format_montant
 from src.mailer import MailjetClient, MailjetError, log_mail
 from src.pdf_to_jpg import pdf_first_page_to_jpg
 
@@ -116,6 +118,11 @@ def import_facture(
 
 # Balises remplies automatiquement depuis la fiche patient (non demandees a l'ecran).
 AUTO_PATIENT_TAGS = {"NOM", "PRENOM", "EMAIL", "TELEPHONE", "ADRESSE", "DATE_NAISSANCE"}
+
+# Balises de note DERIVEES des dents, calculees a la generation : jamais saisies a
+# l'ecran (comme les balises patient). `<DENTS>` reste, lui, saisissable (via le bloc
+# de selection FDI dans le dialogue de generation). Cf. schema-dentaire-notes.
+DERIVED_NOTE_TAGS = {"NB_DENTS", "ODONTOGRAMME"}
 
 
 def _fmt_naissance(iso: Optional[str]) -> str:
@@ -274,6 +281,36 @@ def compute_totaux(lignes: list[dict]) -> dict[str, str]:
         "NB_ACTES": str(len(lignes)),
         "TOTAL": format_montant(total_du),
     }
+
+
+# --- Dents agregees + schema dentaire (schema-dentaire-notes) ------------------
+# Balises document derivees des dents des actes retenus : `<DENTS>` (liste FDI
+# agregee), `<NB_DENTS>` (compteur) et `<ODONTOGRAMME>` (schema image). Calcul au
+# rendu, LECTURE SEULE : n'affecte ni l'acte ni la dette.
+
+def _split_dents(raw) -> list[str]:
+    """Decoupe une saisie de dents (FDI) en jetons, comme `repo.normalize_dents`."""
+    return [t.strip() for t in re.split(r"[,;\n]+", str(raw or "")) if t.strip()]
+
+
+def _dents_sort_key(tok: str):
+    """Ordre FDI naturel (11,12,...,18,21,...,48,51,...) ; jetons non-FDI en fin."""
+    return (0, int(tok)) if repo.is_fdi_valide(tok) else (1, 2 ** 31, tok)
+
+
+def dents_tries(tokens) -> list[str]:
+    """Liste de dents dedupliquee (ordre preserve) puis triee en ordre FDI."""
+    seen: list[str] = []
+    for t in tokens:
+        if t not in seen:
+            seen.append(t)
+    return sorted(seen, key=_dents_sort_key)
+
+
+def dents_agregees(lignes: list[dict]) -> list[str]:
+    """Ensemble FDI agrege, deduplique et trie des dents de toutes les lignes retenues
+    (union mono/multi). Lecture seule (n'ecrit ni `prestations` ni dette)."""
+    return dents_tries(t for l in lignes for t in _split_dents(l.get("dents")))
 
 
 def _ligne_date_fr(iso) -> str:
@@ -539,21 +576,49 @@ def render_document(conn: sqlite3.Connection, document: Document) -> Document:
             repl["<DATE>"] = date.today().strftime("%d/%m/%Y")
         line_rows = [_ligne_to_row_repl(l) for l in lignes]
 
+    # Dents agregees (texte) + schema dentaire (image), capability schema-dentaire-notes.
+    # Source : lignes (note adossee aux actes) sinon le champ DENTS (note mono/autonome
+    # pre-rempli depuis l'acte). LECTURE SEULE : aucune ecriture base ni dette.
+    if lignes is not None:
+        dents = dents_agregees(lignes)
+        repl["<DENTS>"] = ", ".join(dents)
+        repl["<NB_DENTS>"] = str(len(dents))
+    elif variables.get("DENTS") is not None:
+        dents = dents_tries(_split_dents(variables.get("DENTS")))
+        repl["<DENTS>"] = ", ".join(dents)
+        repl["<NB_DENTS>"] = str(len(dents))
+    else:
+        dents = []
+
+    # Schema dentaire : rendu seulement si le modele porte la balise <ODONTOGRAMME> et
+    # qu'au moins une dent est concernee (sinon doc_filler vide la balise, pas d'image).
+    images: Optional[dict[str, Path]] = None
+    odontogramme_png: Optional[Path] = None
+    doc_tags, _ = classify_placeholders(template.path)
+    if "ODONTOGRAMME" in doc_tags and dents:
+        odontogramme_png = odontogram_render.render_png(dents)
+        if odontogramme_png is not None:
+            images = {"ODONTOGRAMME": odontogramme_png}
+
     try:
         with WordSession() as word:
             if ext == "pdf":
-                word.fill_and_export_pdf(template.path, repl, out_path, line_rows=line_rows)
+                word.fill_and_export_pdf(
+                    template.path, repl, out_path, line_rows=line_rows, images=images)
             else:
                 with tempfile.TemporaryDirectory() as tmp:
                     pdf_path = Path(tmp) / (out_path.stem + ".pdf")
                     word.fill_and_export_pdf(
-                        template.path, repl, pdf_path, line_rows=line_rows)
+                        template.path, repl, pdf_path, line_rows=line_rows, images=images)
                     pdf_first_page_to_jpg(pdf_path, out_path)
     except Exception as exc:  # noqa: BLE001
         document.statut = "erreur"
         document.message_erreur = f"{exc}\n{traceback.format_exc()}"
         repo.update_document(conn, document)
         raise
+    finally:
+        if odontogramme_png is not None:  # schema temporaire, jamais stocke
+            odontogramme_png.unlink(missing_ok=True)
 
     document.file_path = str(out_path)
     document.output_format = ext

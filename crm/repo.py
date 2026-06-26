@@ -1335,6 +1335,15 @@ class Acte:
     code: Optional[str] = None
     actif: bool = True
     sort_order: int = 0
+    # Categorie libre (classement des actes, ex. « Prothese », « Chirurgie »). Texte
+    # porte par l'application — None = sans categorie. Cf. db.py v13.
+    categorie: Optional[str] = None
+
+
+def _clean_categorie(value: Optional[str]) -> Optional[str]:
+    """Normalise une categorie d'acte : trim, chaine vide -> None."""
+    s = (value or "").strip()
+    return s or None
 
 
 def _row_to_acte(row: sqlite3.Row) -> Acte:
@@ -1345,6 +1354,7 @@ def _row_to_acte(row: sqlite3.Row) -> Acte:
         code=row["code"],
         actif=bool(row["actif"]),
         sort_order=row["sort_order"],
+        categorie=row["categorie"],
     )
 
 
@@ -1355,15 +1365,18 @@ def create_acte(conn: sqlite3.Connection, a: Acte) -> Acte:
         raise ValueError("Le libelle d'un acte est obligatoire.")
     if a.prix is None or a.prix < 0:
         raise ValueError("Le prix d'un acte doit etre positif ou nul.")
+    categorie = _clean_categorie(a.categorie)
     cur = conn.execute(
-        """INSERT INTO actes (libelle, slug_libelle, prix, code, actif, sort_order)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO actes (libelle, slug_libelle, prix, code, actif, sort_order,
+             categorie)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (libelle, slugify(libelle), float(a.prix), (a.code or None),
-         int(a.actif), a.sort_order or 0),
+         int(a.actif), a.sort_order or 0, categorie),
     )
     conn.commit()
     a.id = cur.lastrowid
     a.libelle = libelle
+    a.categorie = categorie
     return a
 
 
@@ -1377,9 +1390,9 @@ def update_acte(conn: sqlite3.Connection, a: Acte) -> None:
         raise ValueError("Le prix d'un acte doit etre positif ou nul.")
     conn.execute(
         """UPDATE actes SET libelle = ?, slug_libelle = ?, prix = ?, code = ?,
-             sort_order = ? WHERE id = ?""",
+             sort_order = ?, categorie = ? WHERE id = ?""",
         (libelle, slugify(libelle), float(a.prix), (a.code or None),
-         a.sort_order or 0, a.id),
+         a.sort_order or 0, _clean_categorie(a.categorie), a.id),
     )
     conn.commit()
 
@@ -1429,11 +1442,19 @@ def find_acte_by_libelle(
     return _row_to_acte(row) if row else None
 
 
-def _acte_filter_clause(search: str, actifs_seulement: bool) -> tuple[str, list[Any]]:
+# Sentinelle de filtre : ne retenir que les actes sans categorie (cote API/UI).
+SANS_CATEGORIE = "(sans)"
+
+
+def _acte_filter_clause(
+    search: str, actifs_seulement: bool, categorie: Optional[str] = None
+) -> tuple[str, list[Any]]:
     """Clause WHERE (et parametres) pour la liste des actes.
 
     `search` cherche le libelle, insensible aux accents (slug + LIKE, comme
     patients/documents). `actifs_seulement` exclut les actes desactives.
+    `categorie` filtre sur une categorie exacte ; la sentinelle « (sans) » ne
+    retient que les actes sans categorie (None/vide).
     """
     clauses: list[str] = []
     params: list[Any] = []
@@ -1442,6 +1463,12 @@ def _acte_filter_clause(search: str, actifs_seulement: bool) -> tuple[str, list[
     if search.strip():
         clauses.append("slug_libelle LIKE ?")
         params.append(f"%{slugify(search)}%")
+    if categorie is not None:
+        if categorie == SANS_CATEGORIE:
+            clauses.append("(categorie IS NULL OR categorie = '')")
+        else:
+            clauses.append("categorie = ?")
+            params.append(categorie)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     return where, params
 
@@ -1450,16 +1477,21 @@ def list_actes(
     conn: sqlite3.Connection,
     search: str = "",
     actifs_seulement: bool = True,
+    categorie: Optional[str] = None,
     limit: int | None = None,
     offset: int = 0,
 ) -> list[Acte]:
     """Liste paginee/filtree des actes (recherche libelle insensible accents).
 
     Contrat de lecture reutilisable : un consommateur y choisit un acte dont il
-    recopie (snapshot) le couple (libelle, prix). Tri `sort_order, slug_libelle`.
+    recopie (snapshot) le couple (libelle, prix). Tri par categorie puis
+    `sort_order, slug_libelle` (groupe les actes d'une meme categorie).
     """
-    where, params = _acte_filter_clause(search, actifs_seulement)
-    sql = f"SELECT * FROM actes{where} ORDER BY sort_order, slug_libelle"
+    where, params = _acte_filter_clause(search, actifs_seulement, categorie)
+    # NULLS LAST sur la categorie : les actes sans categorie passent en dernier.
+    sql = (f"SELECT * FROM actes{where} "
+           "ORDER BY (categorie IS NULL OR categorie = ''), categorie, "
+           "sort_order, slug_libelle")
     if limit is not None:
         sql += " LIMIT ? OFFSET ?"
         params += [limit, offset]
@@ -1468,11 +1500,29 @@ def list_actes(
 
 
 def count_actes(
-    conn: sqlite3.Connection, search: str = "", actifs_seulement: bool = True
+    conn: sqlite3.Connection, search: str = "", actifs_seulement: bool = True,
+    categorie: Optional[str] = None,
 ) -> int:
-    where, params = _acte_filter_clause(search, actifs_seulement)
+    where, params = _acte_filter_clause(search, actifs_seulement, categorie)
     row = conn.execute(f"SELECT COUNT(*) AS n FROM actes{where}", params).fetchone()
     return int(row["n"])
+
+
+def list_acte_categories(
+    conn: sqlite3.Connection, actifs_seulement: bool = True
+) -> list[str]:
+    """Categories distinctes presentes dans le referentiel (triees alpha).
+
+    Alimente le filtre deroulant et les suggestions de saisie. Exclut les valeurs
+    vides/NULL (l'absence de categorie n'est pas une categorie nommee).
+    """
+    sql = ("SELECT DISTINCT categorie FROM actes "
+           "WHERE categorie IS NOT NULL AND categorie <> ''")
+    if actifs_seulement:
+        sql += " AND actif = 1"
+    sql += " ORDER BY categorie COLLATE NOCASE"
+    rows = conn.execute(sql).fetchall()
+    return [r["categorie"] for r in rows]
 
 
 # --- Jobs (traitement par lot) ------------------------------------------------

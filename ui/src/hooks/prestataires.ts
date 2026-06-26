@@ -153,6 +153,18 @@ export function useExtractFactureMontant() {
   });
 }
 
+/** Ouvre la facture archivée avec l'app par défaut (côté poste serveur, calque _open_path). */
+export function useOpenFacture() {
+  return useMutation({
+    mutationFn: async (id: number) =>
+      unwrap(
+        await client.POST("/api/factures/{facture_id}/open", {
+          params: { path: { facture_id: id } },
+        }),
+      ),
+  });
+}
+
 export function useDeleteFacture(prestataireId: number) {
   const qc = useQueryClient();
   return useMutation({

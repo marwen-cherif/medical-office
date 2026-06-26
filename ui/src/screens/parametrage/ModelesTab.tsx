@@ -133,6 +133,11 @@ export function ModelesTab() {
         <p className="text-sm text-muted">
           {templates.data?.length ?? 0} modèle(s). Un modèle contenant des balises{" "}
           <code className="rounded bg-bg px-1">&lt;L_*&gt;</code> est une note multi-lignes.
+          Les notes disposent aussi de{" "}
+          <code className="rounded bg-bg px-1">&lt;DENTS&gt;</code>/
+          <code className="rounded bg-bg px-1">&lt;NB_DENTS&gt;</code> (dents concernées) et de{" "}
+          <code className="rounded bg-bg px-1">&lt;ODONTOGRAMME&gt;</code> (schéma dentaire — à
+          placer dans un paragraphe dédié).
         </p>
         <Button
           onClick={() => {

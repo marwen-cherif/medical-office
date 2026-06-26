@@ -30,8 +30,13 @@ jeton sont transmis a la coquille (Tauri) via une ligne de handshake sur stdout
 (`CRM_SERVER_READY {json}`), lue au lancement.
 
 Lancement direct (dev) :
-    python -m crm.server --port 0           # port ephemere, jeton auto
-    python -m crm.server --port 8765 --token dev   # fixe (pratique pour Vite)
+    python crm_server.py --port 0           # port ephemere, jeton auto
+    python crm_server.py --port 8765 --token dev   # fixe (pratique pour Vite)
+
+NB : utiliser `python crm_server.py`, PAS `python -m crm.server` — ce dernier execute
+le module comme `__main__`, et les routeurs (`from crm import server as core`) le
+re-importent alors sous le nom `crm.server`, ce qui relance `register_all` en plein
+import et casse sur un import circulaire.
 """
 
 from __future__ import annotations
@@ -48,13 +53,16 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Any, Callable, Optional
 
+import tempfile
+from pathlib import Path
+
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import backup, print_settings, printing, repo, templates, version
+from . import backup, import_actes, print_settings, printing, repo, templates, version
 from .db import SchemaTooNewError, connect
 
 # Ligne de handshake imprimee sur stdout au demarrage : la coquille Tauri y lit le
@@ -382,6 +390,7 @@ class ActeIn(BaseModel):
     libelle: str
     prix: float = 0.0
     code: Optional[str] = None
+    categorie: Optional[str] = None
     sort_order: int = 0
 
 
@@ -395,8 +404,20 @@ class ActeListOut(BaseModel):
     total: int
 
 
+class ActeCategoriesOut(BaseModel):
+    items: list[str]
+
+
 class ActeActiveIn(BaseModel):
     actif: bool
+
+
+class ActeImportOut(BaseModel):
+    """Compte-rendu d'un import .xlsx du referentiel d'actes."""
+    created: int
+    updated: int
+    skipped: int
+    errors: list[str]
 
 
 class JobAcceptedOut(BaseModel):
@@ -442,17 +463,6 @@ app = FastAPI(
     },
 )
 
-# Loopback uniquement + jeton : CORS permissif sans credentials (Authorization,
-# pas de cookie). Permet a Vite (dev) et a la WebView Tauri d'appeler le backend.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     """Rejette toute requete `/api/*` sans le jeton de session attendu.
@@ -472,6 +482,22 @@ async def auth_middleware(request: Request, call_next):
                                "message": "Jeton de session manquant ou invalide."}},
         )
     return await call_next(request)
+
+
+# CORS enregistre APRES auth_middleware : l'ordre est PORTEUR. Starlette execute le
+# DERNIER middleware ajoute en PREMIER (le plus externe). En placant CORS en dernier,
+# il enveloppe AUSSI les reponses d'erreur d'auth (401) : sinon un 401 ressort SANS
+# en-tete Access-Control-Allow-Origin et la WebView Tauri (origine tauri.localhost ->
+# 127.0.0.1) le voit comme un opaque « Failed to fetch » au lieu du vrai message.
+# Loopback + jeton : CORS permissif sans credentials (Authorization, pas de cookie).
+# Permet a Vite (dev) et a la WebView Tauri d'appeler le backend.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(ApiError)
@@ -585,7 +611,7 @@ def templates_open_in_word(name: str) -> OkOut:
          tags=["templates"])
 def templates_placeholders(name: str) -> PlaceholdersOut:
     from src.doc_filler import classify_placeholders
-    from .generator import AUTO_PATIENT_TAGS
+    from .generator import AUTO_PATIENT_TAGS, DERIVED_NOTE_TAGS
     t = templates.get_template(name)
     if t is None:
         raise ApiError(ERR_NOT_FOUND, f"Modèle introuvable : {name}", status=404)
@@ -593,8 +619,11 @@ def templates_placeholders(name: str) -> PlaceholdersOut:
         doc_tags, line_tags = classify_placeholders(t.path)
     except Exception as exc:  # noqa: BLE001
         raise ApiError(ERR_TEMPLATE_INVALID, f"Modèle illisible : {exc}", status=400)
-    auto = [tag for tag in doc_tags if tag in AUTO_PATIENT_TAGS]
-    custom = [tag for tag in doc_tags if tag not in AUTO_PATIENT_TAGS]
+    # Auto = remplies sans saisie : balises patient + balises de note derivees
+    # (NB_DENTS, ODONTOGRAMME). <DENTS> reste une balise saisie (selecteur FDI).
+    auto_set = AUTO_PATIENT_TAGS | DERIVED_NOTE_TAGS
+    auto = [tag for tag in doc_tags if tag in auto_set]
+    custom = [tag for tag in doc_tags if tag not in auto_set]
     return PlaceholdersOut(document_tags=doc_tags, line_tags=line_tags,
                            auto_tags=auto, custom_tags=custom)
 
@@ -799,20 +828,33 @@ def settings_set_print(doc_type: str, body: PrintConfigIn) -> OkOut:
 
 # --- actes.* ------------------------------------------------------------------
 
+def _acte_out(a: repo.Acte) -> ActeOut:
+    return ActeOut(id=a.id, libelle=a.libelle, prix=a.prix, code=a.code,
+                   categorie=a.categorie, actif=a.actif, sort_order=a.sort_order)
+
+
 @app.get("/api/actes", response_model=ActeListOut, tags=["actes"])
 def actes_list(search: str = "", include_inactive: bool = False,
+               categorie: Optional[str] = None,
                limit: Optional[int] = None, offset: int = 0) -> ActeListOut:
+    """Liste des actes. `categorie` filtre sur une categorie exacte ; la valeur
+    sentinelle « (sans) » ne retient que les actes sans categorie."""
     with db() as conn:
         actes = repo.list_actes(conn, search=search,
                                 actifs_seulement=not include_inactive,
-                                limit=limit, offset=offset)
+                                categorie=categorie, limit=limit, offset=offset)
         total = repo.count_actes(conn, search=search,
-                                 actifs_seulement=not include_inactive)
-    return ActeListOut(
-        items=[ActeOut(id=a.id, libelle=a.libelle, prix=a.prix, code=a.code,
-                       actif=a.actif, sort_order=a.sort_order) for a in actes],
-        total=total,
-    )
+                                 actifs_seulement=not include_inactive,
+                                 categorie=categorie)
+    return ActeListOut(items=[_acte_out(a) for a in actes], total=total)
+
+
+@app.get("/api/actes/categories", response_model=ActeCategoriesOut, tags=["actes"])
+def actes_categories(include_inactive: bool = False) -> ActeCategoriesOut:
+    """Categories distinctes presentes dans le referentiel (filtre + suggestions)."""
+    with db() as conn:
+        cats = repo.list_acte_categories(conn, actifs_seulement=not include_inactive)
+    return ActeCategoriesOut(items=cats)
 
 
 @app.post("/api/actes", response_model=ActeOut, tags=["actes"])
@@ -821,9 +863,8 @@ def actes_create(body: ActeIn) -> ActeOut:
         with db() as conn:
             a = repo.create_acte(conn, repo.Acte(
                 id=None, libelle=body.libelle, prix=body.prix, code=body.code,
-                sort_order=body.sort_order))
-        return ActeOut(id=a.id, libelle=a.libelle, prix=a.prix, code=a.code,
-                       actif=a.actif, sort_order=a.sort_order)
+                categorie=body.categorie, sort_order=body.sort_order))
+        return _acte_out(a)
     except Exception as exc:  # noqa: BLE001
         raise _err_from_engine(exc)
 
@@ -837,10 +878,10 @@ def actes_update(acte_id: int, body: ActeIn) -> ActeOut:
                 raise ApiError(ERR_NOT_FOUND, f"Acte introuvable : {acte_id}", status=404)
             repo.update_acte(conn, repo.Acte(
                 id=acte_id, libelle=body.libelle, prix=body.prix, code=body.code,
-                actif=existing.actif, sort_order=body.sort_order))
+                categorie=body.categorie, actif=existing.actif,
+                sort_order=body.sort_order))
             a = repo.get_acte(conn, acte_id)
-        return ActeOut(id=a.id, libelle=a.libelle, prix=a.prix, code=a.code,
-                       actif=a.actif, sort_order=a.sort_order)
+        return _acte_out(a)
     except ApiError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -852,6 +893,63 @@ def actes_set_active(acte_id: int, body: ActeActiveIn) -> OkOut:
     with db() as conn:
         repo.set_acte_actif(conn, acte_id, body.actif)
     return OkOut()
+
+
+_XLSX_MEDIA = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+
+@app.get("/api/actes/export", tags=["actes"])
+def actes_export(include_inactive: bool = False) -> Response:
+    """Exporte le referentiel d'actes en .xlsx (telechargement).
+
+    Le classeur porte une colonne ID (cle de rapprochement au reimport) : on edite
+    des lignes / on en ajoute, puis on reimporte via POST /api/actes/import.
+    `include_inactive` ajoute les actes desactives.
+    """
+    with db() as conn:
+        data, _n = import_actes.export_actes_bytes(
+            include_inactive=include_inactive, conn=conn)
+    return Response(
+        content=data,
+        media_type=_XLSX_MEDIA,
+        headers={
+            "Content-Disposition": 'attachment; filename="referentiel_actes.xlsx"',
+        },
+    )
+
+
+@app.post("/api/actes/import", response_model=ActeImportOut, tags=["actes"])
+async def actes_import(file: UploadFile = File(...),
+                       dry_run: bool = False) -> ActeImportOut:
+    """Importe un .xlsx du referentiel (cle de rapprochement : ID -> code -> libelle).
+
+    Met a jour les actes existants, cree les nouvelles lignes. Une sauvegarde de la
+    base est prise avant ecriture (sauf en simulation `dry_run`).
+    """
+    data = await file.read()
+    name = file.filename or "actes.xlsx"
+    tmp = Path(tempfile.gettempdir()) / f"crm_actes_import_{name}"
+    if tmp.suffix.lower() != ".xlsx":
+        tmp = tmp.with_suffix(".xlsx")
+    try:
+        tmp.write_bytes(data)
+        if not dry_run:
+            backup.backup_db()  # filet de securite avant un import en masse
+        with db() as conn:
+            summary = import_actes.import_actes(tmp, dry_run=dry_run, conn=conn)
+        return ActeImportOut(created=summary.created, updated=summary.updated,
+                             skipped=summary.skipped, errors=summary.errors)
+    except RuntimeError as exc:  # openpyxl absent / feuille introuvable
+        raise ApiError(ERR_VALIDATION, str(exc), status=400)
+    except Exception as exc:  # noqa: BLE001
+        raise _err_from_engine(exc)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 # --- Operations longues : canal SSE -------------------------------------------
@@ -935,8 +1033,96 @@ def _set_process_title(title: str) -> None:
             pass
 
 
+def _parent_pids_to_watch() -> list[int]:
+    """PID(s) dont la mort doit entrainer l'arret du sidecar.
+
+    On surveille DEUX ancetres car l'exe PyInstaller onefile tourne en **deux
+    process** (bootloader -> app) : le parent direct (`getppid`) est le bootloader
+    — c'est lui que la coquille Tauri tue a la fermeture normale ; `CRM_PARENT_PID`
+    (injecte par la coquille = PID de `cabinet-crm.exe`) couvre, lui, l'arret BRUTAL
+    de Tauri (Gestionnaire des taches/crash), ou le bootloader ne meurt pas tout
+    seul. Mourir des que l'UN des deux disparait couvre les deux cas. Doublons et
+    PID invalides ecartes."""
+    pids: list[int] = []
+    env_pid = os.environ.get("CRM_PARENT_PID")
+    if env_pid:
+        try:
+            pids.append(int(env_pid))
+        except ValueError:
+            pass
+    ppid = os.getppid()
+    if ppid and ppid > 1:
+        pids.append(ppid)
+    # dedup en preservant l'ordre, et > 1 (PID 1 = deja reparente)
+    seen: set[int] = set()
+    return [p for p in pids if p > 1 and not (p in seen or seen.add(p))]
+
+
+def _watch_parent_and_exit() -> None:
+    """Termine le sidecar si l'un de ses process parents (coquille Tauri) disparait.
+
+    Filet anti-orphelin : la coquille tue normalement le sidecar a la fermeture
+    (`RunEvent::Exit`), mais un arret BRUTAL du parent (kill via le Gestionnaire des
+    taches, crash) laisserait ce process actif. Plusieurs sidecars orphelins se
+    disputeraient alors le meme `cabinet.db` (verrou SQLite) et feraient echouer le
+    demarrage du lancement suivant. On surveille donc les parents (cf.
+    `_parent_pids_to_watch`) et on coupe net des que l'un meurt. Best-effort : ne
+    leve jamais ; desactivable via CRM_NO_PARENT_WATCH=1."""
+    if os.environ.get("CRM_NO_PARENT_WATCH"):
+        return
+    pids = _parent_pids_to_watch()
+    if not pids:
+        return  # aucun parent identifiable
+
+    def _runner() -> None:
+        try:
+            if os.name == "nt":
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                kernel32.OpenProcess.restype = ctypes.c_void_p
+                kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+                kernel32.WaitForMultipleObjects.argtypes = [
+                    ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p),
+                    ctypes.c_int, ctypes.c_uint32,
+                ]
+                kernel32.WaitForMultipleObjects.restype = ctypes.c_uint32
+                SYNCHRONIZE = 0x00100000
+                INFINITE = 0xFFFFFFFF
+                handles = []
+                for p in pids:
+                    h = kernel32.OpenProcess(SYNCHRONIZE, False, p)
+                    if h:
+                        handles.append(h)
+                if not handles:
+                    return  # parents deja partis / inaccessibles : pas de faux positif
+                # Les handles restent valides meme si un PID est reutilise apres coup.
+                arr = (ctypes.c_void_p * len(handles))(*handles)
+                # bWaitAll=False -> rend la main des qu'UN parent meurt.
+                kernel32.WaitForMultipleObjects(len(handles), arr, 0, INFINITE)
+            else:  # repli generique (l'app vise Windows, mais restons portables)
+                import time
+                alive = True
+                while alive:
+                    for p in pids:
+                        try:
+                            os.kill(p, 0)  # signal 0 = simple test d'existence
+                        except OSError:
+                            alive = False
+                            break
+                    if alive:
+                        time.sleep(1.0)
+        except Exception:  # noqa: BLE001 - jamais bloquant
+            return
+        # Un parent a disparu : sortie immediate. L'OS libere socket, verrou SQLite et
+        # COM ; SQLite rejoue son journal au prochain demarrage si une ecriture courait.
+        os._exit(0)
+
+    threading.Thread(target=_runner, name="crm-parent-watch", daemon=True).start()
+
+
 def run(host: str = "127.0.0.1", port: int = 0, token: Optional[str] = None) -> None:
     """Demarre le backend : init base, handshake stdout, boucle ASGI (bloquant)."""
+    _watch_parent_and_exit()  # filet anti-orphelin (cf. fonction)
     token = token or os.environ.get("CRM_TOKEN") or secrets.token_urlsafe(32)
     _init_db()
     server, sock, actual_port = create_server(host, port, token)

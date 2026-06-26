@@ -22,14 +22,16 @@ import {
 } from "@/components/ui/select";
 import { DatePicker } from "@/components/common/DatePicker";
 import { MoneySummary } from "@/components/common/MoneySummary";
+import { Odontogramme } from "@/components/common/Odontogramme";
 import { humanizeError } from "@/lib/errors";
-import { fmtDevise, isoToFr } from "@/lib/format";
+import { fmtDevise, isoToFr, parseDents } from "@/lib/format";
 import { Montant } from "@/components/common/Montant";
 import {
   useGenerate,
   useGenerationForm,
   useGenerationTemplates,
   useSaveDraft,
+  useTrackJob,
 } from "@/hooks/documents";
 import type { DocumentT, GenActeLine } from "@/api/types";
 import { ActeCard, acteToPayload, emptyActe, type ActeValue } from "./ActeCard";
@@ -134,6 +136,7 @@ export function GenerateDialog({
   const templates = useGenerationTemplates(genMode, open);
   const saveDraft = useSaveDraft(patientId);
   const generate = useGenerate(patientId);
+  const trackJob = useTrackJob();
 
   const [template, setTemplate] = useState<string>("");
   const [format, setFormat] = useState<string>("jpg");
@@ -144,7 +147,6 @@ export function GenerateDialog({
   const [montants, setMontants] = useState<Record<number, string>>({});
   const [cards, setCards] = useState<ActeValue[]>([]);
   const [error, setError] = useState("");
-  const [progress, setProgress] = useState<string>("");
 
   // Note depuis UN seul acte : on pré-remplit un modèle mono-valeur avec les données
   // de cet acte (le backend mappe ACTE/MONTANT/DATE/…). Plusieurs actes => multi-lignes.
@@ -177,7 +179,6 @@ export function GenerateDialog({
     }
     setFormat(draft?.output_format ?? "jpg");
     setError("");
-    setProgress("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, templates.data, draft]);
 
@@ -290,24 +291,22 @@ export function GenerateDialog({
   function onGenerate(do_print: boolean) {
     if (!template) return setError("Sélectionnez un modèle.");
     setError("");
-    generate.mutate(
-      {
-        body: buildBody(do_print) as never,
-        onEvent: (e) => {
-          if (e.type === "progress") setProgress(e.message || "");
-        },
+    // Le POST est rapide : il valide (ex. imprimante pour « Générer et imprimer »)
+    // puis renvoie le job_id. On suit le rendu Word en arrière-plan via un toast et on
+    // ferme le dialogue tout de suite, pour libérer l'interface — l'utilisateur peut
+    // continuer à travailler pendant la génération. Une erreur synchrone (validation)
+    // garde le dialogue ouvert avec le message.
+    generate.mutate(buildBody(do_print) as never, {
+      onSuccess: (jobId) => {
+        trackJob(jobId, {
+          loading: do_print ? "Génération et impression en cours…" : "Génération en cours…",
+          success: do_print ? "Document généré et imprimé." : "Document généré.",
+          patientId,
+        });
+        onClose();
       },
-      {
-        onSuccess: () => {
-          toast.success(do_print ? "Document généré et imprimé." : "Document généré.");
-          onClose();
-        },
-        onError: (e) => {
-          setProgress("");
-          setError(humanizeError(e));
-        },
-      },
-    );
+      onError: (e) => setError(humanizeError(e)),
+    });
   }
 
   const title = draft
@@ -433,7 +432,17 @@ export function GenerateDialog({
                 {(form.data.fields ?? []).map((f) => (
                   <div key={f.tag} className="space-y-2">
                     <Label>{f.label || f.tag}</Label>
-                    {f.type === "paragraph" ? (
+                    {f.tag.toUpperCase() === "DENTS" ? (
+                      // Bloc de selection FDI (alimente <DENTS>/<NB_DENTS>/<ODONTOGRAMME>) :
+                      // utile notamment pour une note autonome (sans acte rattache).
+                      <Odontogramme
+                        value={parseDents(mono[f.tag] ?? "")}
+                        onChange={(dents) =>
+                          setMono((m) => ({ ...m, [f.tag]: dents.join(", ") }))
+                        }
+                        defaultDenture={defaultDenture}
+                      />
+                    ) : f.type === "paragraph" ? (
                       <Textarea rows={3} value={mono[f.tag] ?? ""}
                                 onChange={(e) => setMono((m) => ({ ...m, [f.tag]: e.target.value }))} />
                     ) : f.type === "date" ? (
@@ -454,7 +463,6 @@ export function GenerateDialog({
               </div>
             )}
 
-            {progress && <p className="text-sm text-navy">{progress}</p>}
             {error && <p className="text-xs text-red">{error}</p>}
           </div>
           <DialogFooter className="flex-wrap gap-2">

@@ -11,7 +11,7 @@ datas = [
 binaries = []
 hiddenimports = [
     'win32com.client', 'pythoncom', 'fitz', 'docx', 'requests',
-    'win32print', 'win32ui',  # impression directe (crm/printing.py)
+    'win32print', 'win32ui', 'win32gui', 'win32con',  # impression directe (crm/printing.py)
     'crm._build_info',  # genere par build-crm.bat (numero de build) ; absent = avertissement
 ]
 # Embarque le coeur de Flet (datas : controls/material/icons.json, etc.), le client

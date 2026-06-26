@@ -94,6 +94,34 @@ export function isoToDate(iso: string | null | undefined): Date | undefined {
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 }
 
+/**
+ * Masque une saisie clavier en `JJ/MM/AAAA` : ne garde que les chiffres (8 au plus)
+ * et réinsère les `/` automatiquement. Permet de taper `27101990` → `27/10/1990`
+ * sans saisir les séparateurs (accessibilité clavier des champs date).
+ */
+export function maskDateFr(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 8);
+  return [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4, 8)]
+    .filter(Boolean)
+    .join("/");
+}
+
+/**
+ * `JJ/MM/AAAA` → ISO `YYYY-MM-DD`, ou chaîne vide si la date est incomplète ou
+ * invalide (rejette p. ex. `31/02/2020` via une re-vérification des composants).
+ */
+export function frToIso(fr: string | null | undefined): string {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec((fr ?? "").trim());
+  if (!m) return "";
+  const day = Number(m[1]);
+  const month = Number(m[2]);
+  const year = Number(m[3]);
+  const d = new Date(year, month - 1, day);
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day)
+    return "";
+  return dateToIso(d);
+}
+
 /** Bornes ISO du mois courant (filtres financiers par défaut). */
 export function monthRange(): { from: string; to: string } {
   const d = new Date();

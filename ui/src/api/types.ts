@@ -14,6 +14,7 @@ export type PrintConfig = S["PrintConfigOut"];
 export type Acte = S["ActeOut"];
 export type ActeIn = S["ActeIn"];
 export type ActeList = S["ActeListOut"];
+export type ActeImport = S["ActeImportOut"];
 
 // --- Patients ----------------------------------------------------------------
 export type Patient = S["PatientOut"];
