@@ -129,6 +129,32 @@ class ReglementDepenseIn(BaseModel):
     date_reglement: Optional[str] = None
 
 
+class PrestataireReglementOut(BaseModel):
+    id: int
+    depense_id: int
+    depense_libelle: Optional[str] = None
+    montant: float
+    mode: Optional[str] = None
+    motif: Optional[str] = None
+    date_reglement: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class PrestataireReglementListOut(BaseModel):
+    items: list[PrestataireReglementOut]
+    total: int
+
+
+class DepenseReglementOut(BaseModel):
+    id: int
+    depense_id: int
+    montant: float
+    mode: Optional[str] = None
+    motif: Optional[str] = None
+    date_reglement: Optional[str] = None
+    created_at: Optional[str] = None
+
+
 # --- Serialisation ------------------------------------------------------------
 
 def prestataire_out(p: repo.Prestataire) -> PrestataireOut:
@@ -435,3 +461,50 @@ def depense_delete(depense_id: int) -> core.OkOut:
         repo.delete_depense(conn, depense_id)
         repo.log_audit(conn, "depense_supprimee", {"depense_id": depense_id})
     return core.OkOut()
+
+
+@router.get("/prestataires/{prestataire_id}/reglements", response_model=PrestataireReglementListOut)
+def prestataire_reglements_list(
+    prestataire_id: int,
+    limit: Optional[int] = 20,
+    offset: int = 0,
+) -> PrestataireReglementListOut:
+    with core.db() as conn:
+        items = repo.list_prestataire_reglements(
+            conn, prestataire_id, limit=limit, offset=offset
+        )
+        total = repo.count_prestataire_reglements(conn, prestataire_id)
+    return PrestataireReglementListOut(
+        items=[
+            PrestataireReglementOut(
+                id=r["id"],
+                depense_id=r["depense_id"],
+                depense_libelle=r["depense_libelle"],
+                montant=r["montant"],
+                mode=r["mode"],
+                motif=r["motif"],
+                date_reglement=r["date_reglement"],
+                created_at=r["created_at"],
+            )
+            for r in items
+        ],
+        total=total,
+    )
+
+
+@router.get("/depenses/{depense_id}/reglements", response_model=list[DepenseReglementOut])
+def depense_reglements_list(depense_id: int) -> list[DepenseReglementOut]:
+    with core.db() as conn:
+        items = repo.list_reglements(conn, depense_id)
+    return [
+        DepenseReglementOut(
+            id=r.id,
+            depense_id=r.depense_id,
+            montant=r.montant,
+            mode=r.mode,
+            motif=r.motif,
+            date_reglement=r.date_reglement,
+            created_at=r.created_at,
+        )
+        for r in items
+    ]

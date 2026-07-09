@@ -2284,6 +2284,39 @@ def list_reglements(conn: sqlite3.Connection, depense_id: int) -> list[Reglement
     return [_row_to_reglement(r) for r in rows]
 
 
+def list_prestataire_reglements(
+    conn: sqlite3.Connection,
+    prestataire_id: int,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict]:
+    sql = (
+        "SELECT r.id, r.depense_id, r.montant, r.mode, r.motif, r.date_reglement, r.created_at, "
+        "d.libelle AS depense_libelle "
+        "FROM depense_reglements r "
+        "JOIN depenses d ON r.depense_id = d.id "
+        "WHERE d.prestataire_id = ? "
+        "ORDER BY date(r.date_reglement) DESC, r.id DESC"
+    )
+    params = [prestataire_id]
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_prestataire_reglements(conn: sqlite3.Connection, prestataire_id: int) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS n "
+        "FROM depense_reglements r "
+        "JOIN depenses d ON r.depense_id = d.id "
+        "WHERE d.prestataire_id = ?",
+        (prestataire_id,),
+    ).fetchone()
+    return int(row["n"])
+
+
 def total_regle_periode(
     conn: sqlite3.Connection, date_from: str = "", date_to: str = ""
 ) -> float:

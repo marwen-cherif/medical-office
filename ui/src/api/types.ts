@@ -73,6 +73,10 @@ export type Depense = S["DepenseOut"];
 export type DepenseIn = S["DepenseIn"];
 export type ReglementDepenseIn = S["ReglementDepenseIn"];
 
+export type PrestataireReglement = S["PrestataireReglementOut"];
+export type PrestataireReglements = S["PrestataireReglementListOut"];
+export type DepenseReglement = S["DepenseReglementOut"];
+
 // --- Travaux (jobs) ----------------------------------------------------------
 export type Job = S["JobOut"];
 export type JobItem = S["JobItemOut"];

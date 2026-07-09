@@ -17,6 +17,8 @@ function invalidate(qc: ReturnType<typeof useQueryClient>, id?: number) {
   if (id != null) {
     qc.invalidateQueries({ queryKey: ["factures", id] });
     qc.invalidateQueries({ queryKey: ["pr-depenses", id] });
+    qc.invalidateQueries({ queryKey: ["pr-reglements", id] });
+    qc.invalidateQueries({ queryKey: ["depense-reglements"] });
   }
 }
 
@@ -202,5 +204,34 @@ export function useDeleteDepense(prestataireId?: number) {
     mutationFn: async (id: number) =>
       unwrap(await client.DELETE("/api/depenses/{depense_id}", { params: { path: { depense_id: id } } })),
     onSuccess: () => invalidate(qc, prestataireId),
+  });
+}
+
+export function useProviderReglements(id: number | null, page: number) {
+  return useQuery({
+    enabled: id != null,
+    queryKey: ["pr-reglements", id, page],
+    queryFn: async () =>
+      unwrap(
+        await client.GET("/api/prestataires/{prestataire_id}/reglements", {
+          params: {
+            path: { prestataire_id: id! },
+            query: { limit: PAGE_SIZE, offset: page * PAGE_SIZE },
+          },
+        }),
+      ),
+  });
+}
+
+export function useDepenseReglements(depenseId: number | null) {
+  return useQuery({
+    enabled: depenseId != null,
+    queryKey: ["depense-reglements", depenseId],
+    queryFn: async () =>
+      unwrap(
+        await client.GET("/api/depenses/{depense_id}/reglements", {
+          params: { path: { depense_id: depenseId! } },
+        }),
+      ),
   });
 }

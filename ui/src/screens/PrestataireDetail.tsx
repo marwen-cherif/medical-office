@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowLeft, Check, FolderOpen, Plus, Receipt, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, Check, FolderOpen, History, Plus, Receipt, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Pagination } from "@/components/common/Pagination";
@@ -11,6 +11,9 @@ import { PrestataireFormDialog } from "@/components/dialogs/PrestataireFormDialo
 import { DepenseDialog } from "@/components/dialogs/DepenseDialog";
 import { ReglerDepenseDialog } from "@/components/dialogs/ReglerDepenseDialog";
 import { ImportFactureDialog } from "@/components/dialogs/ImportFactureDialog";
+import { DepenseReglementsDialog } from "@/components/dialogs/DepenseReglementsDialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ReglementsTab } from "./prestataire-detail/ReglementsTab";
 import { humanizeError } from "@/lib/errors";
 import { useShortcut } from "@/lib/shortcuts";
 import { depenseStatut, fmtDevise, isoToFr } from "@/lib/format";
@@ -59,8 +62,8 @@ export function PrestataireDetail() {
   const s = detail.summary;
 
   return (
-    <div className="mx-auto max-w-5xl p-8">
-      <div className="mb-6 flex items-center gap-3">
+    <div className="mx-auto max-w-6xl p-6">
+      <div className="mb-4 flex items-center gap-3">
         <Button
           variant="ghost"
           size="icon"
@@ -77,20 +80,38 @@ export function PrestataireDetail() {
         </Tooltip>
       </div>
 
-      <IdentityCard p={p} />
+      <div className="flex flex-col gap-6 lg:flex-row">
+        <aside className="space-y-4 lg:w-72 lg:shrink-0">
+          <IdentityCard p={p} />
+          <MoneySummary
+            layout="column"
+            items={[
+              { label: "Total dû", value: s.du },
+              { label: "Réglé", value: s.regle, tone: "green" },
+              { label: "Reste à payer", value: s.reste, tone: "amber" },
+            ]}
+          />
+        </aside>
 
-      <div className="mt-4">
-        <MoneySummary
-          items={[
-            { label: "Total dû", value: s.du },
-            { label: "Réglé", value: s.regle, tone: "green" },
-            { label: "Reste à payer", value: s.reste, tone: "amber" },
-          ]}
-        />
+        <div className="min-w-0 flex-1">
+          <Tabs defaultValue="factures">
+            <TabsList>
+              <TabsTrigger value="factures">Factures</TabsTrigger>
+              <TabsTrigger value="depenses">Dépenses</TabsTrigger>
+              <TabsTrigger value="reglements">Règlements</TabsTrigger>
+            </TabsList>
+            <TabsContent value="factures">
+              <FacturesSection key={id} id={id} />
+            </TabsContent>
+            <TabsContent value="depenses">
+              <DepensesSection key={id} id={id} />
+            </TabsContent>
+            <TabsContent value="reglements">
+              <ReglementsTab key={id} prestataireId={id} />
+            </TabsContent>
+          </Tabs>
+        </div>
       </div>
-
-      <FacturesSection id={id} />
-      <DepensesSection id={id} />
 
       {edit && (
         <PrestataireFormDialog target={edit} onClose={() => setEdit(null)} />
@@ -241,6 +262,7 @@ function DepensesSection({ id }: { id: number }) {
   const [page, setPage] = useState(0);
   const [newOpen, setNewOpen] = useState(false);
   const [regler, setRegler] = useState<Depense | null>(null);
+  const [history, setHistory] = useState<Depense | null>(null);
 
   const depensesQ = useProviderDepenses(id, page);
   const delDepense = useDeleteDepense(id);
@@ -294,6 +316,17 @@ function DepensesSection({ id }: { id: number }) {
                       <Check className="size-4" />
                     </Button>
                   )}
+                  {d.montant_regle > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="Consulter les règlements"
+                      className="text-navy"
+                      onClick={() => setHistory(d)}
+                    >
+                      <History className="size-4" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -320,6 +353,7 @@ function DepensesSection({ id }: { id: number }) {
 
       <DepenseDialog open={newOpen} onClose={() => setNewOpen(false)} prestataireId={id} />
       <ReglerDepenseDialog depense={regler} prestataireId={id} onClose={() => setRegler(null)} />
+      <DepenseReglementsDialog depense={history} onClose={() => setHistory(null)} />
     </section>
   );
 }

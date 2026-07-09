@@ -1270,6 +1270,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/prestataires/{prestataire_id}/reglements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Prestataire Reglements List */
+        get: operations["prestataire_reglements_list_api_prestataires__prestataire_id__reglements_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/depenses/{depense_id}/reglements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Depense Reglements List */
+        get: operations["depense_reglements_list_api_depenses__depense_id__reglements_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs": {
         parameters: {
             query?: never;
@@ -1670,6 +1704,23 @@ export interface components {
             date_echeance?: string | null;
             /** Date Paiement */
             date_paiement?: string | null;
+            /** Created At */
+            created_at?: string | null;
+        };
+        /** DepenseReglementOut */
+        DepenseReglementOut: {
+            /** Id */
+            id: number;
+            /** Depense Id */
+            depense_id: number;
+            /** Montant */
+            montant: number;
+            /** Mode */
+            mode?: string | null;
+            /** Motif */
+            motif?: string | null;
+            /** Date Reglement */
+            date_reglement?: string | null;
             /** Created At */
             created_at?: string | null;
         };
@@ -2503,6 +2554,32 @@ export interface components {
             adresse?: string | null;
             /** Notes */
             notes?: string | null;
+        };
+        /** PrestataireReglementListOut */
+        PrestataireReglementListOut: {
+            /** Items */
+            items: components["schemas"]["PrestataireReglementOut"][];
+            /** Total */
+            total: number;
+        };
+        /** PrestataireReglementOut */
+        PrestataireReglementOut: {
+            /** Id */
+            id: number;
+            /** Depense Id */
+            depense_id: number;
+            /** Depense Libelle */
+            depense_libelle?: string | null;
+            /** Montant */
+            montant: number;
+            /** Mode */
+            mode?: string | null;
+            /** Motif */
+            motif?: string | null;
+            /** Date Reglement */
+            date_reglement?: string | null;
+            /** Created At */
+            created_at?: string | null;
         };
         /** PrestationIn */
         PrestationIn: {
@@ -8323,6 +8400,143 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OkOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prestataire_reglements_list_api_prestataires__prestataire_id__reglements_get: {
+        parameters: {
+            query?: {
+                limit?: number | null;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                prestataire_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrestataireReglementListOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    depense_reglements_list_api_depenses__depense_id__reglements_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                depense_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DepenseReglementOut"][];
                 };
             };
             /** @description Bad Request */
