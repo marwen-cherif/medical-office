@@ -7,12 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { humanizeError } from "@/lib/errors";
 import { DEVISE_SYMBOLE } from "@/lib/format";
 import { useActeCategories, useCreateActe, useUpdateActe } from "@/hooks/queries";
@@ -80,13 +81,13 @@ export function ActeFormDialog({
   }
 
   return (
-    <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <form className="grid gap-4" onSubmit={handleSubmit(onSubmit)}>
-          <DialogHeader>
-            <DialogTitle>{target === "new" ? "Nouvel acte" : "Modifier l'acte"}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
+    <Sheet open={!!target} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent>
+        <form className="flex h-full flex-col" onSubmit={handleSubmit(onSubmit)}>
+          <SheetHeader>
+            <SheetTitle>{target === "new" ? "Nouvel acte" : "Modifier l'acte"}</SheetTitle>
+          </SheetHeader>
+          <SheetBody className="space-y-3">
             <div className="space-y-2">
               <Label htmlFor="a-lib">Libellé</Label>
               <Input id="a-lib" autoFocus {...register("libelle")} />
@@ -117,15 +118,15 @@ export function ActeFormDialog({
                 ))}
               </datalist>
             </div>
-          </div>
-          <DialogFooter>
+          </SheetBody>
+          <SheetFooter>
             <Button type="button" variant="secondary" onClick={onClose}>Annuler</Button>
             <Button type="submit" disabled={isSubmitting || create.isPending || update.isPending}>
               Enregistrer
             </Button>
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

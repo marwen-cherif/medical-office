@@ -6,13 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { humanizeError } from "@/lib/errors";
 import {
@@ -135,18 +136,18 @@ export function EmailsTab() {
         </Table>
       </div>
 
-      <Dialog open={!!editTarget} onOpenChange={(o) => !o && setEditTarget(null)}>
-        <DialogContent>
-          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); onSave(); }}>
-            <DialogHeader>
-              <DialogTitle>
+      <Sheet open={!!editTarget} onOpenChange={(o) => !o && setEditTarget(null)}>
+        <SheetContent>
+          <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); onSave(); }}>
+            <SheetHeader>
+              <SheetTitle>
                 {editTarget === "new" ? "Nouveau modèle d'email" : "Modifier le modèle d'email"}
-              </DialogTitle>
-              <DialogDescription>
+              </SheetTitle>
+              <SheetDescription>
                 L'identifiant correspond au template transactionnel défini dans Mailjet.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3">
+              </SheetDescription>
+            </SheetHeader>
+            <SheetBody className="space-y-3">
               <div className="space-y-2">
                 <Label htmlFor="mt-name">Nom</Label>
                 <Input id="mt-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
@@ -156,16 +157,16 @@ export function EmailsTab() {
                 <Input id="mt-id" inputMode="numeric" value={mailjetId}
                   onChange={(e) => setMailjetId(e.target.value)} placeholder="ex. 1234567" />
               </div>
-            </div>
-            <DialogFooter>
+            </SheetBody>
+            <SheetFooter>
               <Button type="button" variant="secondary" onClick={() => setEditTarget(null)}>Annuler</Button>
               <Button type="submit" disabled={create.isPending || update.isPending}>
                 Enregistrer
               </Button>
-            </DialogFooter>
+            </SheetFooter>
           </form>
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

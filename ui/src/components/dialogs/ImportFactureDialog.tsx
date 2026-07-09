@@ -7,12 +7,13 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DatePicker } from "@/components/common/DatePicker";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   Select,
   SelectContent,
@@ -155,13 +156,13 @@ export function ImportFactureDialog({
     ia.tone === "green" ? "text-green" : ia.tone === "amber" ? "text-amber" : "text-muted";
 
   return (
-    <Dialog open={!!file} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-          <DialogHeader>
-            <DialogTitle>Importer une facture</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
+    <Sheet open={!!file} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent>
+        <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+          <SheetHeader>
+            <SheetTitle>Importer une facture</SheetTitle>
+          </SheetHeader>
+          <SheetBody className="space-y-3">
             {file && (
               <p className="truncate text-xs text-muted">Fichier : {file.name}</p>
             )}
@@ -244,18 +245,18 @@ export function ImportFactureDialog({
               </>
             )}
             {error && <p className="text-xs text-red">{error}</p>}
-          </div>
-          <DialogFooter>
+          </SheetBody>
+          <SheetFooter>
             <Button type="button" variant="secondary" onClick={onClose}>
               Annuler
             </Button>
             <Button type="submit" disabled={saving}>
               <Upload className="size-4" /> Importer
             </Button>
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }
 

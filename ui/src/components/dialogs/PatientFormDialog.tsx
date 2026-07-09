@@ -6,12 +6,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { DatePicker } from "@/components/common/DatePicker";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { humanizeError } from "@/lib/errors";
 import { useCreatePatient, useUpdatePatient } from "@/hooks/patients";
 import type { Patient } from "@/api/types";
@@ -81,13 +82,13 @@ export function PatientFormDialog({
   }
 
   return (
-    <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-          <DialogHeader>
-            <DialogTitle>{isEdit ? "Modifier le patient" : "Nouveau patient"}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
+    <Sheet open={!!target} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent>
+        <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+          <SheetHeader>
+            <SheetTitle>{isEdit ? "Modifier le patient" : "Nouveau patient"}</SheetTitle>
+          </SheetHeader>
+          <SheetBody className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label htmlFor="pt-nom">Nom</Label>
@@ -122,13 +123,13 @@ export function PatientFormDialog({
               <Textarea id="pt-notes" rows={2} value={form.notes} onChange={(e) => set("notes")(e.target.value)} />
             </div>
             {error && <p className="text-xs text-red">{error}</p>}
-          </div>
-          <DialogFooter>
+          </SheetBody>
+          <SheetFooter>
             <Button type="button" variant="secondary" onClick={onClose}>Annuler</Button>
             <Button type="submit" disabled={create.isPending || update.isPending}>Enregistrer</Button>
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

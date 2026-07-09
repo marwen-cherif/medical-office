@@ -5,12 +5,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DatePicker } from "@/components/common/DatePicker";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   Select,
   SelectContent,
@@ -70,14 +71,14 @@ export function ReglerDepenseDialog({
   }
 
   return (
-    <Dialog open={!!depense} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-          <DialogHeader>
-            <DialogTitle>Régler la dépense</DialogTitle>
-          </DialogHeader>
+    <Sheet open={!!depense} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent>
+        <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+          <SheetHeader>
+            <SheetTitle>Régler la dépense</SheetTitle>
+          </SheetHeader>
           {depense && (
-            <div className="space-y-3 py-2">
+            <SheetBody className="space-y-3">
               <MontantRow label="Total dû" value={depense.montant} />
               <MontantRow label="Déjà réglé" value={depense.montant_regle} />
               <MontantRow label="Reste à payer" value={depense.reste} />
@@ -107,14 +108,14 @@ export function ReglerDepenseDialog({
               </div>
               <ResteApresReglement reste={depense.reste} saisi={saisi} label="Reste à payer après versement" />
               {error && <p className="text-xs text-red">{error}</p>}
-            </div>
+            </SheetBody>
           )}
-          <DialogFooter>
+          <SheetFooter>
             <Button type="button" variant="secondary" onClick={onClose}>Annuler</Button>
             <Button type="submit" disabled={regler.isPending}>Enregistrer le versement</Button>
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

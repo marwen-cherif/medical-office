@@ -6,12 +6,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { humanizeError } from "@/lib/errors";
 import { useCreatePlan, useCreatePrestation, useUpdatePlan } from "@/hooks/clinical";
 import type { Plan } from "@/api/types";
@@ -98,13 +99,13 @@ export function PlanDialog({
   }
 
   return (
-    <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
-        <form className="grid gap-4 [&>*]:min-w-0" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-          <DialogHeader>
-            <DialogTitle>{isEdit ? "Modifier le plan" : "Nouveau plan de traitement"}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
+    <Sheet open={!!target} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent className="max-w-2xl">
+        <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+          <SheetHeader>
+            <SheetTitle>{isEdit ? "Modifier le plan" : "Nouveau plan de traitement"}</SheetTitle>
+          </SheetHeader>
+          <SheetBody className="space-y-3 [&>*]:min-w-0">
             <div className="space-y-2">
               <Label htmlFor="pl-titre">Titre</Label>
               <Input id="pl-titre" autoFocus value={titre} onChange={(e) => setTitre(e.target.value)} />
@@ -136,17 +137,17 @@ export function PlanDialog({
               </div>
             )}
             {error && <p className="text-xs text-red">{error}</p>}
-          </div>
-          <DialogFooter>
+          </SheetBody>
+          <SheetFooter>
             <Button type="button" variant="secondary" onClick={onClose}>Annuler</Button>
             {isEdit ? (
               <Button type="submit" disabled={busy}>Enregistrer</Button>
             ) : (
               <SaveWithNoteButton disabled={busy} onGenerate={() => submit(true)} />
             )}
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

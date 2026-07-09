@@ -7,12 +7,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   Select,
   SelectContent,
@@ -352,15 +353,15 @@ export function GenerateDialog({
   const onMontant = (id: number, value: string) => setMontants((m) => ({ ...m, [id]: value }));
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && !busy && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+    <Sheet open={open} onOpenChange={(o) => !o && !busy && onClose()}>
+      <SheetContent className="max-w-2xl">
         {/* Entrée dans un champ déclenche l'action principale « Générer » (do_print=false).
             Les autres actions (Brouillon, Générer et imprimer, Annuler) sont type="button". */}
-        <form className="grid gap-4 [&>*]:min-w-0" onSubmit={(e) => { e.preventDefault(); if (!busy) onGenerate(false); }}>
-          <DialogHeader>
-            <DialogTitle>{title}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
+        <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); if (!busy) onGenerate(false); }}>
+          <SheetHeader>
+            <SheetTitle>{title}</SheetTitle>
+          </SheetHeader>
+          <SheetBody className="space-y-3 [&>*]:min-w-0">
             <div className="grid grid-cols-[1fr_8rem] gap-3">
               <div className="space-y-2">
                 <Label>Modèle / type de document</Label>
@@ -527,8 +528,8 @@ export function GenerateDialog({
             )}
 
             {error && <p className="text-xs text-red">{error}</p>}
-          </div>
-          <DialogFooter className="flex-wrap gap-2">
+          </SheetBody>
+          <SheetFooter>
             <Button type="button" variant="secondary" onClick={onClose} disabled={busy}>Annuler</Button>
             <Button type="button" variant="secondary" onClick={onSaveDraft} disabled={busy}>
               <Save className="size-4" /> {draft ? "Enregistrer" : "Brouillon"}
@@ -539,9 +540,9 @@ export function GenerateDialog({
             <Button type="button" onClick={() => onGenerate(true)} disabled={busy}>
               <Printer className="size-4" /> Générer et imprimer
             </Button>
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

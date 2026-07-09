@@ -6,13 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   Table,
   TableBody,
@@ -224,73 +225,79 @@ export function ModelesTab() {
       ))}
 
       {/* Création */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
-          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); onCreate(); }}>
-            <DialogHeader>
-              <DialogTitle>Nouveau modèle</DialogTitle>
-              <DialogDescription>
+      <Sheet open={createOpen} onOpenChange={setCreateOpen}>
+        <SheetContent>
+          <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); onCreate(); }}>
+            <SheetHeader>
+              <SheetTitle>Nouveau modèle</SheetTitle>
+              <SheetDescription>
                 Un fichier .docx vide avec quelques balises est créé. Modifiez-le ensuite dans Word.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-2">
-              <Label htmlFor="tpl-name">Nom du modèle</Label>
-              <Input id="tpl-name" value={newName} onChange={(e) => setNewName(e.target.value)}
-                placeholder="ex. note_honoraires" autoFocus />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="tpl-new-cat">Catégorie (facultatif)</Label>
-              <CategoryField id="tpl-new-cat" value={newCategory} onChange={setNewCategory} />
-            </div>
-            <DialogFooter>
+              </SheetDescription>
+            </SheetHeader>
+            <SheetBody className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="tpl-name">Nom du modèle</Label>
+                <Input id="tpl-name" value={newName} onChange={(e) => setNewName(e.target.value)}
+                  placeholder="ex. note_honoraires" autoFocus />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="tpl-new-cat">Catégorie (facultatif)</Label>
+                <CategoryField id="tpl-new-cat" value={newCategory} onChange={setNewCategory} />
+              </div>
+            </SheetBody>
+            <SheetFooter>
               <Button type="button" variant="secondary" onClick={() => setCreateOpen(false)}>Annuler</Button>
               <Button type="submit" disabled={createTpl.isPending || setCategory.isPending}>Créer</Button>
-            </DialogFooter>
+            </SheetFooter>
           </form>
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
 
       {/* Renommer */}
-      <Dialog open={!!renameTarget} onOpenChange={(o) => !o && setRenameTarget(null)}>
-        <DialogContent>
-          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); onRename(); }}>
-            <DialogHeader>
-              <DialogTitle>Renommer le modèle</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-2">
-              <Label htmlFor="tpl-rename">Nouveau nom</Label>
-              <Input id="tpl-rename" value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)} autoFocus />
-            </div>
-            <DialogFooter>
+      <Sheet open={!!renameTarget} onOpenChange={(o) => !o && setRenameTarget(null)}>
+        <SheetContent>
+          <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); onRename(); }}>
+            <SheetHeader>
+              <SheetTitle>Renommer le modèle</SheetTitle>
+            </SheetHeader>
+            <SheetBody>
+              <div className="space-y-2">
+                <Label htmlFor="tpl-rename">Nouveau nom</Label>
+                <Input id="tpl-rename" value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)} autoFocus />
+              </div>
+            </SheetBody>
+            <SheetFooter>
               <Button type="button" variant="secondary" onClick={() => setRenameTarget(null)}>Annuler</Button>
               <Button type="submit" disabled={renameTpl.isPending}>Renommer</Button>
-            </DialogFooter>
+            </SheetFooter>
           </form>
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
 
       {/* Catégorie */}
-      <Dialog open={!!categoryTarget} onOpenChange={(o) => !o && setCategoryTarget(null)}>
-        <DialogContent>
-          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); onSaveCategory(); }}>
-            <DialogHeader>
-              <DialogTitle>Catégorie du modèle</DialogTitle>
-              <DialogDescription>
+      <Sheet open={!!categoryTarget} onOpenChange={(o) => !o && setCategoryTarget(null)}>
+        <SheetContent>
+          <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); onSaveCategory(); }}>
+            <SheetHeader>
+              <SheetTitle>Catégorie du modèle</SheetTitle>
+              <SheetDescription>
                 Texte libre. Laisser vide pour retirer la catégorie.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-2">
-              <Label htmlFor="tpl-cat">Catégorie</Label>
-              <CategoryField id="tpl-cat" value={categoryValue} onChange={setCategoryValue} />
-            </div>
-            <DialogFooter>
+              </SheetDescription>
+            </SheetHeader>
+            <SheetBody>
+              <div className="space-y-2">
+                <Label htmlFor="tpl-cat">Catégorie</Label>
+                <CategoryField id="tpl-cat" value={categoryValue} onChange={setCategoryValue} />
+              </div>
+            </SheetBody>
+            <SheetFooter>
               <Button type="button" variant="secondary" onClick={() => setCategoryTarget(null)}>Annuler</Button>
               <Button type="submit" disabled={setCategory.isPending}>Enregistrer</Button>
-            </DialogFooter>
+            </SheetFooter>
           </form>
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
 
       {/* Variables */}
       {varsTarget && (

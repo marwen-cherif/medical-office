@@ -3,12 +3,13 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   Select,
   SelectContent,
@@ -102,13 +103,13 @@ export function PrestationDialog({
   }
 
   return (
-    <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
-        <form className="grid gap-4 [&>*]:min-w-0" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-          <DialogHeader>
-            <DialogTitle>{isEdit ? "Modifier l'acte" : "Nouvel acte"}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
+    <Sheet open={!!target} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent className="max-w-2xl">
+        <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+          <SheetHeader>
+            <SheetTitle>{isEdit ? "Modifier l'acte" : "Nouvel acte"}</SheetTitle>
+          </SheetHeader>
+          <SheetBody className="space-y-3 [&>*]:min-w-0">
             <div className="space-y-2">
               <Label>Plan de traitement</Label>
               <Select value={planId} onValueChange={setPlanId}>
@@ -125,17 +126,17 @@ export function PrestationDialog({
             </div>
             <ActeCard value={card} onChange={setCard} defaultDenture={defaultDenture} />
             {error && <p className="text-xs text-red">{error}</p>}
-          </div>
-          <DialogFooter>
+          </SheetBody>
+          <SheetFooter>
             <Button type="button" variant="secondary" onClick={onClose}>Annuler</Button>
             {isEdit ? (
               <Button type="submit" disabled={busy}>Enregistrer</Button>
             ) : (
               <SaveWithNoteButton disabled={busy} onGenerate={() => submit(true)} />
             )}
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

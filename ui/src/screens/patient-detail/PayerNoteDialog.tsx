@@ -5,12 +5,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DatePicker } from "@/components/common/DatePicker";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   Select,
   SelectContent,
@@ -70,14 +71,14 @@ export function PayerNoteDialog({
   }
 
   return (
-    <Dialog open={!!paiement} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-          <DialogHeader>
-            <DialogTitle>Régler la note</DialogTitle>
-          </DialogHeader>
+    <Sheet open={!!paiement} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent>
+        <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+          <SheetHeader>
+            <SheetTitle>Régler la note</SheetTitle>
+          </SheetHeader>
           {paiement && (
-            <div className="space-y-3 py-2">
+            <SheetBody className="space-y-3">
               <p className="text-sm font-medium text-ink">{paiement.notes || "Note d'honoraires"}</p>
               <MontantRow label="Total dû" value={paiement.montant} />
               <MontantRow label="Déjà réglé" value={paiement.montant_regle} />
@@ -108,14 +109,14 @@ export function PayerNoteDialog({
               </div>
               <ResteApresReglement reste={paiement.reste ?? 0} saisi={saisi} />
               {error && <p className="text-xs text-red">{error}</p>}
-            </div>
+            </SheetBody>
           )}
-          <DialogFooter>
+          <SheetFooter>
             <Button type="button" variant="secondary" onClick={onClose}>Annuler</Button>
             <Button type="submit" disabled={regler.isPending}>Enregistrer</Button>
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

@@ -6,12 +6,13 @@ import { Label } from "@/components/ui/label";
 import { DatePicker } from "@/components/common/DatePicker";
 import { Combobox } from "@/components/common/Combobox";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   Select,
   SelectContent,
@@ -86,13 +87,13 @@ export function DepenseDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-          <DialogHeader>
-            <DialogTitle>Nouvelle dépense</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
+    <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent>
+        <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+          <SheetHeader>
+            <SheetTitle>Nouvelle dépense</SheetTitle>
+          </SheetHeader>
+          <SheetBody className="space-y-3">
             {!prestataireId && (
               <div className="space-y-2">
                 <Label htmlFor="d-prestataire">Prestataire</Label>
@@ -145,13 +146,13 @@ export function DepenseDialog({
               </div>
             </div>
             {error && <p className="text-xs text-red">{error}</p>}
-          </div>
-          <DialogFooter>
+          </SheetBody>
+          <SheetFooter>
             <Button type="button" variant="secondary" onClick={onClose}>Annuler</Button>
             <Button type="submit" disabled={create.isPending}>Ajouter la dépense</Button>
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

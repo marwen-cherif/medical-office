@@ -1,12 +1,13 @@
 import { useMemo } from "react";
 import { Keyboard } from "lucide-react";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { ShortcutKeys } from "@/components/common/Kbd";
 import { useShortcutsContext, type ShortcutDef } from "@/lib/shortcuts";
 
@@ -38,19 +39,19 @@ export function ShortcutsHelpDialog() {
   const groups = useMemo(() => sortedGroups(shortcuts), [shortcuts]);
 
   return (
-    <Dialog open={helpOpen} onOpenChange={(o) => !o && closeHelp()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+    <Sheet open={helpOpen} onOpenChange={(o) => !o && closeHelp()}>
+      <SheetContent>
+        <SheetHeader>
+          <SheetTitle className="flex items-center gap-2">
             <Keyboard className="size-5 text-navy" /> Raccourcis clavier
-          </DialogTitle>
-          <DialogDescription>
+          </SheetTitle>
+          <SheetDescription>
             Toutes les actions sont accessibles au clavier. Appuyez sur{" "}
             <ShortcutKeys keys="?" /> à tout moment pour rouvrir cette carte.
-          </DialogDescription>
-        </DialogHeader>
+          </SheetDescription>
+        </SheetHeader>
 
-        <div className="grid max-h-[60vh] gap-x-8 gap-y-5 overflow-auto pr-1 sm:grid-cols-2">
+        <SheetBody className="grid gap-x-8 gap-y-5 sm:grid-cols-2">
           {groups.map(([group, items]) => (
             <section key={group} className="space-y-1.5">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-navy">{group}</h3>
@@ -75,8 +76,8 @@ export function ShortcutsHelpDialog() {
           {groups.length === 0 && (
             <p className="text-sm text-muted">Aucun raccourci disponible sur cet écran.</p>
           )}
-        </div>
-      </DialogContent>
-    </Dialog>
+        </SheetBody>
+      </SheetContent>
+    </Sheet>
   );
 }

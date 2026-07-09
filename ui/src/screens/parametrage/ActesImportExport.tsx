@@ -3,12 +3,13 @@ import { toast } from "sonner";
 import { Download, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { humanizeError } from "@/lib/errors";
 import { useExportActes, useImportActes } from "@/hooks/queries";
 import type { ActeImport } from "@/api/types";
@@ -73,41 +74,45 @@ export function ActesImportExport({ includeInactive }: { includeInactive: boolea
         <Upload className="size-4" /> Importer
       </Button>
 
-      <Dialog open={!!report} onOpenChange={(o) => !o && setReport(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Compte-rendu de l'import</DialogTitle>
-          </DialogHeader>
-          {report && (
-            <div className="space-y-3 py-2 text-sm">
-              <ul className="space-y-1 text-ink">
-                <li>
-                  Actes créés : <strong>{report.created}</strong>
-                </li>
-                <li>
-                  Actes mis à jour : <strong>{report.updated}</strong>
-                </li>
-                <li>
-                  Lignes ignorées : <strong>{report.skipped}</strong>
-                </li>
-              </ul>
-              {report.errors.length > 0 && (
-                <div className="space-y-1">
-                  <p className="font-medium text-red">Lignes non importées :</p>
-                  <ul className="max-h-48 space-y-1 overflow-auto rounded-[var(--radius)] border border-line bg-white p-2 text-xs text-muted">
-                    {report.errors.map((msg, i) => (
-                      <li key={i}>{msg}</li>
-                    ))}
+      <Sheet open={!!report} onOpenChange={(o) => !o && setReport(null)}>
+        <SheetContent>
+          <div className="flex h-full flex-col">
+            <SheetHeader>
+              <SheetTitle>Compte-rendu de l'import</SheetTitle>
+            </SheetHeader>
+            <SheetBody>
+              {report && (
+                <div className="space-y-3 text-sm">
+                  <ul className="space-y-1 text-ink">
+                    <li>
+                      Actes créés : <strong>{report.created}</strong>
+                    </li>
+                    <li>
+                      Actes mis à jour : <strong>{report.updated}</strong>
+                    </li>
+                    <li>
+                      Lignes ignorées : <strong>{report.skipped}</strong>
+                    </li>
                   </ul>
+                  {report.errors.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="font-medium text-red">Lignes non importées :</p>
+                      <ul className="max-h-48 space-y-1 overflow-auto rounded-[var(--radius)] border border-line bg-white p-2 text-xs text-muted">
+                        {report.errors.map((msg, i) => (
+                          <li key={i}>{msg}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          )}
-          <DialogFooter>
-            <Button onClick={() => setReport(null)}>Fermer</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </SheetBody>
+            <SheetFooter>
+              <Button onClick={() => setReport(null)}>Fermer</Button>
+            </SheetFooter>
+          </div>
+        </SheetContent>
+      </Sheet>
     </>
   );
 }
