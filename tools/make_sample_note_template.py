@@ -3,8 +3,10 @@ la capability `facturation-multi-lignes`).
 
 Pose `templates/note_multi_lignes_demo.docx` : un tableau avec UNE ligne-modele
 porteuse des balises de ligne `<L_*>` (dupliquee a la generation), une ligne de
-totaux, et un pied de page recapitulatif. Utilise uniquement python-docx (aucun
-Word requis pour CREER le modele ; Word reste requis pour GENERER la note).
+totaux, un pied de page recapitulatif, les balises de dents agregees
+`<DENTS>`/`<NB_DENTS>` et un schema dentaire `<ODONTOGRAMME>` (paragraphe dedie,
+capability schema-dentaire-notes). Utilise uniquement python-docx (aucun Word
+requis pour CREER le modele ; Word reste requis pour GENERER la note).
 
 Usage (depuis la racine du projet) :
     python -m tools.make_sample_note_template
@@ -49,6 +51,10 @@ def build(dest: Path) -> Path:
     p = doc.add_paragraph()
     _runs(p, "Patient : ", "<NOM>", " ", "<PRENOM>", "      Emise le : ", "<DATE>")
 
+    # Dents concernees (agregees) : balises document <DENTS> / <NB_DENTS>.
+    pd = doc.add_paragraph()
+    _runs(pd, "Dents concernees : ", "<DENTS>", "   (", "<NB_DENTS>", " dent(s))")
+
     doc.add_paragraph()
 
     # Tableau : entete + 1 ligne-modele <L_*> + ligne de totaux.
@@ -73,6 +79,17 @@ def build(dest: Path) -> Path:
     doc.add_paragraph()
     foot = doc.add_paragraph()
     _runs(foot, "Nombre d'actes : ", "<NB_ACTES>", "      Reste a payer : ", "<RESTE_A_PAYER>")
+
+    # Schema dentaire (image) : balise <ODONTOGRAMME> SEULE dans son paragraphe dedie
+    # (consigne : evite tout debordement ; remplacee a la generation par le schema
+    # anatomique des dents concernees). Capability schema-dentaire-notes.
+    doc.add_paragraph()
+    cap = doc.add_paragraph()
+    cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    cap.add_run("Schema des dents concernees").italic = True
+    schema = doc.add_paragraph()
+    schema.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    schema.add_run("<ODONTOGRAMME>")  # balise seule -> image inseree a sa place
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(dest))

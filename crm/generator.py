@@ -8,6 +8,7 @@ Reutilise src.doc_filler, src.pdf_to_jpg et src.mailer sans les modifier.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -16,8 +17,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
+from src import odontogram_render
 from src.config import Config
-from src.doc_filler import WordSession, format_montant
+from src.doc_filler import WordSession, classify_placeholders, format_montant
 from src.mailer import MailjetClient, MailjetError, log_mail
 from src.pdf_to_jpg import pdf_first_page_to_jpg
 
@@ -116,6 +118,11 @@ def import_facture(
 
 # Balises remplies automatiquement depuis la fiche patient (non demandees a l'ecran).
 AUTO_PATIENT_TAGS = {"NOM", "PRENOM", "EMAIL", "TELEPHONE", "ADRESSE", "DATE_NAISSANCE"}
+
+# Balises de note DERIVEES des dents, calculees a la generation : jamais saisies a
+# l'ecran (comme les balises patient). `<DENTS>` reste, lui, saisissable (via le bloc
+# de selection FDI dans le dialogue de generation). Cf. schema-dentaire-notes.
+DERIVED_NOTE_TAGS = {"NB_DENTS", "ODONTOGRAMME"}
 
 
 def _fmt_naissance(iso: Optional[str]) -> str:
@@ -276,6 +283,36 @@ def compute_totaux(lignes: list[dict]) -> dict[str, str]:
     }
 
 
+# --- Dents agregees + schema dentaire (schema-dentaire-notes) ------------------
+# Balises document derivees des dents des actes retenus : `<DENTS>` (liste FDI
+# agregee), `<NB_DENTS>` (compteur) et `<ODONTOGRAMME>` (schema image). Calcul au
+# rendu, LECTURE SEULE : n'affecte ni l'acte ni la dette.
+
+def _split_dents(raw) -> list[str]:
+    """Decoupe une saisie de dents (FDI) en jetons, comme `repo.normalize_dents`."""
+    return [t.strip() for t in re.split(r"[,;\n]+", str(raw or "")) if t.strip()]
+
+
+def _dents_sort_key(tok: str):
+    """Ordre FDI naturel (11,12,...,18,21,...,48,51,...) ; jetons non-FDI en fin."""
+    return (0, int(tok)) if repo.is_fdi_valide(tok) else (1, 2 ** 31, tok)
+
+
+def dents_tries(tokens) -> list[str]:
+    """Liste de dents dedupliquee (ordre preserve) puis triee en ordre FDI."""
+    seen: list[str] = []
+    for t in tokens:
+        if t not in seen:
+            seen.append(t)
+    return sorted(seen, key=_dents_sort_key)
+
+
+def dents_agregees(lignes: list[dict]) -> list[str]:
+    """Ensemble FDI agrege, deduplique et trie des dents de toutes les lignes retenues
+    (union mono/multi). Lecture seule (n'ecrit ni `prestations` ni dette)."""
+    return dents_tries(t for l in lignes for t in _split_dents(l.get("dents")))
+
+
 def _ligne_date_fr(iso) -> str:
     """Date d'une ligne ISO -> jj/mm/aaaa (sinon valeur brute)."""
     if not iso:
@@ -307,6 +344,84 @@ def get_lignes(variables: dict) -> Optional[list[dict]]:
     None pour un document mono-valeur (compat ascendante, design D7)."""
     lignes = variables.get(LIGNES_KEY)
     return lignes if isinstance(lignes, list) else None
+
+
+def is_note_autonome(variables: dict) -> bool:
+    """Vrai si la note ne reference AUCUN acte — i.e. une note mono-valeur (D2).
+
+    Une note multi-lignes porte toujours la cle `__lignes__` (actes existants ou
+    crees a la volee) : elle est donc adossee a des actes et n'est jamais autonome.
+    Seule une note autonome engendre une creance « note » a la generation (D1)."""
+    return get_lignes(variables) is None
+
+
+def _variables_of(document: Document) -> dict:
+    """Decode `document.variables` (JSON) en dict, tolerant (sinon dict vide)."""
+    if not document.variables:
+        return {}
+    try:
+        data = json.loads(document.variables)
+        return data if isinstance(data, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def create_note_creance(
+    conn: sqlite3.Connection, document: Document, *,
+    is_note: bool, has_actes: bool = False,
+    track: bool = True, montant_override: Optional[float] = None,
+) -> Optional["repo.Paiement"]:
+    """Cree la creance « note » d'une note AUTONOME a la generation (design D1-D3).
+
+    Une note autonome (sans acte rattache) porte elle-meme le du : on cree un
+    `paiement` en_attente rattache au document (`paiements.document_id`), visible page
+    Actes/Plans et dans Finances sans nouveau code de lecture (D1).
+
+    Gating strict contre le double-comptage : ne cree rien sauf si `is_note` est vrai
+    (un document d'un autre type n'engendre jamais de creance), la note ne reference
+    AUCUN acte, le montant effectif est `> 0`, et aucun paiement n'est deja rattache au
+    document (idempotence par `document_id`, D3). « Aucun acte » = note multi-lignes
+    sans lignes (`is_note_autonome`) **et** aucun acte selectionne/ajoute transmis a la
+    generation (`has_actes`) : une note **mono-valeur generee depuis un acte** est donc
+    adossee (pas de creance), l'acte restant la source du du. La creance est ensuite
+    INDEPENDANTE : regenerer/supprimer la note ne la touche pas (D3).
+
+    `track` (option utilisateur exposee a la generation, defaut True) : si faux, no-op —
+    la note est generee sans creance. `montant_override` (defaut None) : montant de la
+    creance, INDEPENDANT du montant affiche/imprime du document — None retombe sur
+    `document.montant`. Ce montant ne touche jamais le rendu du document.
+
+    Renvoie le paiement cree, ou None si aucune condition n'est remplie (no-op)."""
+    if not is_note:
+        return None
+    if has_actes or not is_note_autonome(_variables_of(document)):
+        return None  # note adossee a des actes : le du est porte par les actes
+    if not track:
+        return None  # suivi en attente desactive par l'utilisateur (D1)
+    montant = (float(montant_override) if montant_override is not None
+               else float(document.montant or 0))
+    if montant <= 0:
+        return None
+    if repo.get_paiement_by_document(conn, document.id) is not None:
+        return None  # creance deja creee pour ce document : pas de doublon (D3)
+    paiement = repo.create_paiement(
+        conn,
+        repo.Paiement(
+            id=None,
+            patient_id=document.patient_id,
+            document_id=document.id,
+            montant=montant,
+            statut="en_attente",
+            notes=document.acte or "Note d'honoraires",
+            date_echeance=None,
+        ),
+    )
+    repo.log_audit(
+        conn, "creance_note_creee",
+        {"document_id": document.id, "paiement_id": paiement.id, "montant": montant},
+        patient_id=document.patient_id,
+    )
+    return paiement
 
 
 def _first_ligne_date(lignes: list[dict]) -> Optional[date]:
@@ -470,21 +585,49 @@ def render_document(conn: sqlite3.Connection, document: Document) -> Document:
             repl["<DATE>"] = date.today().strftime("%d/%m/%Y")
         line_rows = [_ligne_to_row_repl(l) for l in lignes]
 
+    # Dents agregees (texte) + schema dentaire (image), capability schema-dentaire-notes.
+    # Source : lignes (note adossee aux actes) sinon le champ DENTS (note mono/autonome
+    # pre-rempli depuis l'acte). LECTURE SEULE : aucune ecriture base ni dette.
+    if lignes is not None:
+        dents = dents_agregees(lignes)
+        repl["<DENTS>"] = ", ".join(dents)
+        repl["<NB_DENTS>"] = str(len(dents))
+    elif variables.get("DENTS") is not None:
+        dents = dents_tries(_split_dents(variables.get("DENTS")))
+        repl["<DENTS>"] = ", ".join(dents)
+        repl["<NB_DENTS>"] = str(len(dents))
+    else:
+        dents = []
+
+    # Schema dentaire : rendu seulement si le modele porte la balise <ODONTOGRAMME> et
+    # qu'au moins une dent est concernee (sinon doc_filler vide la balise, pas d'image).
+    images: Optional[dict[str, Path]] = None
+    odontogramme_png: Optional[Path] = None
+    doc_tags, _ = classify_placeholders(template.path)
+    if "ODONTOGRAMME" in doc_tags and dents:
+        odontogramme_png = odontogram_render.render_png(dents)
+        if odontogramme_png is not None:
+            images = {"ODONTOGRAMME": odontogramme_png}
+
     try:
         with WordSession() as word:
             if ext == "pdf":
-                word.fill_and_export_pdf(template.path, repl, out_path, line_rows=line_rows)
+                word.fill_and_export_pdf(
+                    template.path, repl, out_path, line_rows=line_rows, images=images)
             else:
                 with tempfile.TemporaryDirectory() as tmp:
                     pdf_path = Path(tmp) / (out_path.stem + ".pdf")
                     word.fill_and_export_pdf(
-                        template.path, repl, pdf_path, line_rows=line_rows)
+                        template.path, repl, pdf_path, line_rows=line_rows, images=images)
                     pdf_first_page_to_jpg(pdf_path, out_path)
     except Exception as exc:  # noqa: BLE001
         document.statut = "erreur"
         document.message_erreur = f"{exc}\n{traceback.format_exc()}"
         repo.update_document(conn, document)
         raise
+    finally:
+        if odontogramme_png is not None:  # schema temporaire, jamais stocke
+            odontogramme_png.unlink(missing_ok=True)
 
     document.file_path = str(out_path)
     document.output_format = ext

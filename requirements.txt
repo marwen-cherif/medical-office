@@ -3,7 +3,15 @@ pymupdf>=1.24
 pywin32>=306
 pillow>=10        # impression directe des documents (rendu image -> imprimante)
 requests>=2.31
+openpyxl>=3.1     # import/export du referentiel d'actes en .xlsx (crm/import_actes.py)
 pyinstaller>=6.0
 
 # Interface graphique du CRM (crm_app.py / crm_web.py)
 flet>=0.28
+
+# Backend de services (sidecar) de l'UI React — cf. crm/server.py.
+# Reutilise le moteur (src/ + crm/ hors app.py) via une facade HTTP localhost.
+# SSE des operations longues : implemente avec StreamingResponse (pas de dep en plus).
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9   # upload des factures fournisseurs (UploadFile/Form)

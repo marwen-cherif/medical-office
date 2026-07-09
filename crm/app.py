@@ -148,6 +148,7 @@ _AUDIT_META = {
     "acte_supprime": ("actes", ft.Icons.DELETE_OUTLINE, "Acte supprimé"),
     "acte_regle": ("reglements", ft.Icons.PAYMENTS, "Acte réglé"),
     "reglement_cascade": ("reglements", ft.Icons.PAYMENTS, "Règlement réparti"),
+    "paiement_regle": ("reglements", ft.Icons.PAYMENTS, "Note réglée"),
     "paiement_encaisse": ("reglements", ft.Icons.CHECK_CIRCLE, "Paiement encaissé"),
     "paiement_annule": ("reglements", ft.Icons.CANCEL, "Paiement annulé"),
     "document_genere": ("documents", ft.Icons.DESCRIPTION, "Document généré"),
@@ -2183,7 +2184,7 @@ class CrmApp:
                 if data.get("lignes"):
                     sub += f" · {data['lignes']} créance(s)"
                 sublines.append(sub)
-            elif action in ("paiement_encaisse", "paiement_annule"):
+            elif action in ("paiement_regle", "paiement_encaisse", "paiement_annule"):
                 sub = _audit_montant(data.get("montant"))
                 if data.get("mode"):
                     sub += f" · {_MODE_LABELS.get(data['mode'], data['mode'])}"

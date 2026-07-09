@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+/* Palette reprise de crm/app.py (perio-dentalclinic : marine + turquoise).
+   Tailwind v4 : les tokens @theme deviennent des variables CSS + utilitaires. */
+@theme {
+  --color-navy: #10357f; /* accent principal (boutons, titres, icônes) */
+  --color-teal: #62ebe2; /* turquoise du cabinet (surbrillances) */
+  --color-teal-dark: #0c8b82; /* turquoise lisible sur fond clair */
+  --color-bg: #f2f5fa; /* fond froid clair */
+  --color-surface: #ffffff;
+  --color-ink: #191919; /* quasi-noir (titres, corps) */
+  --color-muted: #55585a; /* gris foncé lisible (WCAG AA) */
+  --color-line: #dce3ec; /* bordure froide */
+  --color-green: #1e7e45; /* encaissé / envoyé */
+  --color-red: #b5271b; /* erreurs */
+  --color-amber: #b45309; /* succès partiel */
+
+  --radius: 0.625rem;
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+* {
+  border-color: var(--color-line);
+}
+
+/* Tailwind v4 réinitialise `cursor: default` sur les <button> (comportement natif
+   du navigateur), contrairement à v3. On rétablit le curseur main sur les éléments
+   interactifs non désactivés — recommandation du guide de migration Tailwind v4. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}

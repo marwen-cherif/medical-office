@@ -37,17 +37,24 @@ python -m pip install -r requirements.txt   # install deps
 python crm_app.py         # CRM desktop window (Flet)
 python crm_web.py         # CRM in browser (set CRM_WEB=1 internally)
 python -m crm.reset       # wipe the SQLite DB + generated notes (asks confirmation)
+python -m crm.import_actes actes.xlsx          # bulk-load the actes catalogue from Excel
+python -m crm.import_actes --modele m.xlsx     # write a sample Excel to fill in
 
 # Build Windows executables (PyInstaller, Windows + Word required)
 .\build-crm.bat           # -> dist\Cabinet-CRM.exe + dist\Cabinet-CRM-Web.exe
 ```
 
 Double-clickable `.bat` wrappers exist for non-technical use: `run-crm.bat` /
-`run-crm-web.bat` (install deps + launch) and `reset.bat` (confirmed wipe). `reset.bat`
+`run-crm-web.bat` (install deps + launch), `reset.bat` (confirmed wipe) and
+`import-actes.bat` (load the actes catalogue from Excel). `reset.bat`
 prefers the built `Cabinet-CRM.exe --reset --yes` if present, else falls back to
 `python -m crm.reset --yes`. The frozen exe accepts `--reset` (optionally with `--yes`)
 as an entry-point flag handled in `crm_app.py` before the GUI starts; `crm.reset` itself
-takes `--yes` to skip the `SUPPRIMER` confirmation.
+takes `--yes` to skip the `SUPPRIMER` confirmation. `import-actes.bat` works the same way
+(menu: generate a blank template / import; drag-and-drop an `.xlsx` onto it to import
+directly): it prefers `Cabinet-CRM.exe --import-actes …` if present, else
+`python -m crm.import_actes …` (both forwarded to `crm.import_actes`, whose `--import-actes`
+entry-point flag is also handled in `crm_app.py`).
 
 CRM web env vars (`crm_web.py`, `crm/app.py`): `CRM_PORT` (default 8550),
 `CRM_HOST=0.0.0.0` to expose on the LAN.
@@ -177,12 +184,34 @@ tracée. La création est idempotente (ré-essai ⇒ mise à jour via `pres_id`,
 **Côté données / règles** : `crm/generator.py` projette chaque acte (`repo.Prestation`) en
 ligne **brute** `{ source, prestation_id?, date, acte, dents, note, montant, regle }`,
 sérialisée sous la **clé réservée `__lignes__`** de `documents.variables` (JSON, **aucune
-migration de schéma**) ; totaux et formats sont **recalculés au rendu**, jamais stockés.
-`documents.montant` reçoit le total **uniquement** pour l'affichage/email — **jamais comme
-créance** : conformément à « source unique du dû » (`plans-de-traitement`), générer une note
-**ne crée aucun paiement** (le dû éventuel est porté par les actes créés, pas par la note). `documents.acte_date` = 1re date des lignes (nom de fichier
-stable) ; `documents.acte` = résumé court. Les documents sans `__lignes__` se chargent/rendent
-comme avant (compat ascendante).
+migration de schéma**) ; totaux et formats sont **recalculés au rendu**, jamais stockés. Le
+`montant` d'une ligne adossée à un acte est un **montant de note éditable** (capability
+`notes-honoraires-creance-et-actes`) : défaut = montant de l'acte, **affichage seul** — il
+alimente `<L_MONTANT>` et les totaux **sans jamais modifier l'acte ni la dette** (l'acte reste
+la source du dû ; le `montant_note` édité est restitué à la réouverture d'un brouillon depuis
+`__lignes__`). L'override transite par `DraftIn.montants_notes` (map `prestation_id → montant`)
+et ne déclenche **aucune** écriture sur `prestations`. `documents.acte_date` = 1re date des
+lignes (nom de fichier stable) ; `documents.acte` = résumé court. Les documents sans
+`__lignes__` se chargent/rendent comme avant (compat ascendante).
+
+**Création de dette à la génération (règle conditionnelle)** : `documents.montant` reçoit le
+total **uniquement** pour l'affichage/email. Conformément à « source unique du dû »
+(`plans-de-traitement`), la génération d'une note applique une règle **conditionnelle** :
+- une note **adossée à des actes** (multi-lignes : `__lignes__` présent) **ne crée aucun
+  paiement** — le dû est porté par les actes ;
+- une note **autonome** (mono-valeur, sans acte rattaché ⇒ `generator.is_note_autonome`) crée,
+  **à la génération** (flux `generate`, pas au brouillon), une **créance « note »** : un
+  `paiement` en_attente rattaché au document (`paiements.document_id`), du montant de la note.
+  C'est `generator.create_note_creance` (gating `is_note` ∧ autonome ∧ `montant > 0` ∧ aucun
+  paiement déjà lié au document — idempotent via `repo.get_paiement_by_document`). La créance
+  est ensuite **indépendante** : régénérer/supprimer la note ne la touche pas (gérée à la main
+  via Encaisser / Annuler). Un document d'un **autre type** ne crée jamais de paiement.
+
+**Points d'entrée note depuis la page Actes/Plans** (`PlansActesTab`) : un **mode sélection**
+(cases à cocher) + barre « Générer une note d'honoraires (N) », et une action « Générer une
+note d'honoraires » dans le **menu ⋮** d'une ligne d'acte, ouvrent `GenerateDialog` (mode
+`note`) **pré-rempli** avec les actes pré-cochés (prop `initialSelection`) — aucune route
+backend dédiée, réutilise `selected_prestation_ids`.
 
 > **Abandon vs conception initiale** : pas d'**évaluateur de formules** (`src/formula.py` non
 > créé) — les totaux sont calculés en Python ; pas de migration `template_fields.scope/

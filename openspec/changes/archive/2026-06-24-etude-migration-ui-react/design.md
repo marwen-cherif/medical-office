@@ -1,3 +1,17 @@
+## Livrables de l'étude
+
+Ce `design.md` porte les **décisions** (D1–D7) et l'analyse de fond. Il est complété par
+quatre livrables consolidés dans le même dossier :
+
+- `cartographie.md` — inventaire exhaustif des 14 écrans Flet, composants et appels moteur :
+  **référentiel de complétude** opposable à la recette de parité (tâches 1.1–1.4).
+- `facade-services.md` — **façade de services** backend (une opération par cas d'usage UI),
+  contrat IPC (formats, codes d'erreur, progression) et **démonstration de préservation des
+  invariants** (tâches 2.1, 2.2, 2.4).
+- `risques-et-effort.md` — **registre des risques** (probabilité × impact × atténuation) et
+  **estimation d'effort par lot** L0–L5 (tâches 4.1, 4.2).
+- `tracabilite.md` — matrice **exigence → section** et verdict de complétude (tâche 6.1).
+
 ## Context
 
 Le CRM est une application de bureau **Windows** pour un cabinet dentaire. L'UI est écrite
