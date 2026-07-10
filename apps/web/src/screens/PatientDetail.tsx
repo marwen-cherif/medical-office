@@ -26,12 +26,12 @@ export function dentureFor(dateNaissance: string | null | undefined): 'adulte' |
   return age < 13 ? 'enfant' : 'adulte';
 }
 
-function IdRow({ label, value }: { label: string; value?: string | null }) {
+function IdRow({ label, value, multiline }: { label: string; value?: string | null; multiline?: boolean }) {
   return (
-    <div className="flex items-center justify-between gap-3 py-1 text-sm">
+    <div className={`flex justify-between gap-3 py-1 text-sm ${multiline ? 'items-start' : 'items-center'}`}>
       <span className="text-muted">{label}</span>
       {value ? (
-        <ClickToCopy text={value} className="text-right text-ink" />
+        <ClickToCopy text={value} multiline={multiline} className="text-right text-ink max-w-[180px] lg:max-w-none" />
       ) : (
         <span className="text-right text-ink">—</span>
       )}
@@ -83,11 +83,11 @@ export function PatientDetail() {
             <IdRow label="Email" value={patient.email} />
             <IdRow label="Téléphone" value={patient.telephone} />
             <IdRow label="Naissance" value={isoToFr(patient.date_naissance)} />
-            <IdRow label="Adresse" value={patient.adresse} />
+            <IdRow label="Adresse" value={patient.adresse} multiline />
             {patient.notes && (
               <div className="mt-2 border-t border-line pt-2 text-sm">
-                <div className="text-muted">Notes</div>
-                <div className="whitespace-pre-wrap text-ink">{patient.notes}</div>
+                <div className="text-muted mb-1">Notes</div>
+                <ClickToCopy text={patient.notes} multiline className="text-ink text-left w-full" />
               </div>
             )}
           </div>
