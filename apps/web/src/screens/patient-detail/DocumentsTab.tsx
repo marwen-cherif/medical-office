@@ -64,6 +64,7 @@ export function DocumentsTab({
   const categories = useCategories();
   const [gen, setGen] = useState<GenState>(null);
   const [waSelectDoc, setWaSelectDoc] = useState<DocumentT | null>(null);
+  const [waMeSelectDoc, setWaMeSelectDoc] = useState<DocumentT | null>(null);
 
   function handleSendWhatsAppClick(d: DocumentT) {
     const phones = patient.telephones || [];
@@ -149,29 +150,32 @@ export function DocumentsTab({
             label: 'Ouvrir dans WhatsApp (wa.me)',
             icon: ExternalLink,
             onClick: async () => {
-              try {
-                await copyToClipboard.mutateAsync(d.id);
-                toast.success('Document copié dans le presse-papiers.');
-              } catch (e) {
-                toast.error(humanizeError(e));
+              const phones = patient.telephones || [];
+              if (phones.length > 1) {
+                setWaMeSelectDoc(d);
+              } else {
+                try {
+                  await copyToClipboard.mutateAsync(d.id);
+                  toast.success('Document copié dans le presse-papiers.');
+                } catch (e) {
+                  toast.error(humanizeError(e));
+                }
+
+                const defaultCountry = waSettings.data?.default_country || '+216';
+                const docCatName = d.categorie || '';
+                const categoryObj = categories.data?.find(c => c.nom === docCatName);
+                const rawTemplate = categoryObj?.whatsapp_message || waSettings.data?.fallback_message || "Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>.";
+                
+                const docLabel = humanize(d.type).toLowerCase();
+                const text = rawTemplate
+                  .replace(/<PRENOM>/g, patient.prenom || '')
+                  .replace(/<NOM>/g, patient.nom || '')
+                  .replace(/<DOCUMENT>/g, docLabel);
+
+                const targetPhone = phones[0]?.telephone || patient.telephone;
+                const url = formatWaMeUrl(targetPhone || '', defaultCountry, text);
+                window.open(url, '_blank');
               }
-
-              const defaultCountry = waSettings.data?.default_country || '+216';
-              const docCatName = d.categorie || '';
-              const categoryObj = categories.data?.find(c => c.nom === docCatName);
-              const rawTemplate = categoryObj?.whatsapp_message || waSettings.data?.fallback_message || "Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>.";
-              
-              const docLabel = humanize(d.type).toLowerCase();
-              const text = rawTemplate
-                .replace(/<PRENOM>/g, patient.prenom || '')
-                .replace(/<NOM>/g, patient.nom || '')
-                .replace(/<DOCUMENT>/g, docLabel);
-
-              const targetPhone = (patient.telephones && patient.telephones.length > 0)
-                ? (patient.telephones.find(t => t.is_whatsapp)?.telephone || patient.telephones[0].telephone)
-                : patient.telephone;
-              const url = formatWaMeUrl(targetPhone || '', defaultCountry, text);
-              window.open(url, '_blank');
             },
           },
           d.statut === 'envoye' && {
@@ -309,6 +313,39 @@ export function DocumentsTab({
             );
           }
           setWaSelectDoc(null);
+        }}
+      />
+
+      <SendWhatsAppDialog
+        patient={patient}
+        isOpen={!!waMeSelectDoc}
+        onClose={() => setWaMeSelectDoc(null)}
+        title="Ouvrir dans WhatsApp (wa.me)"
+        confirmLabel="Ouvrir"
+        onConfirm={async (phone) => {
+          if (waMeSelectDoc) {
+            try {
+              await copyToClipboard.mutateAsync(waMeSelectDoc.id);
+              toast.success('Document copié dans le presse-papiers.');
+            } catch (e) {
+              toast.error(humanizeError(e));
+            }
+
+            const defaultCountry = waSettings.data?.default_country || '+216';
+            const docCatName = waMeSelectDoc.categorie || '';
+            const categoryObj = categories.data?.find(c => c.nom === docCatName);
+            const rawTemplate = categoryObj?.whatsapp_message || waSettings.data?.fallback_message || "Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>.";
+            
+            const docLabel = humanize(waMeSelectDoc.type).toLowerCase();
+            const text = rawTemplate
+              .replace(/<PRENOM>/g, patient.prenom || '')
+              .replace(/<NOM>/g, patient.nom || '')
+              .replace(/<DOCUMENT>/g, docLabel);
+
+            const url = formatWaMeUrl(phone, defaultCountry, text);
+            window.open(url, '_blank');
+          }
+          setWaMeSelectDoc(null);
         }}
       />
     </div>

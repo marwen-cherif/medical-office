@@ -15,11 +15,17 @@ export function SendWhatsAppDialog({
   isOpen,
   onClose,
   onConfirm,
+  title = "Sélectionner le numéro destinataire",
+  description,
+  confirmLabel = "Envoyer",
 }: {
   patient: Patient | null;
   isOpen: boolean;
   onClose: () => void;
   onConfirm: (phone: string) => void;
+  title?: string;
+  description?: string;
+  confirmLabel?: string;
 }) {
   const [selectedPhone, setSelectedPhone] = useState('');
 
@@ -29,12 +35,10 @@ export function SendWhatsAppDialog({
   useEffect(() => {
     if (isOpen && phones.length > 0) {
       const waCompat = phones.find((t) => t.is_whatsapp);
-      if (waCompat) {
-        setSelectedPhone(waCompat.telephone);
-      } else {
-        setSelectedPhone(phones[0].telephone);
-      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSelectedPhone(waCompat ? waCompat.telephone : phones[0].telephone);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, patient]);
 
   if (!patient) return null;
@@ -43,17 +47,21 @@ export function SendWhatsAppDialog({
     <Dialog open={isOpen} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-[420px]">
         <DialogHeader>
-          <DialogTitle>Sélectionner le numéro destinataire</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-3 py-2">
           <p className="text-sm text-muted">
-            Le patient <strong>{patient.display}</strong> possède plusieurs numéros de téléphone. Choisissez la ligne cible pour l'envoi WhatsApp :
+            {description || (
+              <>
+                Le patient <strong>{patient.display}</strong> possède plusieurs numéros de téléphone. Choisissez la ligne cible pour l&apos;envoi WhatsApp :
+              </>
+            )}
           </p>
 
           {!hasWaCompatible && phones.length > 0 && (
             <div className="rounded-[var(--radius)] border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-              ⚠️ Aucun numéro n'est déclaré compatible avec WhatsApp pour ce patient. Vous pouvez toutefois tenter l'envoi sur l'un d'eux.
+              {"⚠️ Aucun numéro n'est déclaré compatible avec WhatsApp pour ce patient. Vous pouvez toutefois tenter l'envoi sur l'un d'eux."}
             </div>
           )}
 
@@ -97,7 +105,7 @@ export function SendWhatsAppDialog({
             Annuler
           </Button>
           <Button onClick={() => onConfirm(selectedPhone)} disabled={!selectedPhone}>
-            Envoyer
+            {confirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

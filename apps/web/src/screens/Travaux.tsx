@@ -58,7 +58,7 @@ import {
 } from '@/hooks/documents';
 import { useWhatsAppSettings, useFeatureSettings } from '@/hooks/queries';
 import { useBatch, useJobs, type JobFilter } from '@/hooks/jobs';
-import type { DocumentRow, Patient } from '@/api/types';
+import type { DocumentRow, Patient, DocumentT } from '@/api/types';
 import { SendWhatsAppDialog } from '@/components/dialogs/SendWhatsAppDialog';
 
 /**
@@ -138,11 +138,12 @@ function DocumentsTab() {
   const waSettings = useWhatsAppSettings();
   const features = useFeatureSettings();
   const [waSelectDoc, setWaSelectDoc] = useState<{ id: number; patient: Patient } | null>(null);
+  const [waMeSelectDoc, setWaMeSelectDoc] = useState<{ document: DocumentT; patient: Patient } | null>(null);
 
   const isWhatsAppEnabled = !!features.data?.whatsapp_api_enabled;
   const isEmailingEnabled = features.data?.emailing_enabled ?? true;
 
-  const items = q.data?.items ?? [];
+  const items = useMemo(() => q.data?.items ?? [], [q.data?.items]);
   const batchKind = batchKindFor(statut);
   const selectable = batchKind != null;
 
@@ -328,6 +329,7 @@ function DocumentsTab() {
                 onPrint={onPrint}
                 onSend={onSend}
                 onSendWhatsApp={onSendWhatsApp}
+                onOpenWaMe={(document, patient) => setWaMeSelectDoc({ document, patient })}
                 pendingRender={render.isPending}
                 pendingSend={send.isPending}
                 pendingSendWhatsApp={sendWhatsApp.isPending}
@@ -366,6 +368,24 @@ function DocumentsTab() {
           setWaSelectDoc(null);
         }}
       />
+
+      <SendWhatsAppDialog
+        patient={waMeSelectDoc?.patient ?? null}
+        isOpen={!!waMeSelectDoc}
+        onClose={() => setWaMeSelectDoc(null)}
+        title="Ouvrir dans WhatsApp (wa.me)"
+        confirmLabel="Ouvrir"
+        onConfirm={(phone) => {
+          if (waMeSelectDoc) {
+            const { document: d, patient: pat } = waMeSelectDoc;
+            const text = `Bonjour ${pat.display}, voici votre ${humanize(d.type).toLowerCase()}.`;
+            const defaultCountry = waSettings.data?.default_country || '+216';
+            const url = formatWaMeUrl(phone, defaultCountry, text);
+            window.open(url, '_blank');
+          }
+          setWaMeSelectDoc(null);
+        }}
+      />
     </div>
   );
 }
@@ -380,6 +400,7 @@ function DocumentRowItem({
   onPrint,
   onSend,
   onSendWhatsApp,
+  onOpenWaMe,
   pendingRender,
   pendingSend,
   pendingSendWhatsApp,
@@ -396,6 +417,7 @@ function DocumentRowItem({
   onPrint: (id: number) => void;
   onSend: (id: number) => void;
   onSendWhatsApp: (id: number, patient: Patient) => void;
+  onOpenWaMe: (d: DocumentT, patient: Patient) => void;
   pendingRender: boolean;
   pendingSend: boolean;
   pendingSendWhatsApp: boolean;
@@ -504,12 +526,15 @@ function DocumentRowItem({
                 size="icon"
                 title="Ouvrir dans WhatsApp (wa.me)"
                 onClick={() => {
-                  const text = `Bonjour ${row.patient.display}, voici votre ${humanize(d.type).toLowerCase()}.`;
-                  const targetPhone = (row.patient.telephones && row.patient.telephones.length > 0)
-                    ? (row.patient.telephones.find(t => t.is_whatsapp)?.telephone || row.patient.telephones[0].telephone)
-                    : row.patient.telephone;
-                  const url = formatWaMeUrl(targetPhone || '', defaultCountry, text);
-                  window.open(url, '_blank');
+                  const phones = row.patient.telephones || [];
+                  if (phones.length > 1) {
+                    onOpenWaMe(d, row.patient);
+                  } else {
+                    const text = `Bonjour ${row.patient.display}, voici votre ${humanize(d.type).toLowerCase()}.`;
+                    const targetPhone = phones[0]?.telephone || row.patient.telephone;
+                    const url = formatWaMeUrl(targetPhone || '', defaultCountry, text);
+                    window.open(url, '_blank');
+                  }
                 }}
               >
                 <ExternalLink className="size-4" />
