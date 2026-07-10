@@ -7,9 +7,7 @@ Refondre la page de détail d'un patient en une disposition à **colonne d'ident
 Documents, Règlements, Historique). La refonte est **à parité fonctionnelle** : aucune
 action ni raccourci existant n'est retiré, et le comportement est identique en mode desktop
 et en mode web (même code `crm/app.py`).
-
 ## Requirements
-
 ### Requirement: Disposition en colonne d'identité figée et contenu en onglets
 
 La page de détail d'un patient SHALL être organisée en deux zones horizontales : une
@@ -35,8 +33,10 @@ affiché.
 La colonne d'identité SHALL afficher de façon compacte : le bouton de retour à la liste,
 le nom affiché du patient, ses coordonnées (email, téléphone), sa date de naissance, son
 adresse, et un résumé des montants clés (au moins « Dû » et « Reste à recouvrer »). Elle
-SHALL contenir le bouton « Modifier » donnant accès à l'édition de la fiche. L'email et le
-téléphone SHALL rester cliquables pour copie, comme dans la fiche actuelle.
+SHALL contenir le bouton « Modifier » donnant accès à l'édition de la fiche. Les coordonnées
+du patient (email, téléphone, date de naissance, adresse) SHALL être présentées de façon à
+ne pas déborder ni avoir de retour à la ligne indésirable, et SHALL intégrer le mécanisme
+de copie rapide `ClickToCopy` pour pouvoir être copiées d'un simple clic.
 
 #### Scenario: Coordonnées et montants visibles d'emblée
 
@@ -46,8 +46,8 @@ téléphone SHALL rester cliquables pour copie, comme dans la fiche actuelle.
 
 #### Scenario: Copie d'une coordonnée
 
-- **WHEN** l'utilisateur clique sur l'email ou le téléphone dans la colonne d'identité
-- **THEN** la valeur est copiée dans le presse-papiers
+- **WHEN** l'utilisateur clique sur l'email, le téléphone, l'adresse ou la date de naissance dans la colonne d'identité
+- **THEN** la valeur associée est copiée dans le presse-papiers via le composant ClickToCopy
 
 #### Scenario: Édition depuis l'identité
 
@@ -127,3 +127,4 @@ SHALL être retiré par la refonte.
 - **THEN** chaque action existante (générer, imprimer, envoyer, régler, ajouter/éditer/
   supprimer plan et acte, modifier la fiche) reste accessible dans l'un des onglets ou la
   colonne d'identité
+

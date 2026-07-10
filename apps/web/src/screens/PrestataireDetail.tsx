@@ -15,6 +15,7 @@ import { DepenseReglementsDialog } from '@/components/dialogs/DepenseReglementsD
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ReglementsTab } from './prestataire-detail/ReglementsTab';
 import { humanizeError } from '@/lib/errors';
+import { ClickToCopy } from '@/components/ui/click-to-copy';
 import { useShortcut } from '@/lib/shortcuts';
 import { depenseStatut, fmtDevise, isoToFr } from '@/lib/format';
 import { Montant } from '@/components/common/Montant';
@@ -120,9 +121,13 @@ export function PrestataireDetail() {
 
 function Row({ label, value }: { label: string; value: string | null | undefined }) {
   return (
-    <div className="flex gap-3 py-1.5 text-sm">
+    <div className="flex gap-3 py-1.5 text-sm items-center">
       <span className="w-28 shrink-0 text-muted">{label}</span>
-      <span className="min-w-0 flex-1 break-words text-ink">{value || '—'}</span>
+      {value ? (
+        <ClickToCopy text={value} className="min-w-0 flex-1 break-words text-ink" />
+      ) : (
+        <span className="min-w-0 flex-1 text-ink">—</span>
+      )}
     </div>
   );
 }

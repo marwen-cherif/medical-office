@@ -2,18 +2,17 @@
 
 ## Purpose
 TBD - Fiche d'un prestataire (fournisseur) contenant son identité, son récap monétaire, ses factures, ses dépenses et ses règlements.
-
 ## Requirements
-
 ### Requirement: Layout en deux colonnes de la fiche prestataire
 La fiche d'un prestataire (fournisseur) SHALL adopter une mise en page en deux colonnes :
-- Un volet latéral gauche contenant les coordonnées du prestataire (email, téléphone, adresse, notes) et un résumé financier consolidé (`MoneySummary` avec les montants Dû, Réglé, Reste).
+- Un volet latéral gauche contenant les coordonnées du prestataire (email, téléphone, adresse, notes) et un résumé financier consolidé (`MoneySummary` avec les montants Dû, Réglé, Reste). Les informations de coordonnées (email, téléphone, adresse) SHALL intégrer le mécanisme de copie rapide `ClickToCopy` et SHALL être formatées sans retour à la ligne indésirable.
 - Un panneau principal contenant trois onglets (`Tabs`) : "Factures", "Dépenses" et "Règlements".
 
 #### Scenario: Visualisation de la fiche prestataire
 - **WHEN** l'utilisateur navigue sur la fiche d'un prestataire existant
 - **THEN** l'interface affiche à gauche les informations d'identité et le `MoneySummary`
 - **THEN** l'interface affiche à droite les trois onglets "Factures", "Dépenses" et "Règlements"
+- **AND** les coordonnées (email, téléphone, adresse) sont affichées avec le composant ClickToCopy pour copie rapide
 
 ### Requirement: Onglet Règlements de la fiche prestataire
 L'onglet "Règlements" SHALL afficher un historique chronologique paginé de tous les règlements (versements) effectués pour le prestataire.
@@ -55,3 +54,4 @@ Ce point d'accès SHALL renvoyer la liste de tous les règlements associés à l
 #### Scenario: Récupération des règlements d'une dépense via l'API
 - **WHEN** le client envoie une requête GET sur `/api/depenses/1/reglements`
 - **THEN** le serveur répond avec un code de statut 200 et la liste des règlements de la dépense 1, contenant pour chacun `id`, `depense_id`, `montant`, `mode`, `motif`, `date_reglement`, `created_at`
+

@@ -15,6 +15,7 @@ import { PlansActesTab } from './patient-detail/PlansActesTab';
 import { DocumentsTab } from './patient-detail/DocumentsTab';
 import { ReglementsTab } from './patient-detail/ReglementsTab';
 import { HistoriqueTab } from './patient-detail/HistoriqueTab';
+import { ClickToCopy } from '@/components/ui/click-to-copy';
 
 /** Denture par défaut selon l'âge (enfant si < 13 ans). */
 export function dentureFor(dateNaissance: string | null | undefined): 'adulte' | 'enfant' {
@@ -27,9 +28,13 @@ export function dentureFor(dateNaissance: string | null | undefined): 'adulte' |
 
 function IdRow({ label, value }: { label: string; value?: string | null }) {
   return (
-    <div className="flex justify-between gap-3 py-1 text-sm">
+    <div className="flex items-center justify-between gap-3 py-1 text-sm">
       <span className="text-muted">{label}</span>
-      <span className="text-right text-ink">{value || '—'}</span>
+      {value ? (
+        <ClickToCopy text={value} className="text-right text-ink" />
+      ) : (
+        <span className="text-right text-ink">—</span>
+      )}
     </div>
   );
 }
