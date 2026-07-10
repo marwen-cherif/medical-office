@@ -224,3 +224,19 @@ export function parseDents(raw: string | null | undefined): string[] {
     .map((s) => s.trim())
     .filter(Boolean);
 }
+
+export function formatWaMeUrl(phone: string, defaultCountry: string, text: string): string {
+  let digits = phone.replace(/[^\d]/g, '');
+  if (phone.startsWith('00')) {
+    digits = digits.slice(2);
+  } else if (phone.startsWith('+')) {
+    // Keep digits from slice
+  } else {
+    if (digits.startsWith('0')) {
+      digits = digits.slice(1);
+    }
+    const countryDigits = defaultCountry.replace(/[^\d]/g, '') || '216';
+    digits = countryDigits + digits;
+  }
+  return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+}

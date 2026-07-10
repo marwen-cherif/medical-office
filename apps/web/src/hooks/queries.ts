@@ -8,7 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client, unwrap, streamJob, type JobEvent } from '@/lib/api';
 import { backend } from '@/lib/bridge';
-import type { ActeExport, ActeImport, ActeIn, Field, MailTemplateIn } from '@/api/types';
+import type { ActeExport, ActeImport, ActeIn, Field, MailTemplateIn, WhatsAppSettingsIn } from '@/api/types';
 
 export const keys = {
   templates: ['templates'] as const,
@@ -18,6 +18,7 @@ export const keys = {
   mailTemplates: ['mail-templates'] as const,
   printers: ['printers'] as const,
   printTypes: ['settings', 'print-types'] as const,
+  whatsappSettings: ['settings', 'whatsapp'] as const,
   actes: (search: string, includeInactive: boolean, categorie?: string) =>
     ['actes', { search, includeInactive, categorie: categorie ?? null }] as const,
   acteCategories: (includeInactive: boolean) =>
@@ -383,5 +384,21 @@ export function useImportActes() {
       return resp.json() as Promise<ActeImport>;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['actes'] }),
+  });
+}
+
+export function useWhatsAppSettings() {
+  return useQuery({
+    queryKey: keys.whatsappSettings,
+    queryFn: async () => unwrap(await client.GET('/api/settings/whatsapp')),
+  });
+}
+
+export function useSetWhatsAppSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: WhatsAppSettingsIn) =>
+      unwrap(await client.PUT('/api/settings/whatsapp', { body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.whatsappSettings }),
   });
 }

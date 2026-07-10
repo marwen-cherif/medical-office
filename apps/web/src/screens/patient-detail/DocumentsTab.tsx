@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
 import {
+  ExternalLink,
   FileImage,
   FileText,
   FolderOpen,
+  MessageSquare,
   Pencil,
   PlayCircle,
   Printer,
@@ -18,16 +20,19 @@ import { RowActions } from '@/components/common/RowActions';
 import { Tooltip } from '@/components/common/Tooltip';
 import { humanizeError } from '@/lib/errors';
 import { useShortcut } from '@/lib/shortcuts';
-import { docStatut, fmtDevise, humanize, isoToFr } from '@/lib/format';
+import { docStatut, fmtDevise, formatWaMeUrl, humanize, isoToFr } from '@/lib/format';
 import {
   useDeleteDocument,
   useOpenDocument,
   usePatientDocuments,
   usePrintDocument,
   useRefreshStatus,
+  useRefreshWhatsAppStatus,
   useRenderDocument,
   useSendDocument,
+  useSendWhatsApp,
 } from '@/hooks/documents';
+import { useWhatsAppSettings } from '@/hooks/queries';
 import type { DocumentT, Patient } from '@/api/types';
 import { GenerateDialog } from './GenerateDialog';
 
@@ -48,7 +53,10 @@ export function DocumentsTab({
   const send = useSendDocument();
   const open = useOpenDocument();
   const refresh = useRefreshStatus();
+  const sendWhatsApp = useSendWhatsApp();
+  const refreshWhatsApp = useRefreshWhatsAppStatus();
   const del = useDeleteDocument();
+  const waSettings = useWhatsAppSettings();
   const [gen, setGen] = useState<GenState>(null);
 
   useShortcut([
@@ -74,6 +82,8 @@ export function DocumentsTab({
     const isDraft = d.statut === 'brouillon';
     const isError = d.statut === 'erreur';
     const canSend = !!d.email && (d.statut === 'en_attente_envoi' || d.statut === 'erreur_envoi');
+    const canSendWhatsApp = !!patient.telephone && d.has_file && d.statut !== 'brouillon';
+    const canRefreshWhatsApp = !!d.whatsapp_message_id;
     return (
       <RowActions
         actions={[
@@ -107,11 +117,34 @@ export function DocumentsTab({
             icon: Send,
             onClick: () => withToast(send.mutateAsync({ id: d.id, body: {} }), 'Email envoyé.'),
           },
+          canSendWhatsApp && {
+            key: 'send-whatsapp',
+            label: 'Envoyer par WhatsApp (Meta)',
+            icon: MessageSquare,
+            onClick: () => withToast(sendWhatsApp.mutateAsync({ id: d.id }), 'Document envoyé par WhatsApp.'),
+          },
+          canSendWhatsApp && {
+            key: 'open-wa-me',
+            label: 'Ouvrir dans WhatsApp (wa.me)',
+            icon: ExternalLink,
+            onClick: () => {
+              const defaultCountry = waSettings.data?.default_country || '+216';
+              const text = `Bonjour ${patient.prenom || ''} ${patient.nom || ''}, voici votre ${humanize(d.type).toLowerCase()}.`;
+              const url = formatWaMeUrl(patient.telephone || '', defaultCountry, text);
+              window.open(url, '_blank');
+            },
+          },
           d.statut === 'envoye' && {
             key: 'refresh',
             label: 'Rafraîchir le statut',
             icon: RefreshCw,
             onClick: () => withToast(refresh.mutateAsync({ id: d.id }), 'Statut mis à jour.'),
+          },
+          canRefreshWhatsApp && {
+            key: 'refresh-whatsapp',
+            label: 'Rafraîchir statut WhatsApp',
+            icon: RefreshCw,
+            onClick: () => withToast(refreshWhatsApp.mutateAsync({ id: d.id }), 'Statut WhatsApp mis à jour.'),
           },
           (isDraft || isError) && {
             key: 'delete',
@@ -179,9 +212,24 @@ export function DocumentsTab({
                     {d.montant != null ? ` — ${fmtDevise(d.montant)}` : ''}
                   </div>
                   <div className="text-xs text-muted">
-                    {d.statut === 'envoye'
-                      ? `Livraison : ${d.mailjet_status || 'envoyé'}${d.mailjet_opened_at ? ' · ouvert' : ''}${d.mailjet_clicked_at ? ' · cliqué' : ''}`
-                      : isoToFr(d.date_generation) || 'Brouillon'}
+                    {(() => {
+                      const mailInfo = (d.mailjet_status || d.mailjet_opened_at || d.mailjet_clicked_at)
+                        ? `Email : ${d.mailjet_status || 'envoyé'}${d.mailjet_opened_at ? ' · ouvert' : ''}${d.mailjet_clicked_at ? ' · cliqué' : ''}`
+                        : '';
+                      const waStatusText = d.whatsapp_status === 'read'
+                        ? 'lu'
+                        : d.whatsapp_status === 'delivered'
+                        ? 'remis'
+                        : d.whatsapp_status === 'sent'
+                        ? 'envoyé'
+                        : d.whatsapp_status || 'envoyé';
+                      const waInfo = d.whatsapp_message_id
+                        ? `WhatsApp : ${waStatusText}`
+                        : '';
+                      const deliveryInfo = [mailInfo, waInfo].filter(Boolean).join(' | ');
+                      if (deliveryInfo) return `Livraison : ${deliveryInfo}`;
+                      return isoToFr(d.date_generation) || 'Brouillon';
+                    })()}
                     {d.message_erreur ? ` · ${d.message_erreur}` : ''}
                   </div>
                 </div>

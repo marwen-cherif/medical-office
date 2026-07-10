@@ -53,6 +53,10 @@ class DocumentOut(BaseModel):
     mailjet_opened_at: Optional[str] = None
     mailjet_clicked_at: Optional[str] = None
     message_erreur: Optional[str] = None
+    whatsapp_message_id: Optional[str] = None
+    whatsapp_status: Optional[str] = None
+    whatsapp_date_envoi: Optional[str] = None
+    whatsapp_date_refresh: Optional[str] = None
     has_file: bool = False
     variables: Any = None
 
@@ -188,6 +192,10 @@ def document_out(d: repo.Document) -> DocumentOut:
         mailjet_opened_at=d.mailjet_opened_at,
         mailjet_clicked_at=d.mailjet_clicked_at,
         message_erreur=d.message_erreur,
+        whatsapp_message_id=d.whatsapp_message_id,
+        whatsapp_status=d.whatsapp_status,
+        whatsapp_date_envoi=d.whatsapp_date_envoi,
+        whatsapp_date_refresh=d.whatsapp_date_refresh,
         has_file=has_file,
         variables=_parse_vars(d.variables),
     )
@@ -845,6 +853,99 @@ def open_document(document_id: int) -> core.OkOut:
     except Exception as exc:  # noqa: BLE001
         raise core.ApiError(core.ERR_VALIDATION, f"Ouverture impossible : {exc}")
     return core.OkOut()
+
+
+def _load_whatsapp_settings(conn) -> dict[str, str]:
+    keys = [
+        "whatsapp_phone_number_id",
+        "whatsapp_access_token",
+        "whatsapp_template_name",
+        "default_country",
+    ]
+    return {k: repo.get_setting(conn, k) or "" for k in keys}
+
+
+@router.post(
+    "/documents/{document_id}/send-whatsapp",
+    response_model=core.JobAcceptedOut,
+    status_code=202,
+)
+def send_whatsapp(document_id: int) -> core.JobAcceptedOut:
+    with core.db() as conn:
+        d = repo.get_document(conn, document_id)
+        if d is None:
+            raise core.ApiError(core.ERR_NOT_FOUND, "Document introuvable.", status=404)
+        patient = repo.get_patient(conn, d.patient_id)
+        if patient is None:
+            raise core.ApiError(core.ERR_NOT_FOUND, "Patient introuvable.", status=404)
+        
+        settings = _load_whatsapp_settings(conn)
+        if not settings.get("whatsapp_phone_number_id") or not settings.get("whatsapp_access_token"):
+            raise core.ApiError(
+                "CONFIG_ERROR",
+                "Configuration WhatsApp incomplète (Phone Number ID ou Token manquant).",
+                status=400,
+            )
+        if not patient.telephone:
+            raise core.ApiError(
+                "VALIDATION_ERROR",
+                "Le patient n'a pas de numéro de téléphone.",
+                status=400,
+            )
+
+    def task(report):
+        report(0.2, "Envoi via WhatsApp…")
+        conn = db_connect()
+        try:
+            doc = repo.get_document(conn, document_id)
+            pat = repo.get_patient(conn, doc.patient_id)
+            whatsapp_settings = _load_whatsapp_settings(conn)
+            generator.send_document_whatsapp(conn, doc, pat, whatsapp_settings)
+            report(1.0, "Document envoyé via WhatsApp.")
+            return {"document_id": document_id}
+        finally:
+            conn.close()
+
+    return core.JobAcceptedOut(job_id=core.submit_job(task))
+
+
+@router.post(
+    "/documents/{document_id}/refresh-whatsapp-status",
+    response_model=core.JobAcceptedOut,
+    status_code=202,
+)
+def refresh_whatsapp_status(document_id: int) -> core.JobAcceptedOut:
+    with core.db() as conn:
+        d = repo.get_document(conn, document_id)
+        if d is None:
+            raise core.ApiError(core.ERR_NOT_FOUND, "Document introuvable.", status=404)
+        if not d.whatsapp_message_id:
+            raise core.ApiError(
+                "VALIDATION_ERROR",
+                "Ce document n'a pas été envoyé par WhatsApp.",
+                status=400,
+            )
+        settings = _load_whatsapp_settings(conn)
+        if not settings.get("whatsapp_phone_number_id") or not settings.get("whatsapp_access_token"):
+            raise core.ApiError(
+                "CONFIG_ERROR",
+                "Configuration WhatsApp incomplète.",
+                status=400,
+            )
+
+    def task(report):
+        report(0.3, "Mise à jour du statut WhatsApp…")
+        conn = db_connect()
+        try:
+            doc = repo.get_document(conn, document_id)
+            whatsapp_settings = _load_whatsapp_settings(conn)
+            status = generator.refresh_whatsapp_status(conn, doc, whatsapp_settings)
+            report(1.0, "Statut WhatsApp mis à jour.")
+            return {"status": status}
+        finally:
+            conn.close()
+
+    return core.JobAcceptedOut(job_id=core.submit_job(task))
 
 
 @router.delete("/documents/{document_id}", response_model=core.OkOut)

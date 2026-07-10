@@ -93,6 +93,10 @@ class Document:
     mailjet_opened_at: Optional[str] = None  # 1re ouverture (tracking Mailjet)
     mailjet_clicked_at: Optional[str] = None  # 1er clic (tracking Mailjet)
     categorie: Optional[str] = None  # snapshot de la categorie du modele (v8)
+    whatsapp_message_id: Optional[str] = None
+    whatsapp_status: Optional[str] = None
+    whatsapp_date_envoi: Optional[str] = None
+    whatsapp_date_refresh: Optional[str] = None
 
 
 @dataclass
@@ -389,6 +393,18 @@ def _row_to_document(row: sqlite3.Row) -> Document:
             row["mailjet_clicked_at"] if "mailjet_clicked_at" in row.keys() else None
         ),
         categorie=row["categorie"] if "categorie" in row.keys() else None,
+        whatsapp_message_id=(
+            row["whatsapp_message_id"] if "whatsapp_message_id" in row.keys() else None
+        ),
+        whatsapp_status=(
+            row["whatsapp_status"] if "whatsapp_status" in row.keys() else None
+        ),
+        whatsapp_date_envoi=(
+            row["whatsapp_date_envoi"] if "whatsapp_date_envoi" in row.keys() else None
+        ),
+        whatsapp_date_refresh=(
+            row["whatsapp_date_refresh"] if "whatsapp_date_refresh" in row.keys() else None
+        ),
     )
 
 
@@ -398,8 +414,9 @@ def create_document(conn: sqlite3.Connection, d: Document) -> Document:
            (patient_id, type, template, acte, montant, acte_date, file_path,
             output_format, statut, date_generation, date_envoi, email,
             mailjet_message_id, mailjet_status, date_refresh_status, message_erreur,
-            variables, categorie)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            variables, categorie, whatsapp_message_id, whatsapp_status,
+            whatsapp_date_envoi, whatsapp_date_refresh)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             d.patient_id,
             d.type,
@@ -419,6 +436,10 @@ def create_document(conn: sqlite3.Connection, d: Document) -> Document:
             d.message_erreur,
             d.variables,
             d.categorie,
+            d.whatsapp_message_id,
+            d.whatsapp_status,
+            d.whatsapp_date_envoi,
+            d.whatsapp_date_refresh,
         ),
     )
     conn.commit()
@@ -432,7 +453,8 @@ def update_document(conn: sqlite3.Connection, d: Document) -> None:
              type=?, template=?, acte=?, montant=?, acte_date=?, file_path=?,
              output_format=?, statut=?, date_generation=?, date_envoi=?, email=?,
              mailjet_message_id=?, mailjet_status=?, date_refresh_status=?, message_erreur=?,
-             variables=?, mailjet_opened_at=?, mailjet_clicked_at=?, categorie=?
+             variables=?, mailjet_opened_at=?, mailjet_clicked_at=?, categorie=?,
+             whatsapp_message_id=?, whatsapp_status=?, whatsapp_date_envoi=?, whatsapp_date_refresh=?
            WHERE id=?""",
         (
             d.type,
@@ -454,6 +476,10 @@ def update_document(conn: sqlite3.Connection, d: Document) -> None:
             d.mailjet_opened_at,
             d.mailjet_clicked_at,
             d.categorie,
+            d.whatsapp_message_id,
+            d.whatsapp_status,
+            d.whatsapp_date_envoi,
+            d.whatsapp_date_refresh,
             d.id,
         ),
     )

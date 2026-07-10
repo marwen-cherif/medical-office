@@ -251,3 +251,45 @@ export function useDeleteDocument() {
     onSuccess: () => invalidateAfterDoc(qc),
   });
 }
+
+export function useSendWhatsApp() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      onEvent,
+    }: {
+      id: number;
+      onEvent?: (e: JobEvent) => void;
+    }) => {
+      const accepted = unwrap(
+        await client.POST('/api/documents/{document_id}/send-whatsapp', {
+          params: { path: { document_id: id } },
+        })
+      );
+      await streamJob(accepted.job_id, onEvent ?? (() => {}));
+    },
+    onSuccess: () => invalidateAfterDoc(qc),
+  });
+}
+
+export function useRefreshWhatsAppStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      onEvent,
+    }: {
+      id: number;
+      onEvent?: (e: JobEvent) => void;
+    }) => {
+      const accepted = unwrap(
+        await client.POST('/api/documents/{document_id}/refresh-whatsapp-status', {
+          params: { path: { document_id: id } },
+        })
+      );
+      await streamJob(accepted.job_id, onEvent ?? (() => {}));
+    },
+    onSuccess: () => invalidateAfterDoc(qc),
+  });
+}

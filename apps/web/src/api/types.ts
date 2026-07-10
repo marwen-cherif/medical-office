@@ -16,6 +16,8 @@ export type ActeIn = S['ActeIn'];
 export type ActeList = S['ActeListOut'];
 export type ActeImport = S['ActeImportOut'];
 export type ActeExport = S['ActeExportOut'];
+export type WhatsAppSettings = S['WhatsAppSettingsOut'];
+export type WhatsAppSettingsIn = S['WhatsAppSettingsIn'];
 
 // --- Patients ----------------------------------------------------------------
 export type Patient = S['PatientOut'];

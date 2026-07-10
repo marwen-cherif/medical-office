@@ -3,11 +3,13 @@ import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   ChevronRight,
+  ExternalLink,
   FileText,
   FolderOpen,
   Hammer,
   Image as ImageIcon,
   Mail,
+  MessageSquare,
   PlayCircle,
   Printer,
   Send,
@@ -38,6 +40,7 @@ import { humanizeError } from '@/lib/errors';
 import {
   docStatut,
   fmtDevise,
+  formatWaMeUrl,
   humanize,
   isoToFr,
   isoToFrDateTime,
@@ -50,8 +53,10 @@ import {
   usePrintDocument,
   useRenderDocument,
   useSendDocument,
+  useSendWhatsApp,
   type DocFilter,
 } from '@/hooks/documents';
+import { useWhatsAppSettings } from '@/hooks/queries';
 import { useBatch, useJobs, type JobFilter } from '@/hooks/jobs';
 import type { DocumentRow } from '@/api/types';
 
@@ -127,7 +132,9 @@ function DocumentsTab() {
   const open = useOpenDocument();
   const print = usePrintDocument();
   const send = useSendDocument();
+  const sendWhatsApp = useSendWhatsApp();
   const batch = useBatch();
+  const waSettings = useWhatsAppSettings();
 
   const items = q.data?.items ?? [];
   const batchKind = batchKindFor(statut);
@@ -185,6 +192,16 @@ function DocumentsTab() {
       { id, body: {} },
       {
         onSuccess: () => toast.success('Document envoyé.'),
+        onError: (e) => toast.error(humanizeError(e)),
+      }
+    );
+  }
+
+  function onSendWhatsApp(id: number) {
+    sendWhatsApp.mutate(
+      { id },
+      {
+        onSuccess: () => toast.success('Document envoyé par WhatsApp.'),
         onError: (e) => toast.error(humanizeError(e)),
       }
     );
@@ -294,8 +311,11 @@ function DocumentsTab() {
                 onOpen={onOpen}
                 onPrint={onPrint}
                 onSend={onSend}
+                onSendWhatsApp={onSendWhatsApp}
                 pendingRender={render.isPending}
                 pendingSend={send.isPending}
+                pendingSendWhatsApp={sendWhatsApp.isPending}
+                defaultCountry={waSettings.data?.default_country || '+216'}
               />
             ))}
             {!q.isLoading && items.length === 0 && (
@@ -323,8 +343,11 @@ function DocumentRowItem({
   onOpen,
   onPrint,
   onSend,
+  onSendWhatsApp,
   pendingRender,
   pendingSend,
+  pendingSendWhatsApp,
+  defaultCountry,
 }: {
   row: DocumentRow;
   selectable: boolean;
@@ -334,8 +357,11 @@ function DocumentRowItem({
   onOpen: (id: number) => void;
   onPrint: (id: number) => void;
   onSend: (id: number) => void;
+  onSendWhatsApp: (id: number) => void;
   pendingRender: boolean;
   pendingSend: boolean;
+  pendingSendWhatsApp: boolean;
+  defaultCountry: string;
 }) {
   const d = row.document;
   const st = docStatut(d.statut);
@@ -345,6 +371,7 @@ function DocumentRowItem({
 
   const needsGeneration = d.statut === 'brouillon' || d.statut === 'erreur';
   const canSend = !!d.email && (d.statut === 'en_attente_envoi' || d.statut === 'erreur_envoi');
+  const canSendWhatsApp = !!row.patient.telephone && d.has_file && d.statut !== 'brouillon';
 
   return (
     <TableRow>
@@ -416,6 +443,32 @@ function DocumentRowItem({
             >
               <Send className="size-4" />
             </Button>
+          )}
+          {canSendWhatsApp && (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Envoyer par WhatsApp (Meta)"
+                className="text-navy"
+                disabled={pendingSendWhatsApp}
+                onClick={() => onSendWhatsApp(d.id)}
+              >
+                <MessageSquare className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Ouvrir dans WhatsApp (wa.me)"
+                onClick={() => {
+                  const text = `Bonjour ${row.patient.display}, voici votre ${humanize(d.type).toLowerCase()}.`;
+                  const url = formatWaMeUrl(row.patient.telephone || '', defaultCountry, text);
+                  window.open(url, '_blank');
+                }}
+              >
+                <ExternalLink className="size-4" />
+              </Button>
+            </>
           )}
         </div>
       </TableCell>

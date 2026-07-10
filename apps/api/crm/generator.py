@@ -21,6 +21,7 @@ from src import odontogram_render
 from src.config import Config
 from src.doc_filler import WordSession, classify_placeholders, format_montant
 from src.mailer import MailjetClient, MailjetError, log_mail
+from src.whatsapp import WhatsAppClient, WhatsAppError, log_whatsapp
 from src.pdf_to_jpg import pdf_first_page_to_jpg
 
 from . import repo, templates
@@ -838,3 +839,162 @@ def refresh_mail_status(
         pass
     repo.update_document(conn, document)
     return status
+
+
+def normalize_phone_number(phone: str, default_country: str = "+216") -> str:
+    """Normalise un numéro de téléphone au format international E.164."""
+    if not phone:
+        raise ValueError("Le numéro de téléphone est vide.")
+    
+    cleaned = "".join(c for c in phone if c.isdigit() or c == "+")
+    
+    if cleaned.startswith("00"):
+        cleaned = "+" + cleaned[2:]
+        
+    if cleaned.startswith("+"):
+        digits_only = cleaned[1:]
+        if not digits_only.isdigit() or len(digits_only) < 7 or len(digits_only) > 15:
+            raise ValueError(f"Le numéro international '{phone}' n'est pas au format E.164 plausible.")
+        return cleaned
+    
+    if cleaned.startswith("0") and not cleaned.startswith("+"):
+        cleaned = cleaned[1:]
+        
+    prefix = default_country if default_country.startswith("+") else ("+" + default_country)
+    result = prefix + cleaned
+    
+    digits_only = result[1:]
+    if not digits_only.isdigit() or len(digits_only) < 7 or len(digits_only) > 15:
+        raise ValueError(f"Le numéro normalisé '{result}' n'est pas au format E.164 plausible.")
+        
+    return result
+
+
+def send_document_whatsapp(
+    conn: sqlite3.Connection,
+    document: Document,
+    patient: Patient,
+    settings: dict[str, str],
+) -> None:
+    """Envoie un document par WhatsApp via Meta Cloud API et met à jour son statut.
+
+    `settings` contient les réglages WhatsApp (whatsapp_phone_number_id, whatsapp_access_token,
+    whatsapp_template_name, default_country).
+    """
+    phone_id = settings.get("whatsapp_phone_number_id")
+    token = settings.get("whatsapp_access_token")
+    template_name = settings.get("whatsapp_template_name") or "envoi_document"
+    default_country = settings.get("default_country") or "+216"
+
+    if not phone_id or not token:
+        raise ValueError("Configuration WhatsApp incomplète (Phone Number ID ou Token manquant).")
+
+    if not patient.telephone:
+        raise ValueError("Aucun numéro de téléphone pour ce patient.")
+
+    path = Path(document.file_path or "")
+    if not path.exists():
+        raise FileNotFoundError(f"Fichier du document introuvable : {path}")
+
+    normalized_phone = normalize_phone_number(patient.telephone, default_country)
+
+    # variables {{1}} prénom / {{2}} nom / {{3}} type de document
+    variables = [
+        patient.prenom or "",
+        patient.nom or "",
+        document.type.replace("_", " "),
+    ]
+
+    client = WhatsAppClient(phone_id, token)
+    try:
+        log_whatsapp(
+            "DOCUMENT_SEND_START",
+            document_id=document.id,
+            to=normalized_phone,
+            template=template_name,
+        )
+        
+        media_id = client.upload_media(path)
+        
+        result = client.send_document(
+            to_e164=normalized_phone,
+            media_id=media_id,
+            filename=path.name,
+            template=template_name,
+            lang="fr",
+            variables=variables,
+        )
+        
+        document.statut = "envoye"
+        document.date_envoi = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        document.whatsapp_message_id = result.message_id
+        document.whatsapp_status = result.status
+        document.whatsapp_date_envoi = document.date_envoi
+        document.whatsapp_date_refresh = document.date_envoi
+        document.message_erreur = None
+
+        log_whatsapp(
+            "DOCUMENT_SEND_OK",
+            document_id=document.id,
+            to=normalized_phone,
+            message_id=result.message_id,
+            status=result.status,
+        )
+        
+        repo.update_document(conn, document)
+        
+    except WhatsAppError as exc:
+        document.statut = "erreur_envoi"
+        document.whatsapp_status = "erreur"
+        document.message_erreur = str(exc)
+        log_whatsapp(
+            "DOCUMENT_SEND_ERROR",
+            document_id=document.id,
+            to=normalized_phone,
+            error=str(exc),
+        )
+        repo.update_document(conn, document)
+        raise
+    except Exception as exc:
+        document.statut = "erreur_envoi"
+        document.whatsapp_status = "erreur"
+        document.message_erreur = f"{exc}\n{traceback.format_exc()}"
+        log_whatsapp(
+            "DOCUMENT_SEND_ERROR",
+            document_id=document.id,
+            to=normalized_phone,
+            error=str(exc),
+            traceback=traceback.format_exc(),
+        )
+        repo.update_document(conn, document)
+        raise
+
+
+def refresh_whatsapp_status(
+    conn: sqlite3.Connection,
+    document: Document,
+    settings: dict[str, str],
+) -> str:
+    """Interroge l'API Meta pour rafraîchir le statut WhatsApp d'un document.
+
+    Met à jour `whatsapp_status` et `whatsapp_date_refresh` en base.
+    """
+    msg_id = document.whatsapp_message_id
+    if not msg_id:
+        raise ValueError("Aucun identifiant de message WhatsApp pour ce document.")
+
+    phone_id = settings.get("whatsapp_phone_number_id")
+    token = settings.get("whatsapp_access_token")
+
+    if not phone_id or not token:
+        raise ValueError("Configuration WhatsApp incomplète (Phone Number ID ou Token manquant).")
+
+    client = WhatsAppClient(phone_id, token)
+    status = client.get_status(msg_id)
+
+    document.whatsapp_status = status
+    document.whatsapp_date_refresh = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    repo.update_document(conn, document)
+    return status
+

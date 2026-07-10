@@ -456,6 +456,20 @@ class ActeExportOut(BaseModel):
     count: int
 
 
+class WhatsAppSettingsOut(BaseModel):
+    whatsapp_phone_number_id: str
+    whatsapp_template_name: str
+    default_country: str
+    has_token: bool
+
+
+class WhatsAppSettingsIn(BaseModel):
+    whatsapp_phone_number_id: str
+    whatsapp_access_token: str
+    whatsapp_template_name: str
+    default_country: str
+
+
 class JobAcceptedOut(BaseModel):
     job_id: str
 
@@ -1009,6 +1023,36 @@ def settings_get_print(doc_type: str) -> PrintConfigOut:
 def settings_set_print(doc_type: str, body: PrintConfigIn) -> OkOut:
     with db() as conn:
         print_settings.set_settings_for(conn, doc_type, body.paper, body.color)
+    return OkOut()
+
+
+@app.get("/api/settings/whatsapp", response_model=WhatsAppSettingsOut, tags=["settings"])
+def settings_get_whatsapp() -> WhatsAppSettingsOut:
+    with db() as conn:
+        phone_id = repo.get_setting(conn, "whatsapp_phone_number_id") or ""
+        token = repo.get_setting(conn, "whatsapp_access_token") or ""
+        template_name = repo.get_setting(conn, "whatsapp_template_name") or "envoi_document"
+        default_country = repo.get_setting(conn, "default_country") or "+216"
+        
+    return WhatsAppSettingsOut(
+        whatsapp_phone_number_id=phone_id,
+        whatsapp_template_name=template_name,
+        default_country=default_country,
+        has_token=bool(token),
+    )
+
+
+@app.put("/api/settings/whatsapp", response_model=OkOut, tags=["settings"])
+def settings_set_whatsapp(body: WhatsAppSettingsIn) -> OkOut:
+    with db() as conn:
+        repo.set_setting(conn, "whatsapp_phone_number_id", body.whatsapp_phone_number_id)
+        repo.set_setting(conn, "whatsapp_template_name", body.whatsapp_template_name)
+        repo.set_setting(conn, "default_country", body.default_country)
+        
+        token = body.whatsapp_access_token.strip()
+        if token and token != "••••••••":
+            repo.set_setting(conn, "whatsapp_access_token", token)
+            
     return OkOut()
 
 

@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 class SchemaTooNewError(RuntimeError):
@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS documents (
     mailjet_status       TEXT,
     date_refresh_status  TEXT,
     message_erreur       TEXT,
+    whatsapp_message_id  TEXT,
+    whatsapp_status      TEXT,
+    whatsapp_date_envoi  TEXT,
+    whatsapp_date_refresh TEXT,
     created_at           TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -527,6 +531,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # pre-migration dans connect() pour toute base ouverte en v12.
     if not _column_exists(conn, "actes", "categorie"):
         conn.execute("ALTER TABLE actes ADD COLUMN categorie TEXT")
+    # v14 : suivi WhatsApp pour les documents. Colonnes additives nullables
+    if not _column_exists(conn, "documents", "whatsapp_message_id"):
+        conn.execute("ALTER TABLE documents ADD COLUMN whatsapp_message_id TEXT")
+    if not _column_exists(conn, "documents", "whatsapp_status"):
+        conn.execute("ALTER TABLE documents ADD COLUMN whatsapp_status TEXT")
+    if not _column_exists(conn, "documents", "whatsapp_date_envoi"):
+        conn.execute("ALTER TABLE documents ADD COLUMN whatsapp_date_envoi TEXT")
+    if not _column_exists(conn, "documents", "whatsapp_date_refresh"):
+        conn.execute("ALTER TABLE documents ADD COLUMN whatsapp_date_refresh TEXT")
 
 
 def _set_version(conn: sqlite3.Connection) -> None:
