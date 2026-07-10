@@ -6,27 +6,30 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { humanizeError } from '@/lib/errors';
-import { useWhatsAppSettings, useSetWhatsAppSettings } from '@/hooks/queries';
+import { useFeatureSettings, useSetFeatureSettings } from '@/hooks/queries';
 
 export function FonctionnalitesTab() {
-  const settings = useWhatsAppSettings();
-  const saveSettings = useSetWhatsAppSettings();
+  const settings = useFeatureSettings();
+  const saveSettings = useSetFeatureSettings();
 
   const [whatsappApiEnabled, setWhatsappApiEnabled] = useState(false);
+  const [emailingEnabled, setEmailingEnabled] = useState(true);
 
   useEffect(() => {
     if (!settings.data) return;
-    setWhatsappApiEnabled(settings.data.whatsapp_api_enabled || false);
+    const wa = settings.data.whatsapp_api_enabled || false;
+    const em = settings.data.emailing_enabled ?? true;
+    Promise.resolve().then(() => {
+      setWhatsappApiEnabled(wa);
+      setEmailingEnabled(em);
+    });
   }, [settings.data]);
 
   function onSave() {
     saveSettings.mutate(
       {
-        whatsapp_phone_number_id: settings.data?.whatsapp_phone_number_id || '',
-        whatsapp_access_token: settings.data?.has_token ? '••••••••' : '',
-        whatsapp_template_name: settings.data?.whatsapp_template_name || 'envoi_document',
-        default_country: settings.data?.default_country || '+216',
         whatsapp_api_enabled: whatsappApiEnabled,
+        emailing_enabled: emailingEnabled,
       },
       {
         onSuccess: () => toast.success('Fonctionnalités mises à jour.'),
@@ -54,19 +57,37 @@ export function FonctionnalitesTab() {
             <p className="text-sm text-red">{humanizeError(settings.error)}</p>
           )}
 
-          <div className="flex items-start space-x-3 p-4 rounded-lg border bg-muted/20">
-            <Checkbox
-              id="feature-whatsapp-api"
-              checked={whatsappApiEnabled}
-              onCheckedChange={(c) => setWhatsappApiEnabled(!!c)}
-            />
-            <div className="grid gap-1.5 leading-none">
-              <Label htmlFor="feature-whatsapp-api" className="font-semibold cursor-pointer">
-                API Meta WhatsApp Cloud
-              </Label>
-              <p className="text-sm text-muted-foreground leading-relaxed mt-1">
-                Permet d'envoyer des documents (notes d'honoraires, devis...) automatiquement aux patients par WhatsApp en utilisant l'API officielle de Meta.
-              </p>
+          <div className="space-y-4">
+            <div className="flex items-start space-x-3 p-4 rounded-lg border bg-muted/20">
+              <Checkbox
+                id="feature-whatsapp-api"
+                checked={whatsappApiEnabled}
+                onCheckedChange={(c) => setWhatsappApiEnabled(!!c)}
+              />
+              <div className="grid gap-1.5 leading-none">
+                <Label htmlFor="feature-whatsapp-api" className="font-semibold cursor-pointer">
+                  API Meta WhatsApp Cloud
+                </Label>
+                <p className="text-sm text-muted-foreground leading-relaxed mt-1">
+                  {"Permet d'envoyer des documents (notes d'honoraires, devis...) automatiquement aux patients par WhatsApp en utilisant l'API officielle de Meta."}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start space-x-3 p-4 rounded-lg border bg-muted/20">
+              <Checkbox
+                id="feature-emailing"
+                checked={emailingEnabled}
+                onCheckedChange={(c) => setEmailingEnabled(!!c)}
+              />
+              <div className="grid gap-1.5 leading-none">
+                <Label htmlFor="feature-emailing" className="font-semibold cursor-pointer">
+                  {"Emailing et Modèles d'email"}
+                </Label>
+                <p className="text-sm text-muted-foreground leading-relaxed mt-1">
+                  {"Permet d'envoyer des documents par email via Mailjet et de gérer des modèles d'email personnalisés."}
+                </p>
+              </div>
             </div>
           </div>
 

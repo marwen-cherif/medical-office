@@ -41,7 +41,6 @@ export function WhatsAppTab() {
         whatsapp_access_token: token,
         whatsapp_template_name: templateName.trim() || 'envoi_document',
         default_country: defaultCountry.trim() || '+216',
-        whatsapp_api_enabled: true,
       },
       {
         onSuccess: () => toast.success('Réglages WhatsApp enregistrés.'),

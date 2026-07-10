@@ -44,4 +44,14 @@ describe('ClickToCopy component', () => {
 
     expect(button.querySelector('svg')).not.toHaveClass('text-green');
   });
+
+  it('applies multiline classes when multiline is true', () => {
+    render(<ClickToCopy text="multiline-text" multiline />);
+    const button = screen.getByRole('button');
+    expect(button).toHaveClass('items-start');
+    
+    const textSpan = button.querySelector('span');
+    expect(textSpan).toHaveClass('whitespace-pre-wrap');
+    expect(textSpan).toHaveClass('break-words');
+  });
 });

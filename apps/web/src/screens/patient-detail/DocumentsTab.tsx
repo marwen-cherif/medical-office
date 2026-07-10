@@ -33,7 +33,7 @@ import {
   useSendDocument,
   useSendWhatsApp,
 } from '@/hooks/documents';
-import { useWhatsAppSettings, useCategories } from '@/hooks/queries';
+import { useWhatsAppSettings, useFeatureSettings, useCategories } from '@/hooks/queries';
 import type { DocumentT, Patient } from '@/api/types';
 import { GenerateDialog } from './GenerateDialog';
 import { SendWhatsAppDialog } from '@/components/dialogs/SendWhatsAppDialog';
@@ -60,6 +60,7 @@ export function DocumentsTab({
   const refreshWhatsApp = useRefreshWhatsAppStatus();
   const del = useDeleteDocument();
   const waSettings = useWhatsAppSettings();
+  const features = useFeatureSettings();
   const categories = useCategories();
   const [gen, setGen] = useState<GenState>(null);
   const [waSelectDoc, setWaSelectDoc] = useState<DocumentT | null>(null);
@@ -131,13 +132,13 @@ export function DocumentsTab({
             icon: Printer,
             onClick: () => withToast(print.mutateAsync({ id: d.id }), "Envoyé à l'imprimante."),
           },
-          canSend && {
+          (canSend && (features.data?.emailing_enabled ?? true)) && {
             key: 'send',
             label: 'Envoyer par email',
             icon: Send,
             onClick: () => withToast(send.mutateAsync({ id: d.id, body: {} }), 'Email envoyé.'),
           },
-          (canSendWhatsApp && waSettings.data?.whatsapp_api_enabled) && {
+          (canSendWhatsApp && features.data?.whatsapp_api_enabled) && {
             key: 'send-whatsapp',
             label: 'Envoyer par WhatsApp (Meta)',
             icon: MessageSquare,

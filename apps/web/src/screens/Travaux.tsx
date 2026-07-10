@@ -56,7 +56,7 @@ import {
   useSendWhatsApp,
   type DocFilter,
 } from '@/hooks/documents';
-import { useWhatsAppSettings } from '@/hooks/queries';
+import { useWhatsAppSettings, useFeatureSettings } from '@/hooks/queries';
 import { useBatch, useJobs, type JobFilter } from '@/hooks/jobs';
 import type { DocumentRow, Patient } from '@/api/types';
 import { SendWhatsAppDialog } from '@/components/dialogs/SendWhatsAppDialog';
@@ -136,7 +136,11 @@ function DocumentsTab() {
   const sendWhatsApp = useSendWhatsApp();
   const batch = useBatch();
   const waSettings = useWhatsAppSettings();
+  const features = useFeatureSettings();
   const [waSelectDoc, setWaSelectDoc] = useState<{ id: number; patient: Patient } | null>(null);
+
+  const isWhatsAppEnabled = !!features.data?.whatsapp_api_enabled;
+  const isEmailingEnabled = features.data?.emailing_enabled ?? true;
 
   const items = q.data?.items ?? [];
   const batchKind = batchKindFor(statut);
@@ -276,7 +280,7 @@ function DocumentsTab() {
       {selectable && (
         <div className="flex items-center justify-between rounded-[var(--radius)] border border-line bg-bg/50 px-4 py-2">
           <span className="text-sm text-muted">{selected.size} document(s) sélectionné(s)</span>
-          <Button size="sm" disabled={selected.size === 0 || batch.isPending} onClick={onBatch}>
+          <Button size="sm" disabled={selected.size === 0 || batch.isPending || (batchKind === 'envoi' && !isEmailingEnabled)} onClick={onBatch}>
             {batchKind === 'generation' ? (
               <>
                 <PlayCircle className="size-4" /> Générer la sélection
@@ -328,7 +332,8 @@ function DocumentsTab() {
                 pendingSend={send.isPending}
                 pendingSendWhatsApp={sendWhatsApp.isPending}
                 defaultCountry={waSettings.data?.default_country || '+216'}
-                whatsappApiEnabled={waSettings.data?.whatsapp_api_enabled ?? false}
+                whatsappApiEnabled={isWhatsAppEnabled}
+                emailingEnabled={isEmailingEnabled}
               />
             ))}
             {!q.isLoading && items.length === 0 && (
@@ -380,6 +385,7 @@ function DocumentRowItem({
   pendingSendWhatsApp,
   defaultCountry,
   whatsappApiEnabled,
+  emailingEnabled,
 }: {
   row: DocumentRow;
   selectable: boolean;
@@ -395,6 +401,7 @@ function DocumentRowItem({
   pendingSendWhatsApp: boolean;
   defaultCountry: string;
   whatsappApiEnabled: boolean;
+  emailingEnabled: boolean;
 }) {
   const d = row.document;
   const st = docStatut(d.statut);
@@ -466,7 +473,7 @@ function DocumentRowItem({
               </>
             )
           )}
-          {canSend && (
+          {(canSend && emailingEnabled) && (
             <Button
               variant="ghost"
               size="icon"
@@ -529,8 +536,7 @@ function JobsTab() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted">
-        Jobs de génération et d'envoi par lot. Cliquez un job pour voir le détail (ligne par
-        patient).
+        {"Jobs de génération et d'envoi par lot. Cliquez un job pour voir le détail (ligne par patient)."}
       </p>
 
       <div className="flex flex-wrap items-center gap-3">

@@ -21,6 +21,8 @@ export type ActeImport = S['ActeImportOut'];
 export type ActeExport = S['ActeExportOut'];
 export type WhatsAppSettings = S['WhatsAppSettingsOut'];
 export type WhatsAppSettingsIn = S['WhatsAppSettingsIn'];
+export type FeaturesSettings = S['FeaturesSettingsOut'];
+export type FeaturesSettingsIn = S['FeaturesSettingsIn'];
 
 // --- Patients ----------------------------------------------------------------
 export interface PatientPhone {

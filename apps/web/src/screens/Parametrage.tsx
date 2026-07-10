@@ -1,6 +1,6 @@
 import { FileText, Mail, MessageSquare, Printer, Stethoscope, ToggleLeft } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useWhatsAppSettings } from '@/hooks/queries';
+import { useFeatureSettings } from '@/hooks/queries';
 import { ModelesTab } from './parametrage/ModelesTab';
 import { EmailsTab } from './parametrage/EmailsTab';
 import { ImprimanteTab } from './parametrage/ImprimanteTab';
@@ -9,15 +9,16 @@ import { WhatsAppTab } from './parametrage/WhatsAppTab';
 import { FonctionnalitesTab } from './parametrage/FonctionnalitesTab';
 
 export function Parametrage() {
-  const waSettings = useWhatsAppSettings();
-  const isWhatsAppEnabled = !!waSettings.data?.whatsapp_api_enabled;
+  const features = useFeatureSettings();
+  const isWhatsAppEnabled = !!features.data?.whatsapp_api_enabled;
+  const isEmailingEnabled = features.data?.emailing_enabled ?? true;
 
   return (
     <div className="mx-auto max-w-5xl p-8">
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-ink">Paramétrage</h1>
         <p className="mt-1 text-sm text-muted">
-          Gérez les fonctionnalités optionnelles, modèles de documents, emails, imprimantes et catalogue d'actes.
+          {"Gérér les fonctionnalités optionnelles, modèles de documents, emails, imprimantes et catalogue d'actes."}
         </p>
       </header>
 
@@ -26,9 +27,11 @@ export function Parametrage() {
           <TabsTrigger value="modeles">
             <FileText className="size-4" /> Modèles
           </TabsTrigger>
-          <TabsTrigger value="emails">
-            <Mail className="size-4" /> Modèles d'email
-          </TabsTrigger>
+          {isEmailingEnabled && (
+            <TabsTrigger value="emails">
+              <Mail className="size-4" /> {"Modèles d'email"}
+            </TabsTrigger>
+          )}
           <TabsTrigger value="imprimante">
             <Printer className="size-4" /> Imprimante
           </TabsTrigger>
@@ -48,9 +51,11 @@ export function Parametrage() {
         <TabsContent value="modeles">
           <ModelesTab />
         </TabsContent>
-        <TabsContent value="emails">
-          <EmailsTab />
-        </TabsContent>
+        {isEmailingEnabled && (
+          <TabsContent value="emails">
+            <EmailsTab />
+          </TabsContent>
+        )}
         <TabsContent value="imprimante">
           <ImprimanteTab />
         </TabsContent>

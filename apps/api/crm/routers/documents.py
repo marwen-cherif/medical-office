@@ -786,6 +786,15 @@ def send(document_id: int, body: SendIn) -> core.JobAcceptedOut:
         d = repo.get_document(conn, document_id)
         if d is None:
             raise core.ApiError(core.ERR_NOT_FOUND, "Document introuvable.", status=404)
+        
+        emailing_enabled = repo.get_setting(conn, "emailing_enabled") != "false"
+        if not emailing_enabled:
+            raise core.ApiError(
+                "CONFIG_ERROR",
+                "La fonctionnalité d'emailing est désactivée.",
+                status=400,
+            )
+
         template_id = body.mailjet_template_id
         if template_id is None:
             default = repo.get_default_mail_template(conn)

@@ -379,6 +379,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/features": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Settings Get Features */
+        get: operations["settings_get_features_api_settings_features_get"];
+        /** Settings Set Features */
+        put: operations["settings_set_features_api_settings_features_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings/whatsapp": {
         parameters: {
             query?: never;
@@ -2112,6 +2130,20 @@ export interface components {
             /** Created At */
             created_at?: string | null;
         };
+        /** FeaturesSettingsIn */
+        FeaturesSettingsIn: {
+            /** Whatsapp Api Enabled */
+            whatsapp_api_enabled: boolean;
+            /** Emailing Enabled */
+            emailing_enabled: boolean;
+        };
+        /** FeaturesSettingsOut */
+        FeaturesSettingsOut: {
+            /** Whatsapp Api Enabled */
+            whatsapp_api_enabled: boolean;
+            /** Emailing Enabled */
+            emailing_enabled: boolean;
+        };
         /** FieldIn */
         FieldIn: {
             /** Tag */
@@ -2979,8 +3011,6 @@ export interface components {
             whatsapp_template_name: string;
             /** Default Country */
             default_country: string;
-            /** Whatsapp Api Enabled */
-            whatsapp_api_enabled: boolean;
         };
         /** WhatsAppSettingsOut */
         WhatsAppSettingsOut: {
@@ -2992,8 +3022,6 @@ export interface components {
             default_country: string;
             /** Has Token */
             has_token: boolean;
-            /** Whatsapp Api Enabled */
-            whatsapp_api_enabled: boolean;
             /** Fallback Message */
             fallback_message: string;
         };
@@ -4727,6 +4755,131 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["PrintConfigIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    settings_get_features_api_settings_features_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeaturesSettingsOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    settings_set_features_api_settings_features_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeaturesSettingsIn"];
             };
         };
         responses: {

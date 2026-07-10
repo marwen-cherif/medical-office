@@ -474,12 +474,21 @@ class CategoryExportOut(BaseModel):
     count: int
 
 
+class FeaturesSettingsOut(BaseModel):
+    whatsapp_api_enabled: bool
+    emailing_enabled: bool
+
+
+class FeaturesSettingsIn(BaseModel):
+    whatsapp_api_enabled: bool
+    emailing_enabled: bool
+
+
 class WhatsAppSettingsOut(BaseModel):
     whatsapp_phone_number_id: str
     whatsapp_template_name: str
     default_country: str
     has_token: bool
-    whatsapp_api_enabled: bool
     fallback_message: str
 
 
@@ -488,7 +497,6 @@ class WhatsAppSettingsIn(BaseModel):
     whatsapp_access_token: str
     whatsapp_template_name: str
     default_country: str
-    whatsapp_api_enabled: bool
 
 
 class JobAcceptedOut(BaseModel):
@@ -1112,6 +1120,25 @@ def settings_set_print(doc_type: str, body: PrintConfigIn) -> OkOut:
     return OkOut()
 
 
+@app.get("/api/settings/features", response_model=FeaturesSettingsOut, tags=["settings"])
+def settings_get_features() -> FeaturesSettingsOut:
+    with db() as conn:
+        whatsapp_api_enabled = repo.get_setting(conn, "whatsapp_api_enabled") == "true"
+        emailing_enabled = repo.get_setting(conn, "emailing_enabled") != "false"
+    return FeaturesSettingsOut(
+        whatsapp_api_enabled=whatsapp_api_enabled,
+        emailing_enabled=emailing_enabled,
+    )
+
+
+@app.put("/api/settings/features", response_model=OkOut, tags=["settings"])
+def settings_set_features(body: FeaturesSettingsIn) -> OkOut:
+    with db() as conn:
+        repo.set_setting(conn, "whatsapp_api_enabled", "true" if body.whatsapp_api_enabled else "false")
+        repo.set_setting(conn, "emailing_enabled", "true" if body.emailing_enabled else "false")
+    return OkOut()
+
+
 @app.get("/api/settings/whatsapp", response_model=WhatsAppSettingsOut, tags=["settings"])
 def settings_get_whatsapp() -> WhatsAppSettingsOut:
     from src.config import load_config
@@ -1121,7 +1148,6 @@ def settings_get_whatsapp() -> WhatsAppSettingsOut:
         token = repo.get_setting(conn, "whatsapp_access_token") or ""
         template_name = repo.get_setting(conn, "whatsapp_template_name") or "envoi_document"
         default_country = repo.get_setting(conn, "default_country") or "+216"
-        api_enabled = repo.get_setting(conn, "whatsapp_api_enabled") == "true"
 
     try:
         cfg = load_config()
@@ -1134,7 +1160,6 @@ def settings_get_whatsapp() -> WhatsAppSettingsOut:
         whatsapp_template_name=template_name,
         default_country=default_country,
         has_token=bool(token),
-        whatsapp_api_enabled=api_enabled,
         fallback_message=fallback_msg,
     )
 
@@ -1145,7 +1170,6 @@ def settings_set_whatsapp(body: WhatsAppSettingsIn) -> OkOut:
         repo.set_setting(conn, "whatsapp_phone_number_id", body.whatsapp_phone_number_id)
         repo.set_setting(conn, "whatsapp_template_name", body.whatsapp_template_name)
         repo.set_setting(conn, "default_country", body.default_country)
-        repo.set_setting(conn, "whatsapp_api_enabled", "true" if body.whatsapp_api_enabled else "false")
         
         token = body.whatsapp_access_token.strip()
         if token and token != "••••••••":
