@@ -20,7 +20,7 @@ export function WhatsAppTab() {
   useEffect(() => {
     if (!settings.data) return;
     setPhoneId(settings.data.whatsapp_phone_number_id || '');
-    setToken(settings.data.has_token ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' : '');
+    setToken(settings.data.has_token ? '••••••••' : '');
     setTemplateName(settings.data.whatsapp_template_name || 'envoi_document');
     setDefaultCountry(settings.data.default_country || '+216');
   }, [settings.data]);
@@ -41,6 +41,7 @@ export function WhatsAppTab() {
         whatsapp_access_token: token,
         whatsapp_template_name: templateName.trim() || 'envoi_document',
         default_country: defaultCountry.trim() || '+216',
+        whatsapp_api_enabled: true,
       },
       {
         onSuccess: () => toast.success('Réglages WhatsApp enregistrés.'),
@@ -63,7 +64,7 @@ export function WhatsAppTab() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {isLoading && <p className="text-sm text-muted">Chargement\u2026</p>}
+          {isLoading && <p className="text-sm text-muted">Chargement…</p>}
           {settings.isError && (
             <p className="text-sm text-red">{humanizeError(settings.error)}</p>
           )}
@@ -161,7 +162,7 @@ export function WhatsAppTab() {
               </div>
               <div>
                 <span className="bg-emerald-100 text-emerald-700 px-1 rounded font-mono text-xs">{'{{3}}'}</span>{' '}
-                = Type de document (note d'honoraires, devis\u2026)
+                = Type de document (note d'honoraires, devis…)
               </div>
             </div>
           </div>

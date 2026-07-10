@@ -257,14 +257,17 @@ export function useSendWhatsApp() {
   return useMutation({
     mutationFn: async ({
       id,
+      telephone,
       onEvent,
     }: {
       id: number;
+      telephone?: string;
       onEvent?: (e: JobEvent) => void;
     }) => {
       const accepted = unwrap(
         await client.POST('/api/documents/{document_id}/send-whatsapp', {
           params: { path: { document_id: id } },
+          body: telephone ? { telephone } : undefined,
         })
       );
       await streamJob(accepted.job_id, onEvent ?? (() => {}));

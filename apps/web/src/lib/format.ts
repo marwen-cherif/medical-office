@@ -240,3 +240,63 @@ export function formatWaMeUrl(phone: string, defaultCountry: string, text: strin
   }
   return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
 }
+
+export type CountryConfig = { code: string; name: string; prefix: string; flag: string };
+
+export const COUNTRIES: CountryConfig[] = [
+  { code: 'TN', name: 'Tunisie', prefix: '+216', flag: '🇹🇳' },
+  { code: 'FR', name: 'France', prefix: '+33', flag: '🇫🇷' },
+  { code: 'DZ', name: 'Algérie', prefix: '+213', flag: '🇩🇿' },
+  { code: 'MA', name: 'Maroc', prefix: '+212', flag: '🇲🇦' },
+  { code: 'LY', name: 'Libye', prefix: '+218', flag: '🇱🇾' },
+  { code: 'BE', name: 'Belgique', prefix: '+32', flag: '🇧🇪' },
+  { code: 'CH', name: 'Suisse', prefix: '+41', flag: '🇨🇭' },
+  { code: 'CA', name: 'Canada', prefix: '+1', flag: '🇨🇦' },
+];
+
+export function parsePhoneNumber(phoneStr: string, defaultPrefix = '+216'): { prefix: string; local: string } {
+  if (!phoneStr) return { prefix: defaultPrefix, local: '' };
+  
+  let clean = phoneStr.replace(/[\s\-\(\)]/g, '');
+  
+  if (clean.startsWith('00')) {
+    clean = '+' + clean.substring(2);
+  }
+  
+  const sortedCountries = [...COUNTRIES].sort((a, b) => b.prefix.length - a.prefix.length);
+  
+  for (const country of sortedCountries) {
+    if (clean.startsWith(country.prefix)) {
+      let local = clean.substring(country.prefix.length);
+      if (local.startsWith('0')) {
+        local = local.substring(1);
+      }
+      return { prefix: country.prefix, local };
+    }
+  }
+  
+  if (clean.startsWith('+')) {
+    const match = clean.match(/^(\+\d{1,4})(.*)$/);
+    if (match) {
+      let local = match[2];
+      if (local.startsWith('0')) local = local.substring(1);
+      return { prefix: match[1], local };
+    }
+  }
+  
+  let local = clean;
+  if (local.startsWith('0') && !local.startsWith('00')) {
+    local = local.substring(1);
+  }
+  
+  return { prefix: defaultPrefix, local };
+}
+
+export function formatE164(prefix: string, local: string): string {
+  let cleanLocal = local.replace(/[\s\-\(\)]/g, '');
+  if (cleanLocal.startsWith('0')) {
+    cleanLocal = cleanLocal.substring(1);
+  }
+  if (!cleanLocal) return '';
+  return `${prefix}${cleanLocal}`;
+}

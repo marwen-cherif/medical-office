@@ -2490,6 +2490,11 @@ export interface components {
              * @default false
              */
             force: boolean;
+            /**
+             * Telephones
+             * @default []
+             */
+            telephones: components["schemas"]["PatientPhoneIn"][];
         };
         /** PatientListOut */
         PatientListOut: {
@@ -2518,6 +2523,38 @@ export interface components {
             adresse?: string | null;
             /** Notes */
             notes?: string | null;
+            /**
+             * Telephones
+             * @default []
+             */
+            telephones: components["schemas"]["PatientPhoneOut"][];
+        };
+        /** PatientPhoneIn */
+        PatientPhoneIn: {
+            /** Id */
+            id?: number | null;
+            /** Telephone */
+            telephone: string;
+            /** Relation */
+            relation: string;
+            /**
+             * Is Whatsapp
+             * @default false
+             */
+            is_whatsapp: boolean;
+        };
+        /** PatientPhoneOut */
+        PatientPhoneOut: {
+            /** Id */
+            id: number;
+            /** Patient Id */
+            patient_id: number;
+            /** Telephone */
+            telephone: string;
+            /** Relation */
+            relation: string;
+            /** Is Whatsapp */
+            is_whatsapp: boolean;
         };
         /** PlaceholdersOut */
         PlaceholdersOut: {
@@ -2761,6 +2798,11 @@ export interface components {
             /** Mailjet Template Id */
             mailjet_template_id?: number | null;
         };
+        /** SendWhatsAppIn */
+        SendWhatsAppIn: {
+            /** Telephone */
+            telephone?: string | null;
+        };
         /** SoldeOut */
         SoldeOut: {
             /** Du */
@@ -2844,6 +2886,8 @@ export interface components {
             whatsapp_template_name: string;
             /** Default Country */
             default_country: string;
+            /** Whatsapp Api Enabled */
+            whatsapp_api_enabled: boolean;
         };
         /** WhatsAppSettingsOut */
         WhatsAppSettingsOut: {
@@ -2855,6 +2899,8 @@ export interface components {
             default_country: string;
             /** Has Token */
             has_token: boolean;
+            /** Whatsapp Api Enabled */
+            whatsapp_api_enabled: boolean;
         };
         /** MatchOut */
         crm__routers__patients__MatchOut: {
@@ -7432,7 +7478,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SendWhatsAppIn"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             202: {

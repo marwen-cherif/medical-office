@@ -58,7 +58,8 @@ import {
 } from '@/hooks/documents';
 import { useWhatsAppSettings } from '@/hooks/queries';
 import { useBatch, useJobs, type JobFilter } from '@/hooks/jobs';
-import type { DocumentRow } from '@/api/types';
+import type { DocumentRow, Patient } from '@/api/types';
+import { SendWhatsAppDialog } from '@/components/dialogs/SendWhatsAppDialog';
 
 /**
  * Écran Travaux : reprend l'écran « Documents/Travaux » de l'app Flet avec deux
@@ -135,6 +136,7 @@ function DocumentsTab() {
   const sendWhatsApp = useSendWhatsApp();
   const batch = useBatch();
   const waSettings = useWhatsAppSettings();
+  const [waSelectDoc, setWaSelectDoc] = useState<{ id: number; patient: Patient } | null>(null);
 
   const items = q.data?.items ?? [];
   const batchKind = batchKindFor(statut);
@@ -197,14 +199,24 @@ function DocumentsTab() {
     );
   }
 
-  function onSendWhatsApp(id: number) {
-    sendWhatsApp.mutate(
-      { id },
-      {
-        onSuccess: () => toast.success('Document envoyé par WhatsApp.'),
-        onError: (e) => toast.error(humanizeError(e)),
+  function onSendWhatsApp(id: number, patient: Patient) {
+    const phones = patient.telephones || [];
+    if (phones.length > 1) {
+      setWaSelectDoc({ id, patient });
+    } else {
+      const targetPhone = phones[0]?.telephone || patient.telephone;
+      if (targetPhone) {
+        sendWhatsApp.mutate(
+          { id, telephone: targetPhone },
+          {
+            onSuccess: () => toast.success('Document envoyé par WhatsApp.'),
+            onError: (e) => toast.error(humanizeError(e)),
+          }
+        );
+      } else {
+        toast.error("Le patient n'a pas de numéro de téléphone.");
       }
-    );
+    }
   }
 
   function onBatch() {
@@ -316,6 +328,7 @@ function DocumentsTab() {
                 pendingSend={send.isPending}
                 pendingSendWhatsApp={sendWhatsApp.isPending}
                 defaultCountry={waSettings.data?.default_country || '+216'}
+                whatsappApiEnabled={waSettings.data?.whatsapp_api_enabled ?? false}
               />
             ))}
             {!q.isLoading && items.length === 0 && (
@@ -330,6 +343,24 @@ function DocumentsTab() {
       </div>
 
       <Pagination total={q.data?.total ?? 0} page={page} onPage={setPage} />
+
+      <SendWhatsAppDialog
+        patient={waSelectDoc?.patient ?? null}
+        isOpen={!!waSelectDoc}
+        onClose={() => setWaSelectDoc(null)}
+        onConfirm={(phone) => {
+          if (waSelectDoc) {
+            sendWhatsApp.mutate(
+              { id: waSelectDoc.id, telephone: phone },
+              {
+                onSuccess: () => toast.success('Document envoyé par WhatsApp.'),
+                onError: (e) => toast.error(humanizeError(e)),
+              }
+            );
+          }
+          setWaSelectDoc(null);
+        }}
+      />
     </div>
   );
 }
@@ -348,6 +379,7 @@ function DocumentRowItem({
   pendingSend,
   pendingSendWhatsApp,
   defaultCountry,
+  whatsappApiEnabled,
 }: {
   row: DocumentRow;
   selectable: boolean;
@@ -357,11 +389,12 @@ function DocumentRowItem({
   onOpen: (id: number) => void;
   onPrint: (id: number) => void;
   onSend: (id: number) => void;
-  onSendWhatsApp: (id: number) => void;
+  onSendWhatsApp: (id: number, patient: Patient) => void;
   pendingRender: boolean;
   pendingSend: boolean;
   pendingSendWhatsApp: boolean;
   defaultCountry: string;
+  whatsappApiEnabled: boolean;
 }) {
   const d = row.document;
   const st = docStatut(d.statut);
@@ -371,7 +404,8 @@ function DocumentRowItem({
 
   const needsGeneration = d.statut === 'brouillon' || d.statut === 'erreur';
   const canSend = !!d.email && (d.statut === 'en_attente_envoi' || d.statut === 'erreur_envoi');
-  const canSendWhatsApp = !!row.patient.telephone && d.has_file && d.statut !== 'brouillon';
+  const hasPhone = !!row.patient.telephone || (row.patient.telephones && row.patient.telephones.length > 0);
+  const canSendWhatsApp = hasPhone && d.has_file && d.statut !== 'brouillon';
 
   return (
     <TableRow>
@@ -446,23 +480,28 @@ function DocumentRowItem({
           )}
           {canSendWhatsApp && (
             <>
-              <Button
-                variant="ghost"
-                size="icon"
-                title="Envoyer par WhatsApp (Meta)"
-                className="text-navy"
-                disabled={pendingSendWhatsApp}
-                onClick={() => onSendWhatsApp(d.id)}
-              >
-                <MessageSquare className="size-4" />
-              </Button>
+              {whatsappApiEnabled && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Envoyer par WhatsApp (Meta)"
+                  className="text-navy"
+                  disabled={pendingSendWhatsApp}
+                  onClick={() => onSendWhatsApp(d.id, row.patient)}
+                >
+                  <MessageSquare className="size-4" />
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
                 title="Ouvrir dans WhatsApp (wa.me)"
                 onClick={() => {
                   const text = `Bonjour ${row.patient.display}, voici votre ${humanize(d.type).toLowerCase()}.`;
-                  const url = formatWaMeUrl(row.patient.telephone || '', defaultCountry, text);
+                  const targetPhone = (row.patient.telephones && row.patient.telephones.length > 0)
+                    ? (row.patient.telephones.find(t => t.is_whatsapp)?.telephone || row.patient.telephones[0].telephone)
+                    : row.patient.telephone;
+                  const url = formatWaMeUrl(targetPhone || '', defaultCountry, text);
                   window.open(url, '_blank');
                 }}
               >

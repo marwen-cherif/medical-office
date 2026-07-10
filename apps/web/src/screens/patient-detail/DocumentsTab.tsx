@@ -35,6 +35,7 @@ import {
 import { useWhatsAppSettings } from '@/hooks/queries';
 import type { DocumentT, Patient } from '@/api/types';
 import { GenerateDialog } from './GenerateDialog';
+import { SendWhatsAppDialog } from '@/components/dialogs/SendWhatsAppDialog';
 
 type GenState =
   { mode: 'note' | 'generic'; draft?: null } | { mode: 'generic'; draft: DocumentT } | null;
@@ -58,6 +59,21 @@ export function DocumentsTab({
   const del = useDeleteDocument();
   const waSettings = useWhatsAppSettings();
   const [gen, setGen] = useState<GenState>(null);
+  const [waSelectDoc, setWaSelectDoc] = useState<DocumentT | null>(null);
+
+  function handleSendWhatsAppClick(d: DocumentT) {
+    const phones = patient.telephones || [];
+    if (phones.length > 1) {
+      setWaSelectDoc(d);
+    } else {
+      const targetPhone = phones[0]?.telephone || patient.telephone;
+      if (targetPhone) {
+        withToast(sendWhatsApp.mutateAsync({ id: d.id, telephone: targetPhone }), 'Document envoyé par WhatsApp.');
+      } else {
+        toast.error("Le patient n'a pas de numéro de téléphone.");
+      }
+    }
+  }
 
   useShortcut([
     {
@@ -82,7 +98,8 @@ export function DocumentsTab({
     const isDraft = d.statut === 'brouillon';
     const isError = d.statut === 'erreur';
     const canSend = !!d.email && (d.statut === 'en_attente_envoi' || d.statut === 'erreur_envoi');
-    const canSendWhatsApp = !!patient.telephone && d.has_file && d.statut !== 'brouillon';
+    const hasPhone = !!patient.telephone || (patient.telephones && patient.telephones.length > 0);
+    const canSendWhatsApp = hasPhone && d.has_file && d.statut !== 'brouillon';
     const canRefreshWhatsApp = !!d.whatsapp_message_id;
     return (
       <RowActions
@@ -117,11 +134,11 @@ export function DocumentsTab({
             icon: Send,
             onClick: () => withToast(send.mutateAsync({ id: d.id, body: {} }), 'Email envoyé.'),
           },
-          canSendWhatsApp && {
+          (canSendWhatsApp && waSettings.data?.whatsapp_api_enabled) && {
             key: 'send-whatsapp',
             label: 'Envoyer par WhatsApp (Meta)',
             icon: MessageSquare,
-            onClick: () => withToast(sendWhatsApp.mutateAsync({ id: d.id }), 'Document envoyé par WhatsApp.'),
+            onClick: () => handleSendWhatsAppClick(d),
           },
           canSendWhatsApp && {
             key: 'open-wa-me',
@@ -130,7 +147,10 @@ export function DocumentsTab({
             onClick: () => {
               const defaultCountry = waSettings.data?.default_country || '+216';
               const text = `Bonjour ${patient.prenom || ''} ${patient.nom || ''}, voici votre ${humanize(d.type).toLowerCase()}.`;
-              const url = formatWaMeUrl(patient.telephone || '', defaultCountry, text);
+              const targetPhone = (patient.telephones && patient.telephones.length > 0)
+                ? (patient.telephones.find(t => t.is_whatsapp)?.telephone || patient.telephones[0].telephone)
+                : patient.telephone;
+              const url = formatWaMeUrl(targetPhone || '', defaultCountry, text);
               window.open(url, '_blank');
             },
           },
@@ -255,6 +275,21 @@ export function DocumentsTab({
         draft={gen && 'draft' in gen ? gen.draft : null}
         defaultDenture={denture}
         onClose={() => setGen(null)}
+      />
+
+      <SendWhatsAppDialog
+        patient={patient}
+        isOpen={!!waSelectDoc}
+        onClose={() => setWaSelectDoc(null)}
+        onConfirm={(phone) => {
+          if (waSelectDoc) {
+            withToast(
+              sendWhatsApp.mutateAsync({ id: waSelectDoc.id, telephone: phone }),
+              'Document envoyé par WhatsApp.'
+            );
+          }
+          setWaSelectDoc(null);
+        }}
       />
     </div>
   );

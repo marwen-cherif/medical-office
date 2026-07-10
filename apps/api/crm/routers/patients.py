@@ -19,6 +19,21 @@ router = APIRouter(prefix="/api", tags=["patients"])
 # --- Modeles (contrat OpenAPI) ------------------------------------------------
 
 
+class PatientPhoneIn(BaseModel):
+    id: Optional[int] = None
+    telephone: str
+    relation: str
+    is_whatsapp: bool = False
+
+
+class PatientPhoneOut(BaseModel):
+    id: int
+    patient_id: int
+    telephone: str
+    relation: str
+    is_whatsapp: bool
+
+
 class PatientOut(BaseModel):
     id: int
     nom: str
@@ -29,6 +44,7 @@ class PatientOut(BaseModel):
     telephone: Optional[str] = None
     adresse: Optional[str] = None
     notes: Optional[str] = None
+    telephones: list[PatientPhoneOut] = []
 
 
 class PatientIn(BaseModel):
@@ -40,6 +56,7 @@ class PatientIn(BaseModel):
     adresse: Optional[str] = None
     notes: Optional[str] = None
     force: bool = False  # cree malgre un doublon detecte (confirmation utilisateur)
+    telephones: list[PatientPhoneIn] = []
 
 
 class PatientListOut(BaseModel):
@@ -86,11 +103,21 @@ def patient_out(p: repo.Patient) -> PatientOut:
         telephone=p.telephone,
         adresse=p.adresse,
         notes=p.notes,
+        telephones=[
+            PatientPhoneOut(
+                id=ph.id,
+                patient_id=ph.patient_id,
+                telephone=ph.telephone,
+                relation=ph.relation,
+                is_whatsapp=ph.is_whatsapp,
+            )
+            for ph in getattr(p, "telephones", [])
+        ],
     )
 
 
 def _to_patient(body: PatientIn, patient_id: Optional[int] = None) -> repo.Patient:
-    return repo.Patient(
+    p = repo.Patient(
         id=patient_id,
         nom=body.nom.strip(),
         prenom=(body.prenom or "").strip(),
@@ -100,6 +127,17 @@ def _to_patient(body: PatientIn, patient_id: Optional[int] = None) -> repo.Patie
         adresse=body.adresse or None,
         notes=body.notes or None,
     )
+    p.telephones = [
+        repo.PatientPhone(
+            id=ph.id,
+            patient_id=patient_id or 0,
+            telephone=ph.telephone,
+            relation=ph.relation,
+            is_whatsapp=ph.is_whatsapp,
+        )
+        for ph in body.telephones
+    ]
+    return p
 
 
 # --- Routes -------------------------------------------------------------------

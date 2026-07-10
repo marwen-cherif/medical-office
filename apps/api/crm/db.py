@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 class SchemaTooNewError(RuntimeError):
@@ -359,6 +359,19 @@ CREATE TABLE IF NOT EXISTS prestation_reglements (
 
 CREATE INDEX IF NOT EXISTS idx_prestation_reglements_prestation ON prestation_reglements(prestation_id);
 CREATE INDEX IF NOT EXISTS idx_prestation_reglements_date ON prestation_reglements(date_reglement);
+
+-- Plusieurs numéros de téléphone pour un patient (contacts / proches)
+CREATE TABLE IF NOT EXISTS patient_phones (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    patient_id      INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+    telephone       TEXT NOT NULL,
+    relation        TEXT NOT NULL,
+    is_whatsapp     INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_patient_phones_patient ON patient_phones(patient_id);
 """
 
 
@@ -540,6 +553,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE documents ADD COLUMN whatsapp_date_envoi TEXT")
     if not _column_exists(conn, "documents", "whatsapp_date_refresh"):
         conn.execute("ALTER TABLE documents ADD COLUMN whatsapp_date_refresh TEXT")
+
+    # v15 : gestion de plusieurs numéros de téléphone par patient
+    if _meta_get(conn, "patient_phones_backfill_v15") is None:
+        conn.execute("""
+            INSERT INTO patient_phones (patient_id, telephone, relation, is_whatsapp)
+            SELECT id, telephone, 'Lui-même', 1
+            FROM patients
+            WHERE telephone IS NOT NULL AND TRIM(telephone) != ''
+        """)
+        _meta_set(conn, "patient_phones_backfill_v15")
 
 
 def _set_version(conn: sqlite3.Connection) -> None:

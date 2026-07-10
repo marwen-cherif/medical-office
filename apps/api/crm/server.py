@@ -461,6 +461,7 @@ class WhatsAppSettingsOut(BaseModel):
     whatsapp_template_name: str
     default_country: str
     has_token: bool
+    whatsapp_api_enabled: bool
 
 
 class WhatsAppSettingsIn(BaseModel):
@@ -468,6 +469,7 @@ class WhatsAppSettingsIn(BaseModel):
     whatsapp_access_token: str
     whatsapp_template_name: str
     default_country: str
+    whatsapp_api_enabled: bool
 
 
 class JobAcceptedOut(BaseModel):
@@ -1033,12 +1035,14 @@ def settings_get_whatsapp() -> WhatsAppSettingsOut:
         token = repo.get_setting(conn, "whatsapp_access_token") or ""
         template_name = repo.get_setting(conn, "whatsapp_template_name") or "envoi_document"
         default_country = repo.get_setting(conn, "default_country") or "+216"
+        api_enabled = repo.get_setting(conn, "whatsapp_api_enabled") == "true"
         
     return WhatsAppSettingsOut(
         whatsapp_phone_number_id=phone_id,
         whatsapp_template_name=template_name,
         default_country=default_country,
         has_token=bool(token),
+        whatsapp_api_enabled=api_enabled,
     )
 
 
@@ -1048,6 +1052,7 @@ def settings_set_whatsapp(body: WhatsAppSettingsIn) -> OkOut:
         repo.set_setting(conn, "whatsapp_phone_number_id", body.whatsapp_phone_number_id)
         repo.set_setting(conn, "whatsapp_template_name", body.whatsapp_template_name)
         repo.set_setting(conn, "default_country", body.default_country)
+        repo.set_setting(conn, "whatsapp_api_enabled", "true" if body.whatsapp_api_enabled else "false")
         
         token = body.whatsapp_access_token.strip()
         if token and token != "••••••••":

@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import { DatePicker } from '@/components/common/DatePicker';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { COUNTRIES, parsePhoneNumber, formatE164 } from '@/lib/format';
 import {
   Sheet,
   SheetBody,
@@ -39,6 +43,7 @@ export function PatientFormDialog({
     adresse: '',
     notes: '',
   });
+  const [telephones, setTelephones] = useState<{ id?: number | null; prefix: string; local: string; relation: string; is_whatsapp: boolean }[]>([]);
   const [error, setError] = useState('');
   const [confirmDup, setConfirmDup] = useState(false);
 
@@ -53,6 +58,9 @@ export function PatientFormDialog({
         adresse: '',
         notes: '',
       });
+      setTelephones([
+        { prefix: '+216', local: '', relation: 'Lui-même', is_whatsapp: true }
+      ]);
     } else if (target) {
       setForm({
         nom: target.nom,
@@ -63,25 +71,76 @@ export function PatientFormDialog({
         adresse: target.adresse ?? '',
         notes: target.notes ?? '',
       });
+
+      if (target.telephones && target.telephones.length > 0) {
+        const list = target.telephones.map((t) => {
+          const { prefix, local } = parsePhoneNumber(t.telephone);
+          return { id: t.id, prefix, local, relation: t.relation, is_whatsapp: t.is_whatsapp };
+        });
+        setTelephones(list);
+      } else if (target.telephone) {
+        const { prefix, local } = parsePhoneNumber(target.telephone);
+        setTelephones([
+          { prefix, local, relation: 'Lui-même', is_whatsapp: true }
+        ]);
+      } else {
+        setTelephones([
+          { prefix: '+216', local: '', relation: 'Lui-même', is_whatsapp: true }
+        ]);
+      }
     }
     setError('');
     setConfirmDup(false);
   }, [target]);
+
+  const updatePhone = (index: number, fields: Partial<typeof telephones[0]>) => {
+    setTelephones((prev) =>
+      prev.map((t, i) => (i === index ? { ...t, ...fields } : t))
+    );
+  };
+
+  const handlePhoneLocalChange = (index: number, val: string) => {
+    const cleanInput = val.trim();
+    if (cleanInput.startsWith('+') || cleanInput.startsWith('00')) {
+      const { prefix, local } = parsePhoneNumber(cleanInput, telephones[index].prefix);
+      updatePhone(index, { prefix, local });
+    } else {
+      const digits = cleanInput.replace(/[^\d]/g, '');
+      updatePhone(index, { local: digits });
+    }
+  };
 
   const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
 
   function submit() {
     if (!form.nom.trim() || !form.prenom.trim())
       return setError('Le nom et le prénom sont obligatoires.');
+      
+    const phonesPayload = telephones
+      .filter((t) => t.local.trim() !== '')
+      .map((t) => ({
+        id: t.id,
+        telephone: formatE164(t.prefix, t.local),
+        relation: t.relation.trim() || 'Lui-même',
+        is_whatsapp: t.is_whatsapp,
+      }));
+
+    let primaryTel = null;
+    const primary = phonesPayload.find(p => p.relation.toLowerCase() === 'lui-même') || phonesPayload[0];
+    if (primary) {
+      primaryTel = primary.telephone;
+    }
+
     const body = {
       nom: form.nom.trim(),
       prenom: form.prenom.trim(),
       date_naissance: form.date_naissance || null,
       email: form.email.trim() || null,
-      telephone: form.telephone.trim() || null,
+      telephone: primaryTel,
       adresse: form.adresse.trim() || null,
       notes: form.notes.trim() || null,
       force: confirmDup,
+      telephones: phonesPayload,
     };
     const done = {
       onSuccess: (p: Patient) => {
@@ -105,7 +164,7 @@ export function PatientFormDialog({
 
   return (
     <Sheet open={!!target} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent>
+      <SheetContent className="sm:max-w-[480px]">
         <form
           className="flex h-full flex-col"
           onSubmit={(e) => {
@@ -116,7 +175,7 @@ export function PatientFormDialog({
           <SheetHeader>
             <SheetTitle>{isEdit ? 'Modifier le patient' : 'Nouveau patient'}</SheetTitle>
           </SheetHeader>
-          <SheetBody className="space-y-3">
+          <SheetBody className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label htmlFor="pt-nom">Nom</Label>
@@ -147,22 +206,94 @@ export function PatientFormDialog({
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="pt-tel">Téléphone</Label>
+                <Label htmlFor="pt-email">Email</Label>
                 <Input
-                  id="pt-tel"
-                  value={form.telephone}
-                  onChange={(e) => set('telephone')(e.target.value)}
+                  id="pt-email"
+                  value={form.email}
+                  onChange={(e) => set('email')(e.target.value)}
                 />
               </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="pt-email">Email</Label>
-              <Input
-                id="pt-email"
-                value={form.email}
-                onChange={(e) => set('email')(e.target.value)}
-              />
+
+            <div className="space-y-3 border-t border-line pt-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-semibold">Numéros de téléphone</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setTelephones([
+                      ...telephones,
+                      { prefix: '+216', local: '', relation: '', is_whatsapp: false },
+                    ])
+                  }
+                >
+                  + Ajouter
+                </Button>
+              </div>
+
+              <div className="space-y-3">
+                {telephones.map((t, index) => (
+                  <div key={index} className="flex items-center gap-2">
+                    <div className="w-[120px] shrink-0">
+                      <Input
+                        value={t.relation}
+                        onChange={(e) => updatePhone(index, { relation: e.target.value })}
+                        list="relations-list"
+                        placeholder="Relation"
+                        className="h-9 text-xs"
+                      />
+                    </div>
+                    <div className="flex flex-1 items-center border border-line rounded-[var(--radius)] bg-white px-2 focus-within:ring-2 focus-within:ring-navy/40 h-9">
+                      <Select
+                        value={t.prefix}
+                        onValueChange={(val) => updatePhone(index, { prefix: val })}
+                      >
+                        <SelectTrigger className="w-[75px] border-none shadow-none focus:ring-0 px-1 py-0 h-7 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {COUNTRIES.map((c) => (
+                            <SelectItem key={c.code} value={c.prefix}>
+                              {c.flag} {c.prefix}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <input
+                        type="text"
+                        className="flex-1 min-w-0 bg-transparent py-1 px-2 text-xs text-ink outline-none border-none placeholder:text-gray-400"
+                        value={t.local}
+                        onChange={(e) => handlePhoneLocalChange(index, e.target.value)}
+                        placeholder="Numéro"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0 bg-bg px-2 py-1.5 rounded-[var(--radius)] h-9">
+                      <Switch
+                        checked={t.is_whatsapp}
+                        onCheckedChange={(checked) => updatePhone(index, { is_whatsapp: checked })}
+                      />
+                      <Label className="text-[10px] text-ink font-medium">
+                        WA
+                      </Label>
+                    </div>
+                    {telephones.length > 1 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-9 text-red hover:bg-red/10 shrink-0"
+                        onClick={() => setTelephones(telephones.filter((_, i) => i !== index))}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
+
             <div className="space-y-2">
               <Label htmlFor="pt-adresse">Adresse</Label>
               <Textarea
@@ -192,6 +323,15 @@ export function PatientFormDialog({
             </Button>
           </SheetFooter>
         </form>
+
+        <datalist id="relations-list">
+          <option value="Lui-même" />
+          <option value="Le conjoint" />
+          <option value="Père" />
+          <option value="Mère" />
+          <option value="L'enfant" />
+          <option value="Autres" />
+        </datalist>
       </SheetContent>
     </Sheet>
   );

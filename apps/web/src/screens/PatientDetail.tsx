@@ -81,7 +81,28 @@ export function PatientDetail() {
         <aside className="space-y-4 lg:w-72 lg:shrink-0">
           <div className="rounded-[var(--radius)] border border-line bg-white p-4">
             <IdRow label="Email" value={patient.email} />
-            <IdRow label="Téléphone" value={patient.telephone} />
+            {patient.telephones && patient.telephones.length > 0 ? (
+              <div className="my-2 border-t border-b border-line py-2 text-sm space-y-1">
+                <div className="text-muted mb-1">Téléphones</div>
+                {patient.telephones.map((t, idx) => (
+                  <div key={idx} className="flex items-center justify-between gap-2 text-xs py-0.5">
+                    <span className="bg-bg text-ink px-1.5 py-0.5 rounded text-[10px] font-medium border border-line select-none">
+                      {t.relation}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <ClickToCopy text={t.telephone} className="font-mono text-ink text-right" />
+                      {t.is_whatsapp && (
+                        <span className="text-[9px] bg-emerald-50 text-emerald-600 px-1.5 py-0.2 rounded font-bold shrink-0 border border-emerald-200" title="Compatible WhatsApp">
+                          WA
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <IdRow label="Téléphone" value={patient.telephone} />
+            )}
             <IdRow label="Naissance" value={isoToFr(patient.date_naissance)} />
             <IdRow label="Adresse" value={patient.adresse} multiline />
             {patient.notes && (

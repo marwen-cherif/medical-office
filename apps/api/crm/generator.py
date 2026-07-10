@@ -875,6 +875,7 @@ def send_document_whatsapp(
     document: Document,
     patient: Patient,
     settings: dict[str, str],
+    target_phone: Optional[str] = None,
 ) -> None:
     """Envoie un document par WhatsApp via Meta Cloud API et met à jour son statut.
 
@@ -889,14 +890,15 @@ def send_document_whatsapp(
     if not phone_id or not token:
         raise ValueError("Configuration WhatsApp incomplète (Phone Number ID ou Token manquant).")
 
-    if not patient.telephone:
+    phone_to_use = target_phone or patient.telephone
+    if not phone_to_use:
         raise ValueError("Aucun numéro de téléphone pour ce patient.")
 
     path = Path(document.file_path or "")
     if not path.exists():
         raise FileNotFoundError(f"Fichier du document introuvable : {path}")
 
-    normalized_phone = normalize_phone_number(patient.telephone, default_country)
+    normalized_phone = normalize_phone_number(phone_to_use, default_country)
 
     # variables {{1}} prénom / {{2}} nom / {{3}} type de document
     variables = [

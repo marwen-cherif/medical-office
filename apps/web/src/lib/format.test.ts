@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fmtMontant, fmtDevise, DEVISE, isoToFr, isoToFrDateTime, dateToIso, isoToDate } from './format';
+import { fmtMontant, fmtDevise, DEVISE, isoToFr, isoToFrDateTime, dateToIso, isoToDate, parsePhoneNumber, formatE164 } from './format';
 
 describe('format.ts helper functions', () => {
   describe('fmtMontant', () => {
@@ -67,6 +67,35 @@ describe('format.ts helper functions', () => {
       expect(isoToDate('')).toBeUndefined();
       expect(isoToDate(null)).toBeUndefined();
       expect(isoToDate('invalid')).toBeUndefined();
+    });
+  });
+
+  describe('parsePhoneNumber', () => {
+    it('parses Tunisian numbers', () => {
+      expect(parsePhoneNumber('55777766')).toEqual({ prefix: '+216', local: '55777766' });
+      expect(parsePhoneNumber('+216 55 777 766')).toEqual({ prefix: '+216', local: '55777766' });
+      expect(parsePhoneNumber('0021655777766')).toEqual({ prefix: '+216', local: '55777766' });
+    });
+
+    it('parses French numbers and strips leading zero', () => {
+      expect(parsePhoneNumber('0612345678', '+33')).toEqual({ prefix: '+33', local: '612345678' });
+      expect(parsePhoneNumber('+33 6 12 34 56 78')).toEqual({ prefix: '+33', local: '612345678' });
+      expect(parsePhoneNumber('+33 06 12 34 56 78')).toEqual({ prefix: '+33', local: '612345678' });
+      expect(parsePhoneNumber('0033612345678')).toEqual({ prefix: '+33', local: '612345678' });
+      expect(parsePhoneNumber('00330612345678')).toEqual({ prefix: '+33', local: '612345678' });
+    });
+
+    it('falls back to default prefix when no prefix is present', () => {
+      expect(parsePhoneNumber('55777766', '+216')).toEqual({ prefix: '+216', local: '55777766' });
+      expect(parsePhoneNumber('0612345678', '+216')).toEqual({ prefix: '+216', local: '612345678' });
+    });
+  });
+
+  describe('formatE164', () => {
+    it('combines prefix and local number, stripping leading zero', () => {
+      expect(formatE164('+216', '55777766')).toBe('+21655777766');
+      expect(formatE164('+33', '0612345678')).toBe('+33612345678');
+      expect(formatE164('+33', '612345678')).toBe('+33612345678');
     });
   });
 });

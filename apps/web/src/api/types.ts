@@ -20,8 +20,22 @@ export type WhatsAppSettings = S['WhatsAppSettingsOut'];
 export type WhatsAppSettingsIn = S['WhatsAppSettingsIn'];
 
 // --- Patients ----------------------------------------------------------------
-export type Patient = S['PatientOut'];
-export type PatientIn = S['PatientIn'];
+export interface PatientPhone {
+  id?: number | null;
+  patient_id?: number;
+  telephone: string;
+  relation: string;
+  is_whatsapp: boolean;
+}
+
+export type Patient = Omit<S['PatientOut'], 'telephones'> & {
+  telephones?: PatientPhone[];
+};
+
+export type PatientIn = Omit<S['PatientIn'], 'telephones'> & {
+  telephones: PatientPhone[];
+};
+
 export type PatientList = S['PatientListOut'];
 export type PatientDetail = S['PatientDetailOut'];
 export type Solde = S['SoldeOut'];

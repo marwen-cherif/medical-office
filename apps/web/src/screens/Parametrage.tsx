@@ -1,18 +1,23 @@
-import { FileText, Mail, MessageSquare, Printer, Stethoscope } from 'lucide-react';
+import { FileText, Mail, MessageSquare, Printer, Stethoscope, ToggleLeft } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useWhatsAppSettings } from '@/hooks/queries';
 import { ModelesTab } from './parametrage/ModelesTab';
 import { EmailsTab } from './parametrage/EmailsTab';
 import { ImprimanteTab } from './parametrage/ImprimanteTab';
 import { ActesTab } from './parametrage/ActesTab';
 import { WhatsAppTab } from './parametrage/WhatsAppTab';
+import { FonctionnalitesTab } from './parametrage/FonctionnalitesTab';
 
 export function Parametrage() {
+  const waSettings = useWhatsAppSettings();
+  const isWhatsAppEnabled = !!waSettings.data?.whatsapp_api_enabled;
+
   return (
     <div className="mx-auto max-w-5xl p-8">
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-ink">Paramétrage</h1>
         <p className="mt-1 text-sm text-muted">
-          Modèles de documents, modèles d'email, imprimante, WhatsApp et catalogue d'actes.
+          Gérez les fonctionnalités optionnelles, modèles de documents, emails, imprimantes et catalogue d'actes.
         </p>
       </header>
 
@@ -27,11 +32,16 @@ export function Parametrage() {
           <TabsTrigger value="imprimante">
             <Printer className="size-4" /> Imprimante
           </TabsTrigger>
-          <TabsTrigger value="whatsapp">
-            <MessageSquare className="size-4" /> WhatsApp
-          </TabsTrigger>
+          {isWhatsAppEnabled && (
+            <TabsTrigger value="whatsapp">
+              <MessageSquare className="size-4" /> WhatsApp
+            </TabsTrigger>
+          )}
           <TabsTrigger value="actes">
             <Stethoscope className="size-4" /> Actes
+          </TabsTrigger>
+          <TabsTrigger value="features">
+            <ToggleLeft className="size-4" /> Fonctionnalités
           </TabsTrigger>
         </TabsList>
 
@@ -44,11 +54,16 @@ export function Parametrage() {
         <TabsContent value="imprimante">
           <ImprimanteTab />
         </TabsContent>
-        <TabsContent value="whatsapp">
-          <WhatsAppTab />
-        </TabsContent>
+        {isWhatsAppEnabled && (
+          <TabsContent value="whatsapp">
+            <WhatsAppTab />
+          </TabsContent>
+        )}
         <TabsContent value="actes">
           <ActesTab />
+        </TabsContent>
+        <TabsContent value="features">
+          <FonctionnalitesTab />
         </TabsContent>
       </Tabs>
     </div>

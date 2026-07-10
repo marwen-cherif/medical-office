@@ -9,7 +9,7 @@ import json
 import re
 import sqlite3
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Optional
 
@@ -55,6 +55,15 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 
 @dataclass
+class PatientPhone:
+    id: Optional[int]
+    patient_id: int
+    telephone: str
+    relation: str
+    is_whatsapp: bool = False
+
+
+@dataclass
 class Patient:
     id: Optional[int]
     nom: str
@@ -64,6 +73,7 @@ class Patient:
     telephone: Optional[str] = None
     adresse: Optional[str] = None
     notes: Optional[str] = None
+    telephones: list[PatientPhone] = field(default_factory=list)
 
     @property
     def display(self) -> str:
@@ -182,7 +192,55 @@ def _row_to_patient(row: sqlite3.Row) -> Patient:
     )
 
 
+def _resolve_primary_telephone(phones: list[PatientPhone]) -> Optional[str]:
+    if not phones:
+        return None
+    for p in phones:
+        if p.relation.strip().lower() == "lui-même":
+            return p.telephone
+    return phones[0].telephone
+
+
+def list_patient_phones(conn: sqlite3.Connection, patient_id: int) -> list[PatientPhone]:
+    rows = conn.execute(
+        """SELECT id, patient_id, telephone, relation, is_whatsapp
+           FROM patient_phones
+           WHERE patient_id = ?
+           ORDER BY id ASC""",
+        (patient_id,),
+    ).fetchall()
+    return [
+        PatientPhone(
+            id=r["id"],
+            patient_id=r["patient_id"],
+            telephone=r["telephone"],
+            relation=r["relation"],
+            is_whatsapp=bool(r["is_whatsapp"]),
+        )
+        for r in rows
+    ]
+
+
+def save_patient_phones(
+    conn: sqlite3.Connection, patient_id: int, phones: list[PatientPhone]
+) -> None:
+    conn.execute("DELETE FROM patient_phones WHERE patient_id = ?", (patient_id,))
+    for p in phones:
+        conn.execute(
+            """INSERT INTO patient_phones (patient_id, telephone, relation, is_whatsapp)
+               VALUES (?, ?, ?, ?)""",
+            (
+                patient_id,
+                p.telephone.strip(),
+                p.relation.strip(),
+                1 if p.is_whatsapp else 0,
+            ),
+        )
+    conn.commit()
+
+
 def create_patient(conn: sqlite3.Connection, p: Patient) -> Patient:
+    p.telephone = _resolve_primary_telephone(p.telephones)
     cur = conn.execute(
         """INSERT INTO patients
            (nom, prenom, slug_nom, slug_prenom, date_naissance, email, telephone, adresse, notes)
@@ -201,6 +259,8 @@ def create_patient(conn: sqlite3.Connection, p: Patient) -> Patient:
     )
     conn.commit()
     p.id = cur.lastrowid
+    save_patient_phones(conn, p.id, p.telephones)
+    p.telephones = list_patient_phones(conn, p.id)
     return p
 
 
@@ -242,6 +302,7 @@ def update_patient(conn: sqlite3.Connection, p: Patient) -> dict[str, list]:
     """Met a jour une fiche patient et renvoie le diff des champs modifies
     ({libelle: [avant, apres]}, calcule AVANT l'UPDATE) pour le journal d'audit.
     Retro-compatible : un appelant qui ignore la valeur de retour fonctionne."""
+    p.telephone = _resolve_primary_telephone(p.telephones)
     changed = diff_patient(conn, p)
     conn.execute(
         """UPDATE patients SET
@@ -264,12 +325,18 @@ def update_patient(conn: sqlite3.Connection, p: Patient) -> dict[str, list]:
         ),
     )
     conn.commit()
+    save_patient_phones(conn, p.id, p.telephones)
+    p.telephones = list_patient_phones(conn, p.id)
     return changed
 
 
 def get_patient(conn: sqlite3.Connection, patient_id: int) -> Optional[Patient]:
     row = conn.execute("SELECT * FROM patients WHERE id = ?", (patient_id,)).fetchone()
-    return _row_to_patient(row) if row else None
+    if not row:
+        return None
+    p = _row_to_patient(row)
+    p.telephones = list_patient_phones(conn, patient_id)
+    return p
 
 
 def _patient_filter_clause(search: str, filtre: str) -> tuple[str, list[Any]]:
