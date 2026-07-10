@@ -27,6 +27,9 @@ model = gpt-4o
 provider = openai
 prompt = prompts/prefill.txt
 enabled = true
+
+[whatsapp]
+message_repli = Custom WA message with <PRENOM> <NOM> and <DOCUMENT>.
 """
     config_file.write_text(config_content, encoding="utf-8")
     
@@ -50,3 +53,26 @@ enabled = true
     assert cfg.ai.feature("prefill") is not None
     assert cfg.ai.feature("prefill").provider == "openai"
     assert cfg.ai.feature("prefill").enabled is True
+
+    assert cfg.whatsapp.message_repli == "Custom WA message with <PRENOM> <NOM> and <DOCUMENT>."
+
+
+def test_load_config_fallback_whatsapp(tmp_path: Path):
+    config_file = tmp_path / "test_config_fallback.ini"
+    config_content = """[paths]
+output_format = pdf
+output = my_custom_output
+
+[mailjet]
+api_key = test_key
+api_secret = test_secret
+from_email = test@example.com
+from_name = Test Doctor
+
+[mail]
+template_id = 12345
+"""
+    config_file.write_text(config_content, encoding="utf-8")
+    cfg = load_config(config_file)
+    assert cfg.whatsapp.message_repli == "Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>."
+

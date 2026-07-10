@@ -194,6 +194,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/categories/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Categories Export
+         * @description Exporte la configuration des catégories en .xlsx sur le poste, puis ouvre le fichier.
+         */
+        get: operations["categories_export_api_categories_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/categories/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Categories Import
+         * @description Importe un .xlsx des catégories (Nom, Couleur, Icone, Ordre, Message WhatsApp).
+         */
+        post: operations["categories_import_api_categories_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/mail-templates": {
         parameters: {
             query?: never;
@@ -1014,6 +1054,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/documents/{document_id}/copy-to-clipboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy Document To Clipboard
+         * @description Copie le fichier genere dans le presse-papier Windows (format CF_HDROP).
+         */
+        post: operations["copy_document_to_clipboard_api_documents__document_id__copy_to_clipboard_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/documents/{document_id}/send-whatsapp": {
         parameters: {
             query?: never;
@@ -1581,6 +1641,11 @@ export interface components {
             /** File */
             file: string;
         };
+        /** Body_categories_import_api_categories_import_post */
+        Body_categories_import_api_categories_import_post: {
+            /** File */
+            file: string;
+        };
         /** Body_facture_ia_montant_api_factures_ia_montant_post */
         Body_facture_ia_montant_api_factures_ia_montant_post: {
             /** File */
@@ -1620,6 +1685,30 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /**
+         * CategoryExportOut
+         * @description Résultat d'un export : chemin du .xlsx écrit sur le poste + nombre de catégories.
+         */
+        CategoryExportOut: {
+            /** Path */
+            path: string;
+            /** Count */
+            count: number;
+        };
+        /**
+         * CategoryImportOut
+         * @description Compte-rendu d'un import .xlsx de la configuration des catégories.
+         */
+        CategoryImportOut: {
+            /** Created */
+            created: number;
+            /** Updated */
+            updated: number;
+            /** Skipped */
+            skipped: number;
+            /** Errors */
+            errors: string[];
+        };
         /** CategoryOut */
         CategoryOut: {
             /** Nom */
@@ -1633,6 +1722,8 @@ export interface components {
              * @default 0
              */
             sort_order: number;
+            /** Whatsapp Message */
+            whatsapp_message?: string | null;
         };
         /** CategoryRenameIn */
         CategoryRenameIn: {
@@ -1657,6 +1748,8 @@ export interface components {
              * @default 0
              */
             sort_order: number;
+            /** Whatsapp Message */
+            whatsapp_message?: string | null;
         };
         /** CategoryValueOut */
         CategoryValueOut: {
@@ -2901,6 +2994,8 @@ export interface components {
             has_token: boolean;
             /** Whatsapp Api Enabled */
             whatsapp_api_enabled: boolean;
+            /** Fallback Message */
+            fallback_message: string;
         };
         /** MatchOut */
         crm__routers__patients__MatchOut: {
@@ -3797,6 +3892,133 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OkOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    categories_export_api_categories_export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryExportOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    categories_import_api_categories_import_post: {
+        parameters: {
+            query?: {
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_categories_import_api_categories_import_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryImportOut"];
                 };
             };
             /** @description Bad Request */
@@ -7403,6 +7625,73 @@ export interface operations {
         };
     };
     open_document_api_documents__document_id__open_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkOut"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    copy_document_to_clipboard_api_documents__document_id__copy_to_clipboard_post: {
         parameters: {
             query?: never;
             header?: never;

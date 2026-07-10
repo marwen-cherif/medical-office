@@ -859,6 +859,53 @@ def open_document(document_id: int) -> core.OkOut:
     return core.OkOut()
 
 
+@router.post("/documents/{document_id}/copy-to-clipboard", response_model=core.OkOut)
+def copy_document_to_clipboard(document_id: int) -> core.OkOut:
+    """Copie le fichier genere dans le presse-papier Windows (format CF_HDROP)."""
+    with core.db() as conn:
+        d = repo.get_document(conn, document_id)
+    if d is None or not d.file_path:
+        raise core.ApiError(core.ERR_NOT_FOUND, "Fichier introuvable.", status=404)
+    path = Path(d.file_path)
+    if not path.exists():
+        raise core.ApiError(
+            core.ERR_NOT_FOUND, "Le fichier n'existe plus sur le disque.", status=404
+        )
+    try:
+        if os.name == "nt":
+            import win32clipboard
+            import ctypes
+
+            abs_path = str(path.resolve())
+            paths_str = abs_path + "\0\0"
+            paths_bytes = paths_str.encode("utf-16le")
+
+            class DROPFILES(ctypes.Structure):
+                _fields_ = [
+                    ("pFiles", ctypes.c_uint32),
+                    ("pt", ctypes.c_long * 2),
+                    ("fNC", ctypes.c_uint32),
+                    ("fWide", ctypes.c_uint32),
+                ]
+
+            offset = ctypes.sizeof(DROPFILES)
+            df = DROPFILES()
+            df.pFiles = offset
+            df.fWide = 1
+
+            data = bytes(df) + paths_bytes
+
+            win32clipboard.OpenClipboard()
+            try:
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32clipboard.CF_HDROP, data)
+            finally:
+                win32clipboard.CloseClipboard()
+    except Exception as exc:  # noqa: BLE001
+        raise core.ApiError(core.ERR_VALIDATION, f"Copie impossible : {exc}")
+    return core.OkOut()
+
+
 def _load_whatsapp_settings(conn) -> dict[str, str]:
     keys = [
         "whatsapp_phone_number_id",

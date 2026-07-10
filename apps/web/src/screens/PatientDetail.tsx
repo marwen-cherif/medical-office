@@ -16,6 +16,8 @@ import { DocumentsTab } from './patient-detail/DocumentsTab';
 import { ReglementsTab } from './patient-detail/ReglementsTab';
 import { HistoriqueTab } from './patient-detail/HistoriqueTab';
 import { ClickToCopy } from '@/components/ui/click-to-copy';
+import { WhatsAppIcon } from '@/components/icons/WhatsAppIcon';
+
 
 /** Denture par défaut selon l'âge (enfant si < 13 ans). */
 export function dentureFor(dateNaissance: string | null | undefined): 'adulte' | 'enfant' {
@@ -92,8 +94,9 @@ export function PatientDetail() {
                     <div className="flex items-center gap-1.5">
                       <ClickToCopy text={t.telephone} className="font-mono text-ink text-right" />
                       {t.is_whatsapp && (
-                        <span className="text-[9px] bg-emerald-50 text-emerald-600 px-1.5 py-0.2 rounded font-bold shrink-0 border border-emerald-200" title="Compatible WhatsApp">
-                          WA
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded font-bold shrink-0 border border-emerald-200" title="Compatible WhatsApp">
+                          <WhatsAppIcon className="size-3 text-emerald-600" />
+                          <span>WhatsApp</span>
                         </span>
                       )}
                     </div>

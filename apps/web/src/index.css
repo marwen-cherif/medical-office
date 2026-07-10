@@ -82,3 +82,72 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
+
+/* Surcharge react-international-phone pour s'aligner sur le style shadcn/ui */
+.phone-input-wrapper .react-international-phone-input-container {
+  display: flex !important;
+  align-items: center !important;
+  width: 100% !important;
+}
+
+.phone-input-wrapper .react-international-phone-country-selector-button {
+  background-color: var(--color-surface) !important;
+  border: 1px solid var(--color-line) !important;
+  border-right: none !important;
+  border-top-left-radius: var(--radius) !important;
+  border-bottom-left-radius: var(--radius) !important;
+  height: 2.25rem !important; /* h-9 */
+  padding-left: 0.5rem !important;
+  padding-right: 0.5rem !important;
+  cursor: pointer !important;
+  transition: background-color 0.2s !important;
+}
+
+.phone-input-wrapper .react-international-phone-country-selector-button:hover {
+  background-color: var(--color-bg) !important;
+}
+
+.phone-input-wrapper .react-international-phone-input {
+  flex: 1 !important;
+  width: 100% !important;
+  background-color: var(--color-surface) !important;
+  border: 1px solid var(--color-line) !important;
+  border-top-right-radius: var(--radius) !important;
+  border-bottom-right-radius: var(--radius) !important;
+  height: 2.25rem !important; /* h-9 */
+  padding: 0.25rem 0.75rem !important;
+  font-size: 0.75rem !important; /* text-xs */
+  color: var(--color-ink) !important;
+  box-shadow: var(--shadow-sm) !important;
+  transition: border-color 0.2s, box-shadow 0.2s !important;
+}
+
+.phone-input-wrapper .react-international-phone-input:focus {
+  outline: none !important;
+  border-color: var(--color-line) !important;
+  box-shadow: 0 0 0 2px rgba(16, 53, 127, 0.4) !important; /* focus-visible:ring-2 focus-visible:ring-navy/40 */
+}
+
+/* Surcharges du menu de sélection de pays */
+.phone-input-wrapper .react-international-phone-country-selector-dropdown {
+  background-color: var(--color-surface) !important;
+  border: 1px solid var(--color-line) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: var(--shadow-md) !important;
+  z-index: 50 !important;
+}
+
+.phone-input-wrapper .react-international-phone-country-selector-dropdown__list-item {
+  color: var(--color-ink) !important;
+  font-size: 0.75rem !important; /* text-xs */
+  padding: 0.375rem 0.5rem !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.5rem !important;
+}
+
+.phone-input-wrapper .react-international-phone-country-selector-dropdown__list-item:hover,
+.phone-input-wrapper .react-international-phone-country-selector-dropdown__list-item--active {
+  background-color: var(--color-bg) !important;
+}
+

@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 class SchemaTooNewError(RuntimeError):
@@ -274,11 +274,12 @@ CREATE TABLE IF NOT EXISTS template_meta (
 -- Attributs visuels et ordre d'affichage par categorie (creee paresseusement
 -- quand une nouvelle categorie apparait, couleur par defaut depuis une palette).
 CREATE TABLE IF NOT EXISTS categories (
-    nom         TEXT PRIMARY KEY,
-    couleur     TEXT,
-    icone       TEXT,
-    sort_order  INTEGER NOT NULL DEFAULT 0,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    nom              TEXT PRIMARY KEY,
+    couleur          TEXT,
+    icone            TEXT,
+    sort_order       INTEGER NOT NULL DEFAULT 0,
+    whatsapp_message TEXT,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- v9 : referentiel d'actes tarifes (libelle + prix). Source de prix reutilisable
@@ -563,6 +564,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
             WHERE telephone IS NOT NULL AND TRIM(telephone) != ''
         """)
         _meta_set(conn, "patient_phones_backfill_v15")
+
+    # v16 : messages WhatsApp personnalisés par catégorie de document
+    if not _column_exists(conn, "categories", "whatsapp_message"):
+        conn.execute("ALTER TABLE categories ADD COLUMN whatsapp_message TEXT")
 
 
 def _set_version(conn: sqlite3.Connection) -> None:

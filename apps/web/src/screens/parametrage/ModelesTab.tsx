@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/table';
 import { humanizeError } from '@/lib/errors';
 import { CategoryField } from '@/components/common/CategoryField';
+import { CategoriesImportExport } from './CategoriesImportExport';
 import {
   useCategories,
   useCreateTemplate,
@@ -32,8 +33,10 @@ import {
   useRenameTemplate,
   useSetTemplateCategory,
   useTemplates,
+  useUpdateCategory,
+  useWhatsAppSettings,
 } from '@/hooks/queries';
-import type { Template } from '@/api/types';
+import type { Category, Template } from '@/api/types';
 import { VariablesDialog } from './VariablesDialog';
 
 export function ModelesTab() {
@@ -53,6 +56,17 @@ export function ModelesTab() {
   const [categoryTarget, setCategoryTarget] = useState<Template | null>(null);
   const [categoryValue, setCategoryValue] = useState('');
   const [varsTarget, setVarsTarget] = useState<Template | null>(null);
+
+  const [editCategoryTarget, setEditCategoryTarget] = useState<Category | null>(null);
+  const [editCategoryColor, setEditCategoryColor] = useState('');
+  const [editCategoryIcon, setEditCategoryIcon] = useState('');
+  const [editCategoryOrder, setEditCategoryOrder] = useState<number>(0);
+  const [editCategoryWhatsApp, setEditCategoryWhatsApp] = useState('');
+
+  const updateCategory = useUpdateCategory();
+  const waSettings = useWhatsAppSettings();
+
+  const fallbackMessage = waSettings.data?.fallback_message || "Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>.";
 
   const grouped = useMemo(() => {
     const map = new Map<string, Template[]>();
@@ -113,6 +127,25 @@ export function ModelesTab() {
     );
   }
 
+  async function onSaveCategoryDetails() {
+    if (!editCategoryTarget) return;
+    try {
+      await updateCategory.mutateAsync({
+        nom: editCategoryTarget.nom,
+        body: {
+          couleur: editCategoryColor.trim() || null,
+          icone: editCategoryIcon.trim() || null,
+          sort_order: editCategoryOrder,
+          whatsapp_message: editCategoryWhatsApp.trim() || null,
+        },
+      });
+      toast.success('Catégorie mise à jour.');
+      setEditCategoryTarget(null);
+    } catch (e) {
+      toast.error(humanizeError(e));
+    }
+  }
+
   function onDelete(t: Template) {
     if (!confirm(`Supprimer le modèle « ${t.label} » ? Le fichier .docx sera supprimé.`)) return;
     deleteTpl.mutate(t.name, {
@@ -139,15 +172,18 @@ export function ModelesTab() {
           <code className="rounded bg-bg px-1">&lt;ODONTOGRAMME&gt;</code> (schéma dentaire — à
           placer dans un paragraphe dédié).
         </p>
-        <Button
-          onClick={() => {
-            setNewName('');
-            setNewCategory('');
-            setCreateOpen(true);
-          }}
-        >
-          <FilePlus2 className="size-4" /> Nouveau modèle
-        </Button>
+        <div className="flex gap-2">
+          <CategoriesImportExport />
+          <Button
+            onClick={() => {
+              setNewName('');
+              setNewCategory('');
+              setCreateOpen(true);
+            }}
+          >
+            <FilePlus2 className="size-4" /> Nouveau modèle
+          </Button>
+        </div>
       </div>
 
       {templates.isLoading && <p className="text-sm text-muted">Chargement…</p>}
@@ -162,6 +198,33 @@ export function ModelesTab() {
             />
             <span className="text-sm font-semibold text-ink">{cat}</span>
             <Badge variant="muted">{items.length}</Badge>
+            {cat !== 'Sans catégorie' && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-6 ml-1 text-muted hover:text-ink"
+                title="Modifier la catégorie"
+                onClick={() => {
+                  const fullCat = categories.data?.find((c) => c.nom === cat);
+                  if (fullCat) {
+                    setEditCategoryTarget(fullCat);
+                    setEditCategoryColor(fullCat.couleur ?? '');
+                    setEditCategoryIcon(fullCat.icone ?? '');
+                    setEditCategoryOrder(fullCat.sort_order ?? 0);
+                    setEditCategoryWhatsApp(fullCat.whatsapp_message ?? '');
+                  } else {
+                    // Fallback de sécurité
+                    setEditCategoryTarget({ nom: cat, couleur: '', icone: '', sort_order: 0, whatsapp_message: '' });
+                    setEditCategoryColor('');
+                    setEditCategoryIcon('');
+                    setEditCategoryOrder(0);
+                    setEditCategoryWhatsApp('');
+                  }
+                }}
+              >
+                <Pencil className="size-3" />
+              </Button>
+            )}
           </div>
           <Table>
             <TableHeader>
@@ -348,6 +411,94 @@ export function ModelesTab() {
                 Annuler
               </Button>
               <Button type="submit" disabled={setCategory.isPending}>
+                Enregistrer
+              </Button>
+            </SheetFooter>
+          </form>
+        </SheetContent>
+      </Sheet>
+
+      {/* Modification Catégorie */}
+      <Sheet open={!!editCategoryTarget} onOpenChange={(o) => !o && setEditCategoryTarget(null)}>
+        <SheetContent className="sm:max-w-[500px]">
+          <form
+            className="flex h-full flex-col"
+            onSubmit={(e) => {
+              e.preventDefault();
+              onSaveCategoryDetails();
+            }}
+          >
+            <SheetHeader>
+              <SheetTitle>Modifier la catégorie</SheetTitle>
+              <SheetDescription>
+                Personnalisez la couleur et le message WhatsApp pour la catégorie <span className="font-semibold">{editCategoryTarget?.nom}</span>.
+              </SheetDescription>
+            </SheetHeader>
+            <SheetBody className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="cat-color">Couleur (Hex)</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      type="color"
+                      className="size-10 p-1 cursor-pointer"
+                      value={editCategoryColor.startsWith('#') && editCategoryColor.length === 7 ? editCategoryColor : '#94a3b8'}
+                      onChange={(e) => setEditCategoryColor(e.target.value)}
+                    />
+                    <Input
+                      id="cat-color"
+                      value={editCategoryColor}
+                      onChange={(e) => setEditCategoryColor(e.target.value)}
+                      placeholder="#94a3b8"
+                      className="flex-1"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="cat-order">Ordre de tri</Label>
+                  <Input
+                    id="cat-order"
+                    type="number"
+                    value={editCategoryOrder}
+                    onChange={(e) => setEditCategoryOrder(parseInt(e.target.value, 10) || 0)}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="cat-icon">Nom de l'icône Lucide (optionnel)</Label>
+                <Input
+                  id="cat-icon"
+                  value={editCategoryIcon}
+                  onChange={(e) => setEditCategoryIcon(e.target.value)}
+                  placeholder="ex. Folder, FileText, etc."
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="cat-wa-msg">Message WhatsApp de partage</Label>
+                  <span className="text-[10px] text-muted">
+                    Variables : &lt;PRENOM&gt;, &lt;NOM&gt;, &lt;DOCUMENT&gt;
+                  </span>
+                </div>
+                <textarea
+                  id="cat-wa-msg"
+                  className="w-full min-h-[120px] rounded-md border border-line bg-bg p-2 text-sm text-ink focus-ring"
+                  value={editCategoryWhatsApp}
+                  onChange={(e) => setEditCategoryWhatsApp(e.target.value)}
+                  placeholder={`Par défaut : ${fallbackMessage}`}
+                />
+                <p className="text-[11px] text-muted">
+                  Si ce message est vide, le message général de repli ci-dessus sera utilisé.
+                </p>
+              </div>
+            </SheetBody>
+            <SheetFooter>
+              <Button type="button" variant="secondary" onClick={() => setEditCategoryTarget(null)}>
+                Annuler
+              </Button>
+              <Button type="submit" disabled={updateCategory.isPending}>
                 Enregistrer
               </Button>
             </SheetFooter>

@@ -70,6 +70,9 @@ importers:
       react-hook-form:
         specifier: ^7.54.2
         version: 7.81.0(react@19.2.7)
+      react-international-phone:
+        specifier: ^4.8.0
+        version: 4.8.0(react@19.2.7)
       react-odontogram:
         specifier: 0.5.6
         version: 0.5.6(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -2340,6 +2343,11 @@ packages:
     engines: {node: '>=18.0.0'}
     peerDependencies:
       react: ^16.8.0 || ^17 || ^18 || ^19
+
+  react-international-phone@4.8.0:
+    resolution: {integrity: sha512-PoyXx8t0OZNZXLupZN5UtmLb8nO6PQ6f6jQvYCAtg7VzxonuBcDs/4YA4+flqZZj5QOVqN4DLY1p39mEtJAwzw==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
   react-is@16.13.1:
     resolution: {integrity: sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==}
@@ -5143,6 +5151,10 @@ snapshots:
       scheduler: 0.27.0
 
   react-hook-form@7.81.0(react@19.2.7):
+    dependencies:
+      react: 19.2.7
+
+  react-international-phone@4.8.0(react@19.2.7):
     dependencies:
       react: 19.2.7
 

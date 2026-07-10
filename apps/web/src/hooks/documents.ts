@@ -239,6 +239,17 @@ export function useOpenDocument() {
   });
 }
 
+export function useCopyDocumentToClipboard() {
+  return useMutation({
+    mutationFn: async (id: number) =>
+      unwrap(
+        await client.POST('/api/documents/{document_id}/copy-to-clipboard', {
+          params: { path: { document_id: id } },
+        })
+      ),
+  });
+}
+
 export function useDeleteDocument() {
   const qc = useQueryClient();
   return useMutation({

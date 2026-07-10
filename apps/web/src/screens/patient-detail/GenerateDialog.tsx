@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { DatePicker } from '@/components/common/DatePicker';
+import { TemplateCombobox } from '@/components/common/TemplateCombobox';
 import { MoneySummary } from '@/components/common/MoneySummary';
 import { Odontogramme } from '@/components/common/Odontogramme';
 import { humanizeError } from '@/lib/errors';
@@ -373,18 +374,12 @@ export function GenerateDialog({
             <div className="grid grid-cols-[1fr_8rem] gap-3">
               <div className="space-y-2">
                 <Label>Modèle / type de document</Label>
-                <Select value={template} onValueChange={setTemplate} disabled={!!draft}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Choisir un modèle…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(templates.data ?? []).map((t) => (
-                      <SelectItem key={t.name} value={t.name}>
-                        {t.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <TemplateCombobox
+                  templates={templates.data ?? []}
+                  value={template}
+                  onChange={setTemplate}
+                  disabled={!!draft}
+                />
               </div>
               <div className="space-y-2">
                 <Label>Format</Label>
@@ -451,7 +446,7 @@ export function GenerateDialog({
                     </Button>
                   </div>
                   <p className="text-xs text-muted">
-                    Créés comme actes isolés (suivis dans la dette, visibles dans l'onglet Plans
+                    Créés comme actes isolés (suivis dans la dette, visibles dans l&apos;onglet Plans
                     &amp; actes).
                   </p>
                   {cards.map((c, i) => (

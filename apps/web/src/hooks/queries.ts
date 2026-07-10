@@ -8,7 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client, unwrap, streamJob, type JobEvent } from '@/lib/api';
 import { backend } from '@/lib/bridge';
-import type { ActeExport, ActeImport, ActeIn, Field, MailTemplateIn, WhatsAppSettingsIn } from '@/api/types';
+import type { ActeExport, ActeImport, ActeIn, Field, MailTemplateIn, WhatsAppSettingsIn, CategoryImport, CategoryExport, CategoryUpsertIn } from '@/api/types';
 
 export const keys = {
   templates: ['templates'] as const,
@@ -142,6 +142,52 @@ export function useCategories() {
     queryFn: async () => unwrap(await client.GET('/api/categories')),
   });
 }
+
+export function useUpdateCategory() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ nom, body }: { nom: string; body: CategoryUpsertIn }) =>
+      unwrap(
+        await client.PUT('/api/categories/{nom}', {
+          params: { path: { nom } },
+          body,
+        })
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.categories });
+      qc.invalidateQueries({ queryKey: keys.templates });
+    },
+  });
+}
+
+export function useExportCategories() {
+  return useMutation({
+    mutationFn: async (): Promise<CategoryExport> =>
+      unwrap(await client.GET('/api/categories/export')),
+  });
+}
+
+export function useImportCategories() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File): Promise<CategoryImport> => {
+      const fd = new FormData();
+      fd.append('file', file);
+      const resp = await fetch(`${backend.baseUrl}/api/categories/import`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${backend.token}` },
+        body: fd,
+      });
+      if (!resp.ok) throw await resp.json();
+      return resp.json() as Promise<CategoryImport>;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.categories });
+      qc.invalidateQueries({ queryKey: keys.templates });
+    },
+  });
+}
+
 
 // --- mail templates ----------------------------------------------------------
 

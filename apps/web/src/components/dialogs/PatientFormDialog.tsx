@@ -7,8 +7,11 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { DatePicker } from '@/components/common/DatePicker';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+
 import { COUNTRIES, parsePhoneNumber, formatE164 } from '@/lib/format';
+import { PhoneInput } from 'react-international-phone';
+import 'react-international-phone/style.css';
+import { WhatsAppIcon } from '@/components/icons/WhatsAppIcon';
 import {
   Sheet,
   SheetBody,
@@ -99,16 +102,6 @@ export function PatientFormDialog({
     );
   };
 
-  const handlePhoneLocalChange = (index: number, val: string) => {
-    const cleanInput = val.trim();
-    if (cleanInput.startsWith('+') || cleanInput.startsWith('00')) {
-      const { prefix, local } = parsePhoneNumber(cleanInput, telephones[index].prefix);
-      updatePhone(index, { prefix, local });
-    } else {
-      const digits = cleanInput.replace(/[^\d]/g, '');
-      updatePhone(index, { local: digits });
-    }
-  };
 
   const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -164,7 +157,7 @@ export function PatientFormDialog({
 
   return (
     <Sheet open={!!target} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="sm:max-w-[480px]">
+      <SheetContent className="sm:max-w-[560px]">
         <form
           className="flex h-full flex-col"
           onSubmit={(e) => {
@@ -245,38 +238,32 @@ export function PatientFormDialog({
                         className="h-9 text-xs"
                       />
                     </div>
-                    <div className="flex flex-1 items-center border border-line rounded-[var(--radius)] bg-white px-2 focus-within:ring-2 focus-within:ring-navy/40 h-9">
-                      <Select
-                        value={t.prefix}
-                        onValueChange={(val) => updatePhone(index, { prefix: val })}
-                      >
-                        <SelectTrigger className="w-[75px] border-none shadow-none focus:ring-0 px-1 py-0 h-7 text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {COUNTRIES.map((c) => (
-                            <SelectItem key={c.code} value={c.prefix}>
-                              {c.flag} {c.prefix}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <input
-                        type="text"
-                        className="flex-1 min-w-0 bg-transparent py-1 px-2 text-xs text-ink outline-none border-none placeholder:text-gray-400"
-                        value={t.local}
-                        onChange={(e) => handlePhoneLocalChange(index, e.target.value)}
-                        placeholder="Numéro"
+                    <div className="flex-1 min-w-0 phone-input-wrapper">
+                      <PhoneInput
+                        defaultCountry={(() => {
+                          const code = COUNTRIES.find((c) => c.prefix === t.prefix)?.code.toLowerCase();
+                          return code || 'tn';
+                        })()}
+                        value={formatE164(t.prefix, t.local)}
+                        onChange={(phone) => {
+                          const parsed = parsePhoneNumber(phone, t.prefix);
+                          updatePhone(index, { prefix: parsed.prefix, local: parsed.local });
+                        }}
                       />
                     </div>
-                    <div className="flex items-center gap-1 shrink-0 bg-bg px-2 py-1.5 rounded-[var(--radius)] h-9">
+                    <div
+                      className="flex items-center gap-1.5 shrink-0 bg-bg px-2 py-1.5 rounded-[var(--radius)] h-9 border border-line"
+                      title="Numéro lié à WhatsApp"
+                    >
                       <Switch
                         checked={t.is_whatsapp}
                         onCheckedChange={(checked) => updatePhone(index, { is_whatsapp: checked })}
                       />
-                      <Label className="text-[10px] text-ink font-medium">
-                        WA
-                      </Label>
+                      <WhatsAppIcon
+                        className={`size-4 transition-colors ${
+                          t.is_whatsapp ? 'text-emerald-600' : 'text-muted opacity-50'
+                        }`}
+                      />
                     </div>
                     {telephones.length > 1 && (
                       <Button

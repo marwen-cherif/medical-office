@@ -62,11 +62,17 @@ class AIConfig:
 
 
 @dataclass(frozen=True)
+class WhatsApp:
+    message_repli: str = "Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>."
+
+
+@dataclass(frozen=True)
 class Config:
     paths: Paths
     mailjet: Mailjet
     mail: Mail
     ai: AIConfig
+    whatsapp: WhatsApp
 
 
 def app_dir() -> Path:
@@ -141,4 +147,11 @@ def load_config(config_path: Path | None = None) -> Config:
             )
     ai = AIConfig(providers=providers, features=features)
 
-    return Config(paths=paths, mailjet=mailjet, mail=mail, ai=ai)
+    message_repli = parser.get(
+        "whatsapp",
+        "message_repli",
+        fallback="Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>.",
+    ).strip()
+    whatsapp = WhatsApp(message_repli=message_repli)
+
+    return Config(paths=paths, mailjet=mailjet, mail=mail, ai=ai, whatsapp=whatsapp)

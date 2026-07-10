@@ -66,7 +66,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import backup, import_actes, print_settings, printing, repo, templates, version
+from . import backup, import_actes, import_categories, print_settings, printing, repo, templates, version
 from .db import SchemaTooNewError, app_dir, connect
 
 # Ligne de handshake imprimee sur stdout au demarrage : la coquille Tauri y lit le
@@ -352,12 +352,14 @@ class CategoryOut(BaseModel):
     couleur: Optional[str] = None
     icone: Optional[str] = None
     sort_order: int = 0
+    whatsapp_message: Optional[str] = None
 
 
 class CategoryUpsertIn(BaseModel):
     couleur: Optional[str] = None
     icone: Optional[str] = None
     sort_order: int = 0
+    whatsapp_message: Optional[str] = None
 
 
 class CategoryRenameIn(BaseModel):
@@ -456,12 +458,29 @@ class ActeExportOut(BaseModel):
     count: int
 
 
+class CategoryImportOut(BaseModel):
+    """Compte-rendu d'un import .xlsx de la configuration des catégories."""
+
+    created: int
+    updated: int
+    skipped: int
+    errors: list[str]
+
+
+class CategoryExportOut(BaseModel):
+    """Résultat d'un export : chemin du .xlsx écrit sur le poste + nombre de catégories."""
+
+    path: str
+    count: int
+
+
 class WhatsAppSettingsOut(BaseModel):
     whatsapp_phone_number_id: str
     whatsapp_template_name: str
     default_country: str
     has_token: bool
     whatsapp_api_enabled: bool
+    fallback_message: str
 
 
 class WhatsAppSettingsIn(BaseModel):
@@ -823,7 +842,7 @@ def categories_list() -> list[CategoryOut]:
     with db() as conn:
         return [
             CategoryOut(
-                nom=c.nom, couleur=c.couleur, icone=c.icone, sort_order=c.sort_order
+                nom=c.nom, couleur=c.couleur, icone=c.icone, sort_order=c.sort_order, whatsapp_message=c.whatsapp_message
             )
             for c in repo.list_categories(conn)
         ]
@@ -840,10 +859,11 @@ def categories_upsert(nom: str, body: CategoryUpsertIn) -> CategoryOut:
                     couleur=body.couleur,
                     icone=body.icone,
                     sort_order=body.sort_order,
+                    whatsapp_message=body.whatsapp_message,
                 ),
             )
         return CategoryOut(
-            nom=c.nom, couleur=c.couleur, icone=c.icone, sort_order=c.sort_order
+            nom=c.nom, couleur=c.couleur, icone=c.icone, sort_order=c.sort_order, whatsapp_message=c.whatsapp_message
         )
     except Exception as exc:  # noqa: BLE001
         raise _err_from_engine(exc)
@@ -867,6 +887,70 @@ def categories_rename(body: CategoryRenameIn) -> OkOut:
     except Exception as exc:  # noqa: BLE001
         raise _err_from_engine(exc)
     return OkOut()
+
+
+@app.get("/api/categories/export", response_model=CategoryExportOut, tags=["categories"])
+def categories_export() -> CategoryExportOut:
+    """Exporte la configuration des catégories en .xlsx sur le poste, puis ouvre le fichier."""
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    path = app_dir() / "exports" / f"categories_{stamp}.xlsx"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with db() as conn:
+            count = import_categories.export_categories(path, conn=conn)
+    except RuntimeError as exc:
+        raise ApiError(ERR_XLSX, str(exc), status=400)
+    except OSError as exc:
+        raise ApiError(
+            ERR_XLSX, f"Impossible d'écrire le fichier d'export : {exc}", status=400
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _err_from_engine(exc)
+    try:
+        if os.name == "nt":
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        else:  # pragma: no cover
+            import subprocess
+
+            subprocess.Popen(["xdg-open", str(path)])
+    except Exception:  # noqa: BLE001
+        pass
+    return CategoryExportOut(path=str(path), count=count)
+
+
+@app.post("/api/categories/import", response_model=CategoryImportOut, tags=["categories"])
+async def categories_import(
+    file: UploadFile = File(...), dry_run: bool = False
+) -> CategoryImportOut:
+    """Importe un .xlsx des catégories (Nom, Couleur, Icone, Ordre, Message WhatsApp)."""
+    data = await file.read()
+    name = file.filename or "categories.xlsx"
+    tmp = Path(tempfile.gettempdir()) / f"crm_categories_import_{name}"
+    if tmp.suffix.lower() != ".xlsx":
+        tmp = tmp.with_suffix(".xlsx")
+    try:
+        tmp.write_bytes(data)
+        if not dry_run:
+            backup.backup_db()
+        with db() as conn:
+            summary = import_categories.import_categories(tmp, dry_run=dry_run, conn=conn)
+        return CategoryImportOut(
+            created=summary.created,
+            updated=summary.updated,
+            skipped=summary.skipped,
+            errors=summary.errors,
+        )
+    except RuntimeError as exc:
+        raise ApiError(ERR_XLSX, str(exc), status=400)
+    except Exception as exc:  # noqa: BLE001
+        raise _err_from_engine(exc)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
 
 
 # --- mailTemplates.* ----------------------------------------------------------
@@ -1030,19 +1114,28 @@ def settings_set_print(doc_type: str, body: PrintConfigIn) -> OkOut:
 
 @app.get("/api/settings/whatsapp", response_model=WhatsAppSettingsOut, tags=["settings"])
 def settings_get_whatsapp() -> WhatsAppSettingsOut:
+    from src.config import load_config
+
     with db() as conn:
         phone_id = repo.get_setting(conn, "whatsapp_phone_number_id") or ""
         token = repo.get_setting(conn, "whatsapp_access_token") or ""
         template_name = repo.get_setting(conn, "whatsapp_template_name") or "envoi_document"
         default_country = repo.get_setting(conn, "default_country") or "+216"
         api_enabled = repo.get_setting(conn, "whatsapp_api_enabled") == "true"
-        
+
+    try:
+        cfg = load_config()
+        fallback_msg = cfg.whatsapp.message_repli
+    except Exception:
+        fallback_msg = "Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>."
+
     return WhatsAppSettingsOut(
         whatsapp_phone_number_id=phone_id,
         whatsapp_template_name=template_name,
         default_country=default_country,
         has_token=bool(token),
         whatsapp_api_enabled=api_enabled,
+        fallback_message=fallback_msg,
     )
 
 

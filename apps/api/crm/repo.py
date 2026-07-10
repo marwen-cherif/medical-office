@@ -1335,6 +1335,7 @@ class Category:
     couleur: Optional[str] = None
     icone: Optional[str] = None
     sort_order: int = 0
+    whatsapp_message: Optional[str] = None
 
 
 def _row_to_category(row: sqlite3.Row) -> Category:
@@ -1343,6 +1344,7 @@ def _row_to_category(row: sqlite3.Row) -> Category:
         couleur=row["couleur"],
         icone=row["icone"],
         sort_order=row["sort_order"],
+        whatsapp_message=row["whatsapp_message"],
     )
 
 
@@ -1380,14 +1382,24 @@ def upsert_category(conn: sqlite3.Connection, cat: Category) -> Category:
     if existing is None:
         couleur = cat.couleur or _default_category_color(conn)
         conn.execute(
-            "INSERT INTO categories (nom, couleur, icone, sort_order) VALUES (?,?,?,?)",
-            (nom, couleur, cat.icone, cat.sort_order or 0),
+            "INSERT INTO categories (nom, couleur, icone, sort_order, whatsapp_message) VALUES (?,?,?,?,?)",
+            (nom, couleur, cat.icone, cat.sort_order or 0, cat.whatsapp_message),
         )
     else:
+        # Si whatsapp_message est fourni (chaîne, potentiellement vide), on le met à jour.
+        # Si c'est None (par exemple lors d'un upsert paresseux), on conserve la valeur existante en base.
+        # Si c'est une chaîne vide ou composée d'espaces, on stocke NULL.
+        whatsapp_msg = cat.whatsapp_message
+        if whatsapp_msg is not None:
+            if not whatsapp_msg.strip():
+                whatsapp_msg = None
+        else:
+            whatsapp_msg = existing.whatsapp_message
+
         conn.execute(
             "UPDATE categories SET couleur = COALESCE(?, couleur), "
-            "icone = COALESCE(?, icone), sort_order = ? WHERE nom = ?",
-            (cat.couleur, cat.icone, cat.sort_order or existing.sort_order, nom),
+            "icone = COALESCE(?, icone), sort_order = ?, whatsapp_message = ? WHERE nom = ?",
+            (cat.couleur, cat.icone, cat.sort_order or existing.sort_order, whatsapp_msg, nom),
         )
     conn.commit()
     return get_category(conn, nom)  # type: ignore[return-value]

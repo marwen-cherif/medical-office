@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import type { Patient } from '@/api/types';
+import { WhatsAppIcon } from '@/components/icons/WhatsAppIcon';
 
 export function SendWhatsAppDialog({
   patient,
@@ -81,8 +82,9 @@ export function SendWhatsAppDialog({
                   <span className="font-mono text-xs">{t.telephone}</span>
                 </div>
                 {t.is_whatsapp && (
-                  <span className="text-[9px] bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded font-bold border border-emerald-200 shrink-0">
-                    WA
+                  <span className="inline-flex items-center gap-1 text-[9px] bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded font-bold border border-emerald-200 shrink-0">
+                    <WhatsAppIcon className="size-3 text-emerald-600" />
+                    <span>WhatsApp</span>
                   </span>
                 )}
               </label>

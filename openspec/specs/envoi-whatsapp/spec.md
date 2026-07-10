@@ -65,7 +65,7 @@ Le système SHALL envoyer le fichier déjà généré (PDF ou JPG dans `output/`
 numéro WhatsApp du patient via l'API Meta WhatsApp Cloud : upload du fichier
 sur l'endpoint média de Meta pour obtenir un identifiant média, puis envoi d'un
 message utilisant le modèle approuvé avec le document en pièce jointe. L'envoi
-côté serveur (machine où tourne l'application), de façon
+SHALL s'exécuter côté serveur (machine où tourne l'application), de façon
 identique en mode desktop et en mode web. L'envoi SHALL être lancé en tâche de
 fond avec indicateur de chargement, sans figer l'interface.
 

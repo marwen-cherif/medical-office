@@ -22,6 +22,7 @@ import { humanizeError } from '@/lib/errors';
 import { useShortcut } from '@/lib/shortcuts';
 import { docStatut, fmtDevise, formatWaMeUrl, humanize, isoToFr } from '@/lib/format';
 import {
+  useCopyDocumentToClipboard,
   useDeleteDocument,
   useOpenDocument,
   usePatientDocuments,
@@ -32,7 +33,7 @@ import {
   useSendDocument,
   useSendWhatsApp,
 } from '@/hooks/documents';
-import { useWhatsAppSettings } from '@/hooks/queries';
+import { useWhatsAppSettings, useCategories } from '@/hooks/queries';
 import type { DocumentT, Patient } from '@/api/types';
 import { GenerateDialog } from './GenerateDialog';
 import { SendWhatsAppDialog } from '@/components/dialogs/SendWhatsAppDialog';
@@ -53,11 +54,13 @@ export function DocumentsTab({
   const print = usePrintDocument();
   const send = useSendDocument();
   const open = useOpenDocument();
+  const copyToClipboard = useCopyDocumentToClipboard();
   const refresh = useRefreshStatus();
   const sendWhatsApp = useSendWhatsApp();
   const refreshWhatsApp = useRefreshWhatsAppStatus();
   const del = useDeleteDocument();
   const waSettings = useWhatsAppSettings();
+  const categories = useCategories();
   const [gen, setGen] = useState<GenState>(null);
   const [waSelectDoc, setWaSelectDoc] = useState<DocumentT | null>(null);
 
@@ -144,9 +147,25 @@ export function DocumentsTab({
             key: 'open-wa-me',
             label: 'Ouvrir dans WhatsApp (wa.me)',
             icon: ExternalLink,
-            onClick: () => {
+            onClick: async () => {
+              try {
+                await copyToClipboard.mutateAsync(d.id);
+                toast.success('Document copié dans le presse-papiers.');
+              } catch (e) {
+                toast.error(humanizeError(e));
+              }
+
               const defaultCountry = waSettings.data?.default_country || '+216';
-              const text = `Bonjour ${patient.prenom || ''} ${patient.nom || ''}, voici votre ${humanize(d.type).toLowerCase()}.`;
+              const docCatName = d.categorie || '';
+              const categoryObj = categories.data?.find(c => c.nom === docCatName);
+              const rawTemplate = categoryObj?.whatsapp_message || waSettings.data?.fallback_message || "Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>.";
+              
+              const docLabel = humanize(d.type).toLowerCase();
+              const text = rawTemplate
+                .replace(/<PRENOM>/g, patient.prenom || '')
+                .replace(/<NOM>/g, patient.nom || '')
+                .replace(/<DOCUMENT>/g, docLabel);
+
               const targetPhone = (patient.telephones && patient.telephones.length > 0)
                 ? (patient.telephones.find(t => t.is_whatsapp)?.telephone || patient.telephones[0].telephone)
                 : patient.telephone;
@@ -196,7 +215,7 @@ export function DocumentsTab({
         <h2 className="flex-1 text-lg font-semibold text-ink">Documents</h2>
         <Tooltip label="Note d'honoraires" shortcut="alt+n">
           <Button variant="secondary" onClick={() => setGen({ mode: 'note' })}>
-            <FileText className="size-4" /> Note d'honoraires
+            <FileText className="size-4" /> Note d&apos;honoraires
           </Button>
         </Tooltip>
         <Tooltip label="Générer un document" shortcut="alt+d">
