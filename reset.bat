@@ -8,7 +8,7 @@ REM input/ (template, classeur patients) et config.ini sont conserves.
 REM Fonctionne a cote de l'exe distribue (Cabinet-CRM.exe) OU en dev (Python).
 
 echo ===============================================================
-echo  REMISE A ZERO - Cabinet Dr Aslem Gouiaa (CRM)
+echo  REMISE A ZERO - Cabinet CRM
 echo ===============================================================
 echo.
 echo  Cette action est IRREVERSIBLE. Vont etre supprimes :
@@ -37,12 +37,7 @@ if exist "%~dp0Cabinet-CRM.exe" (
     "%~dp0Cabinet-CRM.exe" --reset --yes
 ) else (
     REM Dev : repli sur Python.
-    where python >nul 2>nul
-    if errorlevel 1 (
-        echo Ni Cabinet-CRM.exe ni Python introuvables : impossible de reinitialiser.
-        pause
-        exit /b 1
-    )
+    set "PYTHONPATH=%~dp0apps\api"
     python -m crm.reset --yes
 )
 

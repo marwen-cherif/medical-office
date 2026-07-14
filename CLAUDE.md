@@ -4,14 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Windows desktop tool for a dental practice ("Cabinet Dr Aslem Gouiaa") that turns a
+A Windows desktop and web tool for a medical practice that turns a
 list of patients into per-patient billing notes ("notes d'honoraires") rendered from a
 Word template (output JPG or PDF), then emails each one via **Mailjet** and tracks
 delivery/open status.
 
-The app is a **Flet GUI** (`crm/`) — a desktop window or a browser app — backed by a
-local SQLite database. It sits on top of a **shared generation/mail engine** (`src/`)
-that drives Word and Mailjet.
+The app is a monorepo containing a **React (Vite + TS + Tailwind CSS v4) frontend** packaged in a **Tauri** desktop wrapper, communicating with a **FastAPI** backend sidecar. It sits on top of a **shared generation/mail engine** (`apps/api/src/`) that drives Word and Mailjet.
 
 > A historical CLI front-end (batch tool driven by an Excel workbook) used to live
 > alongside the CRM. It has been removed; only the CRM and its shared engine remain.

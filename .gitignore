@@ -1,45 +1,46 @@
+# Node.js
+node_modules/
+.turbo/
+.npm/
+
+# Rust / Tauri
+apps/web/src-tauri/target/
+apps/web/src-tauri/binaries/crm-server-*
+
+# Python
 __pycache__/
 *.pyc
-*.spec
-# ...sauf les specs de build du CRM (necessaires a build-crm.bat)
-!crm-desktop.spec
-!crm-web.spec
-!crm-server.spec
-build/
-dist/
+.pytest_cache/
+.ruff_cache/
 .venv/
 venv/
+.coverage
+.coverage.*
+htmlcov/
+coverage/
 
-# Sortie et fichiers utilisateur (garder le dossier via .gitkeep)
-output/*
 
-# Exports generes (referentiel d'actes en .xlsx, etc. - ne pas versionner)
-exports/
+# PyInstaller specs and builds (moved to apps/api)
+apps/api/build/
+apps/api/dist/
+!apps/api/crm-server.spec
 
-# Sauvegardes de la base (donnees patients - ne pas versionner)
-backups/
+# App Data and Output (moved to apps/api)
+apps/api/output/*
+apps/api/exports/
+apps/api/backups/
+apps/api/data/
+apps/api/logs/
+apps/api/crm/__pycache__/
+apps/api/crm/_build_info.py
+apps/api/config.ini
 
-# Base de donnees locale du CRM (donnees patients - ne pas versionner)
-data/
-crm/__pycache__/
+# Templates (moved to apps/api)
+apps/api/templates/*.docx
 
-# Journaux runtime (mailjet.log, ai.log) : peuvent contenir emails / reponses IA
-logs/
-
-# Numero de build genere a chaque build (build-crm.bat) - ne pas versionner
-crm/_build_info.py
-
-# Secrets Mailjet (cles API) - ne pas versionner
-config.ini
-
-# Reglages locaux Claude Code (specifiques a la machine)
+# Claude Code
 .claude/settings.local.json
-
-# Worktrees internes de Claude Code (repertoire de travail, ne pas versionner)
 .claude/worktrees/
 
-# Modeles utilisateur (garder le dossier, pas les .docx perso)
-templates/*.docx
-
-# Garder les dossiers
-!output/.gitkeep
+# Keep files
+!apps/api/output/.gitkeep

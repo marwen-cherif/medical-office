@@ -1,11 +1,10 @@
 schema: spec-driven
 
-# Contexte projet (injecté dans l'IA lors de la création d'artefacts)
 context: |
-  Application : outil de bureau Windows pour le cabinet dentaire
-  « Cabinet Dr Aslem Gouiaa ». CRM Flet (desktop + web) + SQLite, adossé à un
+  Application : outil de bureau Windows (Tauri) et web pour un cabinet médical.
+  Monorepo React (Vite) + FastAPI (sidecar Python) + SQLite, adossé à un
   moteur partagé de génération/mail (Word via COM, Mailjet, PyMuPDF).
-  Stack : Python, Flet, SQLite, win32com (Word COM), PyMuPDF/fitz, Mailjet.
+  Stack : TypeScript, React, Python, FastAPI, SQLite, win32com (Word COM), PyMuPDF/fitz, Mailjet.
   Voir CLAUDE.md à la racine pour l'architecture détaillée.
 
   LANGUE : rédiger tout le CONTENU des artefacts (proposal, design, specs,

@@ -30,7 +30,7 @@ if not "%~1"=="" (
 
 :menu
 echo ===============================================================
-echo  IMPORT DES ACTES - Cabinet Dr Aslem Gouiaa (CRM)
+echo  IMPORT DES ACTES - Cabinet CRM
 echo ===============================================================
 echo.
 echo   [1] Generer un modele Excel vide a remplir
@@ -123,9 +123,12 @@ exit /b 0
 
 REM --- Sous-routine : dispatch exe distribue / Python --------------------------
 :run
+set "PYTHON_EXE=python"
+if exist "%USERPROFILE%\AppData\Local\Python\bin\python.exe" set "PYTHON_EXE=%USERPROFILE%\AppData\Local\Python\bin\python.exe"
 if defined USE_EXE (
     "%~dp0Cabinet-CRM.exe" --import-actes %*
 ) else (
-    python -m crm.import_actes %*
+    set "PYTHONPATH=%~dp0apps\api"
+    "%PYTHON_EXE%" -m crm.import_actes %*
 )
 exit /b %errorlevel%
