@@ -35,7 +35,7 @@ def test_import_export_categories(test_db, tmp_path):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Categories"
-    
+
     # Header row
     ws.append(["Nom", "Couleur", "Icone", "Ordre", "Message WhatsApp"])
     # Valid rows
@@ -43,7 +43,7 @@ def test_import_export_categories(test_db, tmp_path):
     ws.append(["Ordonnance", "#00ff00", "file", 1, "Voici l'ordo"])
     # Row with empty name (should be skipped)
     ws.append([None, "#0000ff", "image", 3, "Ignored"])
-    
+
     wb.save(wb_path)
     wb.close()
 
@@ -79,12 +79,12 @@ def test_import_export_categories(test_db, tmp_path):
     wb_path2 = tmp_path / "import_update.xlsx"
     wb = openpyxl.Workbook()
     ws = wb.active
-    
+
     # Custom headers
     ws.append(["libelle", "hex", "icon", "sort", "whatsapp"])
     ws.append(["Consultation", "#aaaaaa", "user-updated", 5, "Bonjour updated"])
     ws.append(["Nouveau", "#111111", "star", 3, "Nouveau msg"])
-    
+
     wb.save(wb_path2)
     wb.close()
 
@@ -133,7 +133,7 @@ def test_import_export_categories(test_db, tmp_path):
     tpl_path = tmp_path / "template.xlsx"
     write_template(tpl_path)
     assert tpl_path.exists()
-    
+
     wb_tpl = openpyxl.load_workbook(tpl_path, read_only=True)
     assert wb_tpl.active.title == "Categories"
     wb_tpl.close()

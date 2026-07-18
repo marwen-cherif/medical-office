@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Cabinet CRM",
-  "version": "1.0.0",
+  "version": "1.4.4-60",
   "identifier": "tn.cabinet.gouiaa.crm",
   "build": {
     "frontendDist": "../dist",
@@ -18,7 +18,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -26,7 +28,18 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/crm-server"],
-    "resources": []
+    "externalBin": [
+      "binaries/crm-server",
+      "binaries/crm-tray"
+    ],
+    "resources": [
+      "resources/config.default.ini"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "template": "installer.nsi"
+      }
+    }
   }
 }

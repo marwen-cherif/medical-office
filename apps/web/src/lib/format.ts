@@ -129,6 +129,70 @@ export function monthRange(): { from: string; to: string } {
   return { from: first, to };
 }
 
+/** Plage ISO `[premierJour, dernierJour]` du mois `m` (0–11) de l'année `y`. */
+function monthBounds(y: number, m: number): { from: string; to: string } {
+  const z = (n: number) => String(n).padStart(2, '0');
+  const last = new Date(y, m + 1, 0);
+  return {
+    from: `${y}-${z(m + 1)}-01`,
+    to: `${last.getFullYear()}-${z(last.getMonth() + 1)}-${z(last.getDate())}`,
+  };
+}
+
+/** Plage ISO du trimestre civil (1–4) contenant/adjacent à la date `d`. */
+function quarterBounds(y: number, q: number): { from: string; to: string } {
+  const z = (n: number) => String(n).padStart(2, '0');
+  const startMonth = (q - 1) * 3; // Q1→0, Q2→3, Q3→6, Q4→9
+  const last = new Date(y, startMonth + 3, 0); // dernier jour du 3ᵉ mois du trimestre
+  return { from: `${y}-${z(startMonth + 1)}-01`, to: dateToIso(last) };
+}
+
+export type DatePresetKey =
+  | 'ce_mois'
+  | 'mois_dernier'
+  | 'ce_trimestre'
+  | 'trimestre_dernier'
+  | 'cette_annee'
+  | 'annee_derniere';
+
+export type DatePreset = {
+  key: DatePresetKey;
+  label: string;
+  range: { from: string; to: string };
+};
+
+/**
+ * Plages prédéfinies relatives à la date du jour, pour pré-remplir le filtre de
+ * période. Calculées dynamiquement (et non mémorisées) afin que « ce mois »
+ * reste correct si le popover reste ouvert au passage de minuit.
+ */
+export function datePresets(now: Date = new Date()): DatePreset[] {
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const q = Math.floor(m / 3) + 1;
+  const prevQ = q === 1 ? { y: y - 1, q: 4 } : { y, q: q - 1 };
+  return [
+    { key: 'ce_mois', label: 'Ce mois', range: monthBounds(y, m) },
+    { key: 'mois_dernier', label: 'Le mois dernier', range: monthBounds(m === 0 ? y - 1 : y, m === 0 ? 11 : m - 1) },
+    { key: 'ce_trimestre', label: 'Ce trimestre', range: quarterBounds(y, q) },
+    { key: 'trimestre_dernier', label: 'Le trimestre dernier', range: quarterBounds(prevQ.y, prevQ.q) },
+    { key: 'cette_annee', label: 'Cette année', range: { from: `${y}-01-01`, to: `${y}-12-31` } },
+    { key: 'annee_derniere', label: "L'année dernière", range: { from: `${y - 1}-01-01`, to: `${y - 1}-12-31` } },
+  ];
+}
+
+/** Clé du preset correspondant à une plage donnée, ou `null` si aucune ne correspond. */
+export function findDatePreset(
+  from: string,
+  to: string,
+  now: Date = new Date()
+): DatePresetKey | null {
+  const hit = datePresets(now).find(
+    (p) => p.range.from === from && p.range.to === to
+  );
+  return hit ? hit.key : null;
+}
+
 /** Transforme un tag/type machine en libellé lisible (`note_honoraires` → `Note honoraires`). */
 export function humanize(tag: string | null | undefined): string {
   if (!tag) return '';
@@ -254,17 +318,20 @@ export const COUNTRIES: CountryConfig[] = [
   { code: 'CA', name: 'Canada', prefix: '+1', flag: '🇨🇦' },
 ];
 
-export function parsePhoneNumber(phoneStr: string, defaultPrefix = '+216'): { prefix: string; local: string } {
+export function parsePhoneNumber(
+  phoneStr: string,
+  defaultPrefix = '+216'
+): { prefix: string; local: string } {
   if (!phoneStr) return { prefix: defaultPrefix, local: '' };
-  
+
   let clean = phoneStr.replace(/[\s\-\(\)]/g, '');
-  
+
   if (clean.startsWith('00')) {
     clean = '+' + clean.substring(2);
   }
-  
+
   const sortedCountries = [...COUNTRIES].sort((a, b) => b.prefix.length - a.prefix.length);
-  
+
   for (const country of sortedCountries) {
     if (clean.startsWith(country.prefix)) {
       let local = clean.substring(country.prefix.length);
@@ -274,7 +341,7 @@ export function parsePhoneNumber(phoneStr: string, defaultPrefix = '+216'): { pr
       return { prefix: country.prefix, local };
     }
   }
-  
+
   if (clean.startsWith('+')) {
     const match = clean.match(/^(\+\d{1,4})(.*)$/);
     if (match) {
@@ -283,12 +350,12 @@ export function parsePhoneNumber(phoneStr: string, defaultPrefix = '+216'): { pr
       return { prefix: match[1], local };
     }
   }
-  
+
   let local = clean;
   if (local.startsWith('0') && !local.startsWith('00')) {
     local = local.substring(1);
   }
-  
+
   return { prefix: defaultPrefix, local };
 }
 

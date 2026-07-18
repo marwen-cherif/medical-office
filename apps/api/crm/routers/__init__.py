@@ -32,6 +32,7 @@ def register_all(app: FastAPI) -> None:
         jobs,
         patients,
         prestataires,
+        rappels,
     )
 
     for module in (
@@ -42,5 +43,6 @@ def register_all(app: FastAPI) -> None:
         prestataires,
         jobs,
         dashboard,
+        rappels,
     ):
         app.include_router(module.router)

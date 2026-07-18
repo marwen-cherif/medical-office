@@ -107,7 +107,10 @@ describe('format.ts helper functions', () => {
 
     it('falls back to default prefix when no prefix is present', () => {
       expect(parsePhoneNumber('55777766', '+216')).toEqual({ prefix: '+216', local: '55777766' });
-      expect(parsePhoneNumber('0612345678', '+216')).toEqual({ prefix: '+216', local: '612345678' });
+      expect(parsePhoneNumber('0612345678', '+216')).toEqual({
+        prefix: '+216',
+        local: '612345678',
+      });
     });
   });
 
@@ -144,7 +147,7 @@ describe('format.ts helper functions', () => {
       const range = monthRange();
       expect(range.from).toMatch(/^\d{4}-\d{2}-01$/);
       expect(range.to).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      
+
       const fromDate = new Date(range.from);
       const toDate = new Date(range.to);
       expect(fromDate.getDate()).toBe(1);
@@ -204,9 +207,13 @@ describe('format.ts helper functions', () => {
 
   describe('formatWaMeUrl', () => {
     it('generates wa.me urls', () => {
-      expect(formatWaMeUrl('55777766', '+216', 'hello')).toBe('https://wa.me/21655777766?text=hello');
+      expect(formatWaMeUrl('55777766', '+216', 'hello')).toBe(
+        'https://wa.me/21655777766?text=hello'
+      );
       expect(formatWaMeUrl('0612345678', '+33', 'hi')).toBe('https://wa.me/33612345678?text=hi');
-      expect(formatWaMeUrl('+33612345678', '+33', 'test')).toBe('https://wa.me/33612345678?text=test');
+      expect(formatWaMeUrl('+33612345678', '+33', 'test')).toBe(
+        'https://wa.me/33612345678?text=test'
+      );
     });
   });
 });

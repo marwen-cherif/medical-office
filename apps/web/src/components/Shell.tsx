@@ -1,5 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import logoMark from '@/assets/logo_mark.png';
+import { useHealth } from '@/hooks/queries';
 import {
   LayoutDashboard,
   Users,
@@ -13,6 +14,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useShortcut, useShortcutsContext } from '@/lib/shortcuts';
 import { ShortcutKeys } from '@/components/common/Kbd';
+import { RappelsBell } from '@/components/RappelsBell';
 
 type NavItem = { to: string; label: string; icon: LucideIcon; enabled: boolean };
 
@@ -32,6 +34,8 @@ const ITEMS: NavItem[] = [
 export function Shell({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const { openHelp } = useShortcutsContext();
+  const { data: health } = useHealth();
+  const versionStr = health?.version ? `v${health.version}` : 'v1.0.0';
 
   // Navigation globale : Alt+1 … Alt+6 vers chaque section.
   useShortcut(
@@ -71,8 +75,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <div className="flex items-center gap-2 px-4 py-5">
           <img src={logoMark} alt="Logo" className="size-9 object-contain" />
           <div className="leading-tight">
-            <div className="text-sm font-semibold text-ink">{import.meta.env.VITE_APP_TITLE || 'Cabinet CRM'}</div>
-            <div className="text-xs text-muted">{import.meta.env.VITE_APP_SUBTITLE || 'Cabinet Médical'}</div>
+            <div className="text-sm font-semibold text-ink">
+              {import.meta.env.VITE_APP_TITLE || 'Cabinet CRM'}
+            </div>
+            <div className="text-xs text-muted">
+              {import.meta.env.VITE_APP_SUBTITLE || 'Cabinet Médical'}
+            </div>
           </div>
         </div>
         <div className="flex flex-1 flex-col gap-1 px-2">
@@ -118,6 +126,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
               </NavLink>
             );
           })}
+          {/* Cloche Rappels — séparée du groupe principal pour ne pas perturber l'index Alt+N */}
+          <div className="mt-1 border-t border-line pt-1">
+            <RappelsBell />
+          </div>
         </div>
         <div className="px-2 pb-2">
           <button
@@ -130,7 +142,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <span className="flex-1 text-left">Raccourcis</span>
             <ShortcutKeys keys="?" className="opacity-70" />
           </button>
-          <div className="px-3 pt-2 text-xs text-muted/70">React · sidecar FastAPI</div>
+          <div className="px-3 pt-2 text-xs text-muted/70">{versionStr} · par @Cherio</div>
         </div>
       </nav>
       <main className="flex-1 overflow-auto">{children}</main>

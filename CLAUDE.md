@@ -134,6 +134,56 @@ The CRM keeps its state in **`data/cabinet.db`** and reuses the `src/` engine
   at the top.
 - `crm/reset.py` — wipes the DB tables and generated notes (`python -m crm.reset`).
 
+### Rappels automatiques (capability `rappels`)
+
+Rappels datés planifiés (alertes internes + messages patients WhatsApp) :
+
+- `crm/rappels.py` — logique métier partagée (service + router) : transition atomique
+  `planifie → du/a_envoyer`, normalisation E.164 des numéros, construction du lien
+  `wa.me`, validation à la création (`message_patient` exige patient + numéro WhatsApp).
+  `RappelValidationError` étend `ValueError`.
+- `crm/service.py` — processus de fond **headless** (sans Flet, Uvicorn, Word ni
+  Mailjet) : ouvre la DB, traite les rappels dus via `rappels.traiter_rappels_dus()`,
+  émet une notification Windows 11 native (toast via `win32gui.Shell_NotifyIcon`) par
+  rappel échu si `rappels_notifs_enabled != "false"` (défaut activé). Journalise dans
+  `data/logs/service.log`. Point d'entrée : `python -m crm.service` (dev) ou
+  `crm-server.exe --service` (exe gelé). Le flag `--service` est intercepté dans
+  `crm/server.py::main()` **avant** tout démarrage Uvicorn.
+- `crm/scheduler.py` — gestion de la tâche planifiée Windows (`schtasks`) :
+  `install_scheduled_task(interval_minutes, force)`, `query_scheduled_task()` →
+  `TaskStatus`, `uninstall_scheduled_task()`, `ensure_scheduled_task(conn)` (appelée au
+  démarrage de l'app depuis `_init_db`, idempotent, best-effort). Tâche nommée
+  `CabinetCRM-RappelsService`. Intervalle par défaut : 15 min (clé meta
+  `rappels_scheduler_interval`).
+- `crm/routers/rappels.py` — routeur FastAPI `/api/rappels` : CRUD, transitions d'état
+  (`/ignorer`, `/envoye`, `/traite`, `/annuler`), badge cloche (`/count-actifs`), lien
+  wa.me (`/{id}/whatsapp-link?phone_id=`).
+- Routes Paramétrage ajoutées dans `crm/server.py` :
+  `GET/PUT /api/settings/rappels` (notifs, intervalle, indicatif pays, état tâche),
+  `POST /api/settings/rappels/install-task` (force réinstallation).
+
+**Cycle de vie des états** (`etat`) :
+`planifie` → (tâche planifiée) → `du` (alerte) ou `a_envoyer` (message patient)
+→ (envoi confirmé) → `envoye` → (traitement manuel) → `traite`
+→ (annulation) → `annule` (depuis `planifie` uniquement)
+
+Colonne `lu` (INTEGER 0/1) : flag de lecture UI distinct de `etat`. Badge cloche =
+`etat IN ('du','a_envoyer') AND lu = 0`.
+
+**Clés `meta`** pour les réglages Rappels :
+
+| Clé                          | Défaut  | Description                              |
+|------------------------------|---------|------------------------------------------|
+| `rappels_notifs_enabled`     | `true`  | Notifications Windows 11 activées        |
+| `rappels_scheduler_interval` | `15`    | Intervalle tâche planifiée (minutes)     |
+| `rappels_default_country`    | `+216`  | Indicatif pays pour normalisation numéro |
+
+**Schéma (v17)** : table `rappels` ajoutée via `CREATE TABLE IF NOT EXISTS` (additive,
+`SCHEMA_VERSION` 16 → 17). Snapshot pré-migration automatique dans `backups/pre-migration/`.
+
+**Build PyInstaller** : `crm-server.spec` inclut `win32api` (toast) et les modules
+`crm.rappels`, `crm.service`, `crm.scheduler`, `crm.routers.rappels` en `hiddenimports`.
+
 **Idempotency is filename-based.** A document's filename (derived from name + date +
 format) is the key: if a file / `documents` row already exists it's skipped. Forcing a
 regeneration/resend means removing the file/row or resetting its status.

@@ -20,7 +20,7 @@ describe('ClickToCopy component', () => {
   it('calls clipboard writeText on click', async () => {
     render(<ClickToCopy text="test-copy-text" />);
     const button = screen.getByRole('button');
-    
+
     await act(async () => {
       await fireEvent.click(button);
     });
@@ -31,7 +31,7 @@ describe('ClickToCopy component', () => {
   it('toggles copied status and resets after timeout', async () => {
     render(<ClickToCopy text="timeout-test" />);
     const button = screen.getByRole('button');
-    
+
     await act(async () => {
       await fireEvent.click(button);
     });
@@ -49,7 +49,7 @@ describe('ClickToCopy component', () => {
     render(<ClickToCopy text="multiline-text" multiline />);
     const button = screen.getByRole('button');
     expect(button).toHaveClass('items-start');
-    
+
     const textSpan = button.querySelector('span');
     expect(textSpan).toHaveClass('whitespace-pre-wrap');
     expect(textSpan).toHaveClass('break-words');

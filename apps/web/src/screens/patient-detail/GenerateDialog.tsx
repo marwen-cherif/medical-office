@@ -446,8 +446,8 @@ export function GenerateDialog({
                     </Button>
                   </div>
                   <p className="text-xs text-muted">
-                    Créés comme actes isolés (suivis dans la dette, visibles dans l&apos;onglet Plans
-                    &amp; actes).
+                    Créés comme actes isolés (suivis dans la dette, visibles dans l&apos;onglet
+                    Plans &amp; actes).
                   </p>
                   {cards.map((c, i) => (
                     <ActeCard

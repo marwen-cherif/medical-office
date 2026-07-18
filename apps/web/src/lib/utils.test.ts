@@ -7,7 +7,9 @@ describe('cn helper utility', () => {
   });
 
   it('handles conditional classes', () => {
-    expect(cn('px-2 py-1', true && 'bg-blue-500', false && 'text-red-500')).toBe('px-2 py-1 bg-blue-500');
+    expect(cn('px-2 py-1', true && 'bg-blue-500', false && 'text-red-500')).toBe(
+      'px-2 py-1 bg-blue-500'
+    );
   });
 
   it('merges tailwind classes overriding duplicates', () => {

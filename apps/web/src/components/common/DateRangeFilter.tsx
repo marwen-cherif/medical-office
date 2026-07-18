@@ -4,12 +4,14 @@ import { CalendarDays } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
-import { dateToIso, isoToDate, isoToFr } from '@/lib/format';
+import { datePresets, dateToIso, findDatePreset, isoToDate, isoToFr } from '@/lib/format';
 
 /**
  * Filtre de période : un champ unique qui ouvre, dès le clic, un calendrier de
- * plage sur deux mois (sélection début → fin). Bornes ISO `YYYY-MM-DD` incluses,
- * même contrat `{ from, to }` qu'auparavant (substituable sans toucher l'appelant).
+ * plage sur deux mois (sélection début → fin) accompagné de raccourcis
+ * pré-remplissant les dates (ce mois, le mois dernier, ce/le trimestre,
+ * cette/l'année dernière). Bornes ISO `YYYY-MM-DD` incluses, même contrat
+ * `{ from, to }` qu'auparavant (substituable sans toucher l'appelant).
  */
 export function DateRangeFilter({
   from,
@@ -28,6 +30,7 @@ export function DateRangeFilter({
   const selected: DateRange | undefined = from
     ? { from: isoToDate(from), to: isoToDate(to) }
     : undefined;
+  const activePreset = findDatePreset(from, to);
 
   const label =
     from && to
@@ -51,20 +54,47 @@ export function DateRangeFilter({
           <span className={cn('truncate', from ? 'text-ink' : 'text-muted')}>{label}</span>
         </button>
       </PopoverTrigger>
-      <PopoverContent align={align} className="w-auto">
-        <Calendar
-          mode="range"
-          autoFocus
-          numberOfMonths={2}
-          selected={selected}
-          defaultMonth={isoToDate(from)}
-          onSelect={(range) =>
-            onChange({
-              from: range?.from ? dateToIso(range.from) : '',
-              to: range?.to ? dateToIso(range.to) : '',
-            })
-          }
-        />
+      <PopoverContent align={align} className="w-auto p-0">
+        <div className="flex flex-col gap-0 sm:flex-row">
+          {/* Raccourcis de période : pré-remplissent from/to en un clic. */}
+          <div
+            role="group"
+            aria-label="Périodes prédéfinies"
+            className="flex flex-row flex-wrap gap-1 border-line p-2 sm:w-44 sm:flex-col sm:border-r"
+          >
+            {datePresets().map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => {
+                  onChange(p.range);
+                  setOpen(false);
+                }}
+                className={cn(
+                  'rounded-[var(--radius)] px-2 py-1.5 text-left text-sm transition-colors hover:bg-bg sm:w-full',
+                  activePreset === p.key
+                    ? 'bg-navy/10 font-medium text-navy'
+                    : 'text-ink'
+                )}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <Calendar
+            mode="range"
+            autoFocus
+            numberOfMonths={2}
+            selected={selected}
+            defaultMonth={isoToDate(from)}
+            onSelect={(range) =>
+              onChange({
+                from: range?.from ? dateToIso(range.from) : '',
+                to: range?.to ? dateToIso(range.to) : '',
+              })
+            }
+          />
+        </div>
       </PopoverContent>
     </Popover>
   );

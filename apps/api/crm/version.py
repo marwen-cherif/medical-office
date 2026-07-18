@@ -28,6 +28,7 @@ def _build_info() -> dict:
         from . import _build_info as bi  # type: ignore[attr-defined]
 
         return {
+            "base_version": str(getattr(bi, "VERSION", "")),
             "build": str(getattr(bi, "BUILD", "")),
             "commit": str(getattr(bi, "COMMIT", "")),
         }
@@ -65,6 +66,15 @@ def build_tag() -> str:
 def commit_tag() -> str:
     """Hash du commit (gelé : injecté au build ; dev : git), ou '' si inconnu."""
     return _build_info().get("commit", "") if _frozen() else _git_short()
+
+
+# Injection du numéro de build s'il a été généré
+if _frozen():
+    _info = _build_info()
+    if _info.get("base_version"):
+        __version__ = _info["base_version"]
+    if _info.get("build") and _info["build"].isdigit():
+        __version__ = f"{__version__}.{_info['build']}"
 
 
 def app_version() -> str:

@@ -29,7 +29,17 @@ except Exception:  # noqa: BLE001
 
 
 # Mots-clés d'en-tête reconnus
-_NOM_KEYS = {"nom", "noms", "name", "names", "libelle", "libelles", "label", "labels", "designation"}
+_NOM_KEYS = {
+    "nom",
+    "noms",
+    "name",
+    "names",
+    "libelle",
+    "libelles",
+    "label",
+    "labels",
+    "designation",
+}
 _COULEUR_KEYS = {"couleur", "couleurs", "color", "colors", "hex"}
 _ICONE_KEYS = {"icone", "icones", "icon", "icons"}
 _ORDRE_KEYS = {"ordre", "ordres", "sort_order", "sort", "tri"}
@@ -58,6 +68,7 @@ class ImportSummary:
 def _require_openpyxl():
     try:
         import openpyxl  # noqa: F401
+
         return openpyxl
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(

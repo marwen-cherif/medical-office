@@ -786,7 +786,7 @@ def send(document_id: int, body: SendIn) -> core.JobAcceptedOut:
         d = repo.get_document(conn, document_id)
         if d is None:
             raise core.ApiError(core.ERR_NOT_FOUND, "Document introuvable.", status=404)
-        
+
         emailing_enabled = repo.get_setting(conn, "emailing_enabled") != "false"
         if not emailing_enabled:
             raise core.ApiError(
@@ -931,7 +931,9 @@ def _load_whatsapp_settings(conn) -> dict[str, str]:
     response_model=core.JobAcceptedOut,
     status_code=202,
 )
-def send_whatsapp(document_id: int, body: Optional[SendWhatsAppIn] = None) -> core.JobAcceptedOut:
+def send_whatsapp(
+    document_id: int, body: Optional[SendWhatsAppIn] = None
+) -> core.JobAcceptedOut:
     with core.db() as conn:
         d = repo.get_document(conn, document_id)
         if d is None:
@@ -939,7 +941,7 @@ def send_whatsapp(document_id: int, body: Optional[SendWhatsAppIn] = None) -> co
         patient = repo.get_patient(conn, d.patient_id)
         if patient is None:
             raise core.ApiError(core.ERR_NOT_FOUND, "Patient introuvable.", status=404)
-        
+
         settings = _load_whatsapp_settings(conn)
         if settings.get("whatsapp_api_enabled") != "true":
             raise core.ApiError(
@@ -947,13 +949,15 @@ def send_whatsapp(document_id: int, body: Optional[SendWhatsAppIn] = None) -> co
                 "L'envoi par WhatsApp via API Meta Cloud est désactivé.",
                 status=400,
             )
-        if not settings.get("whatsapp_phone_number_id") or not settings.get("whatsapp_access_token"):
+        if not settings.get("whatsapp_phone_number_id") or not settings.get(
+            "whatsapp_access_token"
+        ):
             raise core.ApiError(
                 "CONFIG_ERROR",
                 "Configuration WhatsApp incomplète (Phone Number ID ou Token manquant).",
                 status=400,
             )
-        
+
         target_phone = body.telephone if body else None
         phone_to_use = target_phone or patient.telephone
         if not phone_to_use:
@@ -970,7 +974,9 @@ def send_whatsapp(document_id: int, body: Optional[SendWhatsAppIn] = None) -> co
             doc = repo.get_document(conn, document_id)
             pat = repo.get_patient(conn, doc.patient_id)
             whatsapp_settings = _load_whatsapp_settings(conn)
-            generator.send_document_whatsapp(conn, doc, pat, whatsapp_settings, target_phone=target_phone)
+            generator.send_document_whatsapp(
+                conn, doc, pat, whatsapp_settings, target_phone=target_phone
+            )
             report(1.0, "Document envoyé via WhatsApp.")
             return {"document_id": document_id}
         finally:
@@ -996,7 +1002,9 @@ def refresh_whatsapp_status(document_id: int) -> core.JobAcceptedOut:
                 status=400,
             )
         settings = _load_whatsapp_settings(conn)
-        if not settings.get("whatsapp_phone_number_id") or not settings.get("whatsapp_access_token"):
+        if not settings.get("whatsapp_phone_number_id") or not settings.get(
+            "whatsapp_access_token"
+        ):
             raise core.ApiError(
                 "CONFIG_ERROR",
                 "Configuration WhatsApp incomplète.",

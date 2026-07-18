@@ -138,7 +138,10 @@ function DocumentsTab() {
   const waSettings = useWhatsAppSettings();
   const features = useFeatureSettings();
   const [waSelectDoc, setWaSelectDoc] = useState<{ id: number; patient: Patient } | null>(null);
-  const [waMeSelectDoc, setWaMeSelectDoc] = useState<{ document: DocumentT; patient: Patient } | null>(null);
+  const [waMeSelectDoc, setWaMeSelectDoc] = useState<{
+    document: DocumentT;
+    patient: Patient;
+  } | null>(null);
 
   const isWhatsAppEnabled = !!features.data?.whatsapp_api_enabled;
   const isEmailingEnabled = features.data?.emailing_enabled ?? true;
@@ -281,7 +284,15 @@ function DocumentsTab() {
       {selectable && (
         <div className="flex items-center justify-between rounded-[var(--radius)] border border-line bg-bg/50 px-4 py-2">
           <span className="text-sm text-muted">{selected.size} document(s) sélectionné(s)</span>
-          <Button size="sm" disabled={selected.size === 0 || batch.isPending || (batchKind === 'envoi' && !isEmailingEnabled)} onClick={onBatch}>
+          <Button
+            size="sm"
+            disabled={
+              selected.size === 0 ||
+              batch.isPending ||
+              (batchKind === 'envoi' && !isEmailingEnabled)
+            }
+            onClick={onBatch}
+          >
             {batchKind === 'generation' ? (
               <>
                 <PlayCircle className="size-4" /> Générer la sélection
@@ -433,7 +444,8 @@ function DocumentRowItem({
 
   const needsGeneration = d.statut === 'brouillon' || d.statut === 'erreur';
   const canSend = !!d.email && (d.statut === 'en_attente_envoi' || d.statut === 'erreur_envoi');
-  const hasPhone = !!row.patient.telephone || (row.patient.telephones && row.patient.telephones.length > 0);
+  const hasPhone =
+    !!row.patient.telephone || (row.patient.telephones && row.patient.telephones.length > 0);
   const canSendWhatsApp = hasPhone && d.has_file && d.statut !== 'brouillon';
 
   return (
@@ -495,7 +507,7 @@ function DocumentRowItem({
               </>
             )
           )}
-          {(canSend && emailingEnabled) && (
+          {canSend && emailingEnabled && (
             <Button
               variant="ghost"
               size="icon"
@@ -561,7 +573,9 @@ function JobsTab() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted">
-        {"Jobs de génération et d'envoi par lot. Cliquez un job pour voir le détail (ligne par patient)."}
+        {
+          "Jobs de génération et d'envoi par lot. Cliquez un job pour voir le détail (ligne par patient)."
+        }
       </p>
 
       <div className="flex flex-wrap items-center gap-3">

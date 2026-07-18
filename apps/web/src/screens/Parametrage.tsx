@@ -1,4 +1,12 @@
-import { FileText, Mail, MessageSquare, Printer, Stethoscope, ToggleLeft } from 'lucide-react';
+import {
+  FileText,
+  Mail,
+  MessageSquare,
+  Printer,
+  Stethoscope,
+  ToggleLeft,
+  Bell,
+} from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useFeatureSettings } from '@/hooks/queries';
 import { ModelesTab } from './parametrage/ModelesTab';
@@ -7,6 +15,7 @@ import { ImprimanteTab } from './parametrage/ImprimanteTab';
 import { ActesTab } from './parametrage/ActesTab';
 import { WhatsAppTab } from './parametrage/WhatsAppTab';
 import { FonctionnalitesTab } from './parametrage/FonctionnalitesTab';
+import { RappelsTab } from './parametrage/RappelsTab';
 
 export function Parametrage() {
   const features = useFeatureSettings();
@@ -18,7 +27,9 @@ export function Parametrage() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-ink">Paramétrage</h1>
         <p className="mt-1 text-sm text-muted">
-          {"Gérér les fonctionnalités optionnelles, modèles de documents, emails, imprimantes et catalogue d'actes."}
+          {
+            "Gérér les fonctionnalités optionnelles, modèles de documents, emails, imprimantes et catalogue d'actes."
+          }
         </p>
       </header>
 
@@ -43,6 +54,9 @@ export function Parametrage() {
           <TabsTrigger value="actes">
             <Stethoscope className="size-4" /> Actes
           </TabsTrigger>
+          <TabsTrigger value="rappels">
+            <Bell className="size-4" /> Rappels
+          </TabsTrigger>
           <TabsTrigger value="features">
             <ToggleLeft className="size-4" /> Fonctionnalités
           </TabsTrigger>
@@ -66,6 +80,9 @@ export function Parametrage() {
         )}
         <TabsContent value="actes">
           <ActesTab />
+        </TabsContent>
+        <TabsContent value="rappels">
+          <RappelsTab />
         </TabsContent>
         <TabsContent value="features">
           <FonctionnalitesTab />

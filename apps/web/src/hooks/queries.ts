@@ -8,7 +8,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client, unwrap, streamJob, type JobEvent } from '@/lib/api';
 import { backend } from '@/lib/bridge';
-import type { ActeExport, ActeImport, ActeIn, Field, MailTemplateIn, WhatsAppSettingsIn, FeaturesSettingsIn, CategoryImport, CategoryExport, CategoryUpsertIn } from '@/api/types';
+import type {
+  ActeExport,
+  ActeImport,
+  ActeIn,
+  Field,
+  MailTemplateIn,
+  WhatsAppSettingsIn,
+  FeaturesSettingsIn,
+  CategoryImport,
+  CategoryExport,
+  CategoryUpsertIn,
+} from '@/api/types';
 
 export const keys = {
   templates: ['templates'] as const,
@@ -188,7 +199,6 @@ export function useImportCategories() {
     },
   });
 }
-
 
 // --- mail templates ----------------------------------------------------------
 
@@ -463,5 +473,12 @@ export function useSetFeatureSettings() {
     mutationFn: async (body: FeaturesSettingsIn) =>
       unwrap(await client.PUT('/api/settings/features', { body })),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.featureSettings }),
+  });
+}
+
+export function useHealth() {
+  return useQuery({
+    queryKey: ['health'] as const,
+    queryFn: async () => unwrap(await client.GET('/api/health')),
   });
 }

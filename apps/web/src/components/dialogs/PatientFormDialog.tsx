@@ -46,7 +46,9 @@ export function PatientFormDialog({
     adresse: '',
     notes: '',
   });
-  const [telephones, setTelephones] = useState<{ id?: number | null; prefix: string; local: string; relation: string; is_whatsapp: boolean }[]>([]);
+  const [telephones, setTelephones] = useState<
+    { id?: number | null; prefix: string; local: string; relation: string; is_whatsapp: boolean }[]
+  >([]);
   const [error, setError] = useState('');
   const [confirmDup, setConfirmDup] = useState(false);
 
@@ -61,9 +63,7 @@ export function PatientFormDialog({
         adresse: '',
         notes: '',
       });
-      setTelephones([
-        { prefix: '+216', local: '', relation: 'Lui-même', is_whatsapp: true }
-      ]);
+      setTelephones([{ prefix: '+216', local: '', relation: 'Lui-même', is_whatsapp: true }]);
     } else if (target) {
       setForm({
         nom: target.nom,
@@ -83,32 +83,25 @@ export function PatientFormDialog({
         setTelephones(list);
       } else if (target.telephone) {
         const { prefix, local } = parsePhoneNumber(target.telephone);
-        setTelephones([
-          { prefix, local, relation: 'Lui-même', is_whatsapp: true }
-        ]);
+        setTelephones([{ prefix, local, relation: 'Lui-même', is_whatsapp: true }]);
       } else {
-        setTelephones([
-          { prefix: '+216', local: '', relation: 'Lui-même', is_whatsapp: true }
-        ]);
+        setTelephones([{ prefix: '+216', local: '', relation: 'Lui-même', is_whatsapp: true }]);
       }
     }
     setError('');
     setConfirmDup(false);
   }, [target]);
 
-  const updatePhone = (index: number, fields: Partial<typeof telephones[0]>) => {
-    setTelephones((prev) =>
-      prev.map((t, i) => (i === index ? { ...t, ...fields } : t))
-    );
+  const updatePhone = (index: number, fields: Partial<(typeof telephones)[0]>) => {
+    setTelephones((prev) => prev.map((t, i) => (i === index ? { ...t, ...fields } : t)));
   };
-
 
   const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
 
   function submit() {
     if (!form.nom.trim() || !form.prenom.trim())
       return setError('Le nom et le prénom sont obligatoires.');
-      
+
     const phonesPayload = telephones
       .filter((t) => t.local.trim() !== '')
       .map((t) => ({
@@ -119,7 +112,8 @@ export function PatientFormDialog({
       }));
 
     let primaryTel = null;
-    const primary = phonesPayload.find(p => p.relation.toLowerCase() === 'lui-même') || phonesPayload[0];
+    const primary =
+      phonesPayload.find((p) => p.relation.toLowerCase() === 'lui-même') || phonesPayload[0];
     if (primary) {
       primaryTel = primary.telephone;
     }
@@ -241,7 +235,9 @@ export function PatientFormDialog({
                     <div className="flex-1 min-w-0 phone-input-wrapper">
                       <PhoneInput
                         defaultCountry={(() => {
-                          const code = COUNTRIES.find((c) => c.prefix === t.prefix)?.code.toLowerCase();
+                          const code = COUNTRIES.find(
+                            (c) => c.prefix === t.prefix
+                          )?.code.toLowerCase();
                           return code || 'tn';
                         })()}
                         value={formatE164(t.prefix, t.local)}

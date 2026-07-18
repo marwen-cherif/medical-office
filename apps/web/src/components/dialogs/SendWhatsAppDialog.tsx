@@ -15,9 +15,9 @@ export function SendWhatsAppDialog({
   isOpen,
   onClose,
   onConfirm,
-  title = "Sélectionner le numéro destinataire",
+  title = 'Sélectionner le numéro destinataire',
   description,
-  confirmLabel = "Envoyer",
+  confirmLabel = 'Envoyer',
 }: {
   patient: Patient | null;
   isOpen: boolean;
@@ -54,14 +54,17 @@ export function SendWhatsAppDialog({
           <p className="text-sm text-muted">
             {description || (
               <>
-                Le patient <strong>{patient.display}</strong> possède plusieurs numéros de téléphone. Choisissez la ligne cible pour l&apos;envoi WhatsApp :
+                Le patient <strong>{patient.display}</strong> possède plusieurs numéros de
+                téléphone. Choisissez la ligne cible pour l&apos;envoi WhatsApp :
               </>
             )}
           </p>
 
           {!hasWaCompatible && phones.length > 0 && (
             <div className="rounded-[var(--radius)] border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-              {"⚠️ Aucun numéro n'est déclaré compatible avec WhatsApp pour ce patient. Vous pouvez toutefois tenter l'envoi sur l'un d'eux."}
+              {
+                "⚠️ Aucun numéro n'est déclaré compatible avec WhatsApp pour ce patient. Vous pouvez toutefois tenter l'envoi sur l'un d'eux."
+              }
             </div>
           )}
 

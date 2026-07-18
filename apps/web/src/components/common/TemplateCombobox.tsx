@@ -235,7 +235,9 @@ export function TemplateCombobox({
               aria-expanded
               aria-autocomplete="list"
               aria-controls={listboxId}
-              aria-activedescendant={selectableItems.length ? `${listboxId}-opt-${active}` : undefined}
+              aria-activedescendant={
+                selectableItems.length ? `${listboxId}-opt-${active}` : undefined
+              }
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
@@ -283,7 +285,9 @@ export function TemplateCombobox({
                     <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold tracking-wider text-muted/80 uppercase bg-bg/30 rounded-sm animate-none">
                       <span
                         className="size-1.5 rounded-full shrink-0"
-                        style={{ backgroundColor: catName === 'Sans catégorie' ? '#cbd5e1' : color }}
+                        style={{
+                          backgroundColor: catName === 'Sans catégorie' ? '#cbd5e1' : color,
+                        }}
                       />
                       {iconName && (
                         <CategoryIcon name={iconName} className="size-3 text-muted shrink-0" />

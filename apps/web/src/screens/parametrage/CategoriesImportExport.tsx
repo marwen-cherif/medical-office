@@ -27,9 +27,12 @@ export function CategoriesImportExport() {
   function onExport() {
     exportCategories.mutate(undefined, {
       onSuccess: (r) =>
-        toast.success(`Catégories exportées (${r.count} catégorie(s)). Le fichier s'ouvre dans Excel.`, {
-          description: r.path,
-        }),
+        toast.success(
+          `Catégories exportées (${r.count} catégorie(s)). Le fichier s'ouvre dans Excel.`,
+          {
+            description: r.path,
+          }
+        ),
       onError: (e) => toast.error(humanizeError(e)),
     });
   }

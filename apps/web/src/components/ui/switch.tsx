@@ -6,6 +6,7 @@ export interface SwitchProps {
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
   className?: string;
+  id?: string;
   'aria-label'?: string;
 }
 

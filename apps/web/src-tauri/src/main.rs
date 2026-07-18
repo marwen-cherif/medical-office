@@ -43,12 +43,22 @@ fn main() {
                             // Injecte { host, port, token } AVANT le chargement de la
                             // page : `window.__CRM_BACKEND__` est lu par src/lib/bridge.ts.
                             let init = format!("window.__CRM_BACKEND__ = {};", json.trim());
+                            let title = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json.trim()) {
+                                if let Some(v) = parsed.get("version").and_then(|v| v.as_str()) {
+                                    format!("Cabinet CRM v{}", v)
+                                } else {
+                                    "Cabinet CRM".to_string()
+                                }
+                            } else {
+                                "Cabinet CRM".to_string()
+                            };
+
                             WebviewWindowBuilder::new(
                                 &handle,
                                 "main",
                                 WebviewUrl::App("index.html".into()),
                             )
-                            .title("Cabinet CRM")
+                            .title(title)
                             .inner_size(1280.0, 840.0)
                             .min_inner_size(960.0, 640.0)
                             .initialization_script(&init)

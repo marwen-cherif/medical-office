@@ -66,7 +66,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import backup, import_actes, import_categories, print_settings, printing, repo, templates, version
+from . import (
+    backup,
+    import_actes,
+    import_categories,
+    print_settings,
+    printing,
+    repo,
+    templates,
+    version,
+)
 from .db import SchemaTooNewError, app_dir, connect
 
 # Ligne de handshake imprimee sur stdout au demarrage : la coquille Tauri y lit le
@@ -850,7 +859,11 @@ def categories_list() -> list[CategoryOut]:
     with db() as conn:
         return [
             CategoryOut(
-                nom=c.nom, couleur=c.couleur, icone=c.icone, sort_order=c.sort_order, whatsapp_message=c.whatsapp_message
+                nom=c.nom,
+                couleur=c.couleur,
+                icone=c.icone,
+                sort_order=c.sort_order,
+                whatsapp_message=c.whatsapp_message,
             )
             for c in repo.list_categories(conn)
         ]
@@ -871,7 +884,11 @@ def categories_upsert(nom: str, body: CategoryUpsertIn) -> CategoryOut:
                 ),
             )
         return CategoryOut(
-            nom=c.nom, couleur=c.couleur, icone=c.icone, sort_order=c.sort_order, whatsapp_message=c.whatsapp_message
+            nom=c.nom,
+            couleur=c.couleur,
+            icone=c.icone,
+            sort_order=c.sort_order,
+            whatsapp_message=c.whatsapp_message,
         )
     except Exception as exc:  # noqa: BLE001
         raise _err_from_engine(exc)
@@ -897,7 +914,9 @@ def categories_rename(body: CategoryRenameIn) -> OkOut:
     return OkOut()
 
 
-@app.get("/api/categories/export", response_model=CategoryExportOut, tags=["categories"])
+@app.get(
+    "/api/categories/export", response_model=CategoryExportOut, tags=["categories"]
+)
 def categories_export() -> CategoryExportOut:
     """Exporte la configuration des catégories en .xlsx sur le poste, puis ouvre le fichier."""
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -926,7 +945,9 @@ def categories_export() -> CategoryExportOut:
     return CategoryExportOut(path=str(path), count=count)
 
 
-@app.post("/api/categories/import", response_model=CategoryImportOut, tags=["categories"])
+@app.post(
+    "/api/categories/import", response_model=CategoryImportOut, tags=["categories"]
+)
 async def categories_import(
     file: UploadFile = File(...), dry_run: bool = False
 ) -> CategoryImportOut:
@@ -941,7 +962,9 @@ async def categories_import(
         if not dry_run:
             backup.backup_db()
         with db() as conn:
-            summary = import_categories.import_categories(tmp, dry_run=dry_run, conn=conn)
+            summary = import_categories.import_categories(
+                tmp, dry_run=dry_run, conn=conn
+            )
         return CategoryImportOut(
             created=summary.created,
             updated=summary.updated,
@@ -957,8 +980,6 @@ async def categories_import(
             tmp.unlink()
         except OSError:
             pass
-
-
 
 
 # --- mailTemplates.* ----------------------------------------------------------
@@ -1120,7 +1141,9 @@ def settings_set_print(doc_type: str, body: PrintConfigIn) -> OkOut:
     return OkOut()
 
 
-@app.get("/api/settings/features", response_model=FeaturesSettingsOut, tags=["settings"])
+@app.get(
+    "/api/settings/features", response_model=FeaturesSettingsOut, tags=["settings"]
+)
 def settings_get_features() -> FeaturesSettingsOut:
     with db() as conn:
         whatsapp_api_enabled = repo.get_setting(conn, "whatsapp_api_enabled") == "true"
@@ -1134,19 +1157,29 @@ def settings_get_features() -> FeaturesSettingsOut:
 @app.put("/api/settings/features", response_model=OkOut, tags=["settings"])
 def settings_set_features(body: FeaturesSettingsIn) -> OkOut:
     with db() as conn:
-        repo.set_setting(conn, "whatsapp_api_enabled", "true" if body.whatsapp_api_enabled else "false")
-        repo.set_setting(conn, "emailing_enabled", "true" if body.emailing_enabled else "false")
+        repo.set_setting(
+            conn,
+            "whatsapp_api_enabled",
+            "true" if body.whatsapp_api_enabled else "false",
+        )
+        repo.set_setting(
+            conn, "emailing_enabled", "true" if body.emailing_enabled else "false"
+        )
     return OkOut()
 
 
-@app.get("/api/settings/whatsapp", response_model=WhatsAppSettingsOut, tags=["settings"])
+@app.get(
+    "/api/settings/whatsapp", response_model=WhatsAppSettingsOut, tags=["settings"]
+)
 def settings_get_whatsapp() -> WhatsAppSettingsOut:
     from src.config import load_config
 
     with db() as conn:
         phone_id = repo.get_setting(conn, "whatsapp_phone_number_id") or ""
         token = repo.get_setting(conn, "whatsapp_access_token") or ""
-        template_name = repo.get_setting(conn, "whatsapp_template_name") or "envoi_document"
+        template_name = (
+            repo.get_setting(conn, "whatsapp_template_name") or "envoi_document"
+        )
         default_country = repo.get_setting(conn, "default_country") or "+216"
 
     try:
@@ -1167,14 +1200,16 @@ def settings_get_whatsapp() -> WhatsAppSettingsOut:
 @app.put("/api/settings/whatsapp", response_model=OkOut, tags=["settings"])
 def settings_set_whatsapp(body: WhatsAppSettingsIn) -> OkOut:
     with db() as conn:
-        repo.set_setting(conn, "whatsapp_phone_number_id", body.whatsapp_phone_number_id)
+        repo.set_setting(
+            conn, "whatsapp_phone_number_id", body.whatsapp_phone_number_id
+        )
         repo.set_setting(conn, "whatsapp_template_name", body.whatsapp_template_name)
         repo.set_setting(conn, "default_country", body.default_country)
-        
+
         token = body.whatsapp_access_token.strip()
         if token and token != "••••••••":
             repo.set_setting(conn, "whatsapp_access_token", token)
-            
+
     return OkOut()
 
 
@@ -1379,6 +1414,185 @@ async def events(job_id: str):
     )
 
 
+# --- settings/rappels.* -------------------------------------------------------
+# Paramètres Rappels (meta) + état de la tâche planifiée Windows.
+# Clés meta utilisées :
+#   rappels_notifs_enabled       : "true" (défaut) | "false"
+#   rappels_scheduler_interval   : entier en minutes (défaut 15)
+#   rappels_default_country      : indicatif pays ex. "+216" (défaut)
+
+
+class RappelsSettingsOut(BaseModel):
+    notifs_enabled: bool
+    scheduler_interval: int
+    default_country: str
+    task_present: bool
+    task_enabled: bool
+    task_status: Optional[str] = None
+    task_last_run: Optional[str] = None
+    task_next_run: Optional[str] = None
+
+
+class RappelsSettingsIn(BaseModel):
+    notifs_enabled: bool
+    scheduler_interval: int
+    default_country: str
+
+
+@app.get("/api/settings/rappels", response_model=RappelsSettingsOut, tags=["settings"])
+def settings_get_rappels() -> RappelsSettingsOut:
+    """Lit les paramètres Rappels et l'état courant du worker tray de fond.
+
+    Les champs `task_*` reflètent désormais l'inscription au démarrage
+    (HKCU\\...\\Run) du worker tray `crm-tray.exe`, et non plus l'ancienne
+    tâche planifiée `schtasks`. Conservés pour compatibilité du frontend.
+    """
+    from . import autostart
+
+    with db() as conn:
+        notifs_enabled = repo.get_setting(conn, "rappels_notifs_enabled") != "false"
+        interval_raw = repo.get_setting(conn, "rappels_scheduler_interval")
+        try:
+            interval = int(interval_raw or "15")
+        except (TypeError, ValueError):
+            interval = 15
+        default_country = repo.get_setting(conn, "rappels_default_country") or "+216"
+
+    present = autostart.is_installed()
+    return RappelsSettingsOut(
+        notifs_enabled=notifs_enabled,
+        scheduler_interval=interval,
+        default_country=default_country,
+        task_present=present,
+        task_enabled=present,  # inscrit au Run = actif au prochain logon
+        task_status="worker tray (HKCU Run)" if present else None,
+        task_last_run=None,
+        task_next_run=None,
+    )
+
+
+@app.put("/api/settings/rappels", response_model=OkOut, tags=["settings"])
+def settings_set_rappels(body: RappelsSettingsIn) -> OkOut:
+    """Met à jour les paramètres Rappels.
+
+    L'intervalle est relu par le worker tray à chaque cycle (meta
+    `rappels_scheduler_interval`) — pas besoin de réinstaller quoi que ce soit.
+    """
+    if body.scheduler_interval < 1:
+        raise ApiError(ERR_VALIDATION, "L'intervalle doit être ≥ 1 minute.", status=400)
+    if not body.default_country.strip():
+        raise ApiError(
+            ERR_VALIDATION, "L'indicatif pays ne peut pas être vide.", status=400
+        )
+
+    with db() as conn:
+        repo.set_setting(
+            conn, "rappels_notifs_enabled", "true" if body.notifs_enabled else "false"
+        )
+        repo.set_setting(
+            conn, "rappels_scheduler_interval", str(body.scheduler_interval)
+        )
+        repo.set_setting(conn, "rappels_default_country", body.default_country.strip())
+
+    # L'intervalle est relu à chaque cycle par le worker tray : aucun
+    # réenregistrement nécessaire. On s'assure juste que l'autostart est en place.
+    try:
+        from . import autostart
+
+        autostart.install()
+    except Exception:  # noqa: BLE001 — best-effort, ne bloque pas la sauvegarde
+        pass
+
+    return OkOut()
+
+
+@app.post(
+    "/api/settings/rappels/install-task",
+    response_model=RappelsSettingsOut,
+    tags=["settings"],
+)
+def settings_install_rappels_task() -> RappelsSettingsOut:
+    """Force la (ré)installation de l'autostart du worker tray (HKCU Run).
+
+    Utile si l'entrée a été supprimée manuellement ou si l'exe a été déplacé.
+    Nettoie aussi l'ancienne tâche planifiée `schtasks` si elle traîne.
+    """
+    from . import autostart
+
+    with db() as conn:
+        interval_raw = repo.get_setting(conn, "rappels_scheduler_interval")
+        try:
+            interval = int(interval_raw or "15")
+        except (TypeError, ValueError):
+            interval = 15
+        notifs_enabled = repo.get_setting(conn, "rappels_notifs_enabled") != "false"
+        default_country = repo.get_setting(conn, "rappels_default_country") or "+216"
+
+    autostart.install()
+    present = autostart.is_installed()
+    return RappelsSettingsOut(
+        notifs_enabled=notifs_enabled,
+        scheduler_interval=interval,
+        default_country=default_country,
+        task_present=present,
+        task_enabled=present,
+        task_status="worker tray (HKCU Run)" if present else None,
+        task_last_run=None,
+        task_next_run=None,
+    )
+
+
+@app.post(
+    "/api/settings/rappels/test-notification", response_model=OkOut, tags=["settings"]
+)
+def settings_test_rappels_notification() -> OkOut:
+    """Émet une notification test Windows 11.
+
+    Journalise le diagnostic (OS, disponibilité PowerShell/pywin32/plyer, moteur
+    utilisé) via le logger `crm.service` — qui écrit déjà dans `logs/service.log`
+    (RotatingFileHandler), évitant un fichier ad hoc qui grandirait sans limite.
+    """
+    import shutil
+    import sys
+
+    log = logging.getLogger("crm.service")
+    log.info("=== TEST NOTIFICATION (endpoint test-notification appelé) ===")
+    log.info("OS: %s", sys.platform)
+    try:
+        ps_path = shutil.which("powershell")
+        log.info("powershell.exe: %s", ps_path or "INTROUVABLE")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("shutil.which(powershell) erreur: %s", exc)
+
+    try:
+        from .service import _notify_windows
+
+        # Disponibilité des moteurs de secours (pour diagnostic).
+        try:
+            import win32api  # noqa: F401
+            import win32con  # noqa: F401
+            import win32gui  # noqa: F401
+
+            log.info("pywin32 (win32gui, win32con, win32api) importable.")
+        except Exception as exc:  # noqa: BLE001
+            log.info("pywin32 non importable: %s", exc)
+        try:
+            from plyer import notification  # noqa: F401
+
+            log.info("plyer importable.")
+        except Exception as exc:  # noqa: BLE001
+            log.info("plyer non importable: %s", exc)
+
+        moteur = _notify_windows(
+            "Test Cabinet CRM", "Les notifications fonctionnent."
+        )
+        log.info("Moteur utilisé: %s", moteur or "AUCUN (tous échoués)")
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Erreur inattendue durant le test de notification: %s", exc)
+    log.info("=== FIN TEST NOTIFICATION ===")
+    return OkOut()
+
+
 # =============================================================================
 # Routeurs de domaine (Patients, fiche, Documents, Finances, Prestataires,
 # Travaux, Tableau de bord). Enregistres ICI, en bas du module : toute l'infra
@@ -1404,6 +1618,20 @@ def _init_db() -> None:
     `connect()` (qui migre la base en place). `connect()` ecrit en plus une copie
     etiquetee pre-migration et refuse une base plus recente (`SchemaTooNewError`).
     """
+    try:
+        from . import config_migrate
+        from .version import _frozen
+        from src.config import app_dir
+        config_path = app_dir() / "config.ini"
+        default_path = (
+            app_dir() / "resources" / "config.default.ini"
+            if _frozen()
+            else app_dir() / "config.default.ini"
+        )
+        config_migrate.migrate(config_path, default_path)
+    except Exception as e:
+        logger.error("Erreur lors de la migration de config.ini : %s", e)
+
     backup.backup_db()
     conn = connect()
     # Un job 'en_cours' ne survit pas a un arret : marquer interrompu au demarrage
@@ -1413,6 +1641,28 @@ def _init_db() -> None:
     except Exception:  # noqa: BLE001
         pass
     STATE.conn = conn
+    # Filet de sécurité rappels : traite les rappels « planifie » échus dès
+    # l'ouverture de l'app, même si la tâche planifiée Windows est absente,
+    # désactivée ou n'a pas tourné (PC éteint, exe déplacé, etc.). Spécifié
+    # dans `openspec/specs/rappels/spec.md` (« Présentation des rappels dus au
+    # démarrage »). Idempotent (seuls les `planifie` sont touchés).
+    # NB : aucune notification Windows n'est émise ici — le frontend affiche
+    # un toast in-app résumé au démarrage (évite le double-toast).
+    try:
+        from . import rappels as _rappels_logic
+
+        _rappels_logic.traiter_rappels_dus(conn)
+    except Exception:  # noqa: BLE001
+        pass
+    # Installe/vérifie l'autostart du worker tray (HKCU Run, sans admin) pour le
+    # service de fond des rappels. Idempotent : ne réinscrit que si absent.
+    # Best-effort : ne bloque jamais le démarrage.
+    try:
+        from . import autostart as _autostart
+
+        _autostart.install()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def create_server(
@@ -1619,7 +1869,25 @@ def main(argv: Optional[list[str]] = None) -> None:
         action="store_true",
         help="DEV : recharge a chaud le code Python (port fixe requis).",
     )
+    parser.add_argument(
+        "--service",
+        action="store_true",
+        help=(
+            "Mode service de fond : lance le worker tray (icône + boucle scheduler "
+            "des rappels) en windowed. Alias de `crm-tray.exe` / `python -m crm.tray` "
+            "— conservé pour compat. Sans Uvicorn ni interface graphique."
+        ),
+    )
     args = parser.parse_args(argv)
+    # --service est traité EN PREMIER, avant tout démarrage du serveur FastAPI.
+    # NB : le service de fond officiel est `crm-tray.exe` (console=False). Ce
+    # flag lance le même worker tray depuis crm-server.exe (utile en dev ou pour
+    # un lancement manuel) — mais depuis un exe console=True, donc à éviter en
+    # production (préférer crm-tray.exe pour rester invisible).
+    if args.service:
+        from .tray import run as tray_run
+
+        sys.exit(tray_run())
     run(host=args.host, port=args.port, token=args.token, reload=args.reload)
 
 

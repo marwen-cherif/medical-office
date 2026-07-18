@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Pencil } from 'lucide-react';
+import { ArrowLeft, Bell, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { MoneySummary } from '@/components/common/MoneySummary';
@@ -10,14 +10,15 @@ import { humanizeError } from '@/lib/errors';
 import { isoToFr } from '@/lib/format';
 import { useShortcut } from '@/lib/shortcuts';
 import { usePatient } from '@/hooks/patients';
-import type { Patient } from '@/api/types';
+import type { Patient, Rappel } from '@/api/types';
 import { PlansActesTab } from './patient-detail/PlansActesTab';
 import { DocumentsTab } from './patient-detail/DocumentsTab';
 import { ReglementsTab } from './patient-detail/ReglementsTab';
 import { HistoriqueTab } from './patient-detail/HistoriqueTab';
+import { RappelsTab } from './patient-detail/RappelsTab';
+import { RappelFormDialog } from './rappels/RappelFormDialog';
 import { ClickToCopy } from '@/components/ui/click-to-copy';
 import { WhatsAppIcon } from '@/components/icons/WhatsAppIcon';
-
 
 /** Denture par défaut selon l'âge (enfant si < 13 ans). */
 export function dentureFor(dateNaissance: string | null | undefined): 'adulte' | 'enfant' {
@@ -28,12 +29,26 @@ export function dentureFor(dateNaissance: string | null | undefined): 'adulte' |
   return age < 13 ? 'enfant' : 'adulte';
 }
 
-function IdRow({ label, value, multiline }: { label: string; value?: string | null; multiline?: boolean }) {
+function IdRow({
+  label,
+  value,
+  multiline,
+}: {
+  label: string;
+  value?: string | null;
+  multiline?: boolean;
+}) {
   return (
-    <div className={`flex justify-between gap-3 py-1 text-sm ${multiline ? 'items-start' : 'items-center'}`}>
+    <div
+      className={`flex justify-between gap-3 py-1 text-sm ${multiline ? 'items-start' : 'items-center'}`}
+    >
       <span className="text-muted">{label}</span>
       {value ? (
-        <ClickToCopy text={value} multiline={multiline} className="text-right text-ink max-w-[180px] lg:max-w-none" />
+        <ClickToCopy
+          text={value}
+          multiline={multiline}
+          className="text-right text-ink max-w-[180px] lg:max-w-none"
+        />
       ) : (
         <span className="text-right text-ink">—</span>
       )}
@@ -47,6 +62,7 @@ export function PatientDetail() {
   const id = Number(params.id);
   const detail = usePatient(Number.isFinite(id) ? id : null);
   const [edit, setEdit] = useState<Patient | 'new' | null>(null);
+  const [rappelTarget, setRappelTarget] = useState<Rappel | 'new' | null>(null);
 
   // Hook appelé avant les retours anticipés (règles des hooks) ; le handler lit la
   // donnée la plus récente et reste inactif tant que le patient n'est pas chargé.
@@ -56,6 +72,13 @@ export function PatientDetail() {
     group: 'Fiche patient',
     enabled: !!detail.data,
     handler: () => detail.data && setEdit(detail.data.patient),
+  });
+  useShortcut({
+    keys: 'alt+p',
+    description: 'Planifier un rappel',
+    group: 'Fiche patient',
+    enabled: !!detail.data,
+    handler: () => setRappelTarget('new'),
   });
 
   if (detail.isLoading) return <div className="p-8 text-muted">Chargement…</div>;
@@ -72,11 +95,6 @@ export function PatientDetail() {
           <ArrowLeft className="size-5" />
         </Button>
         <h1 className="flex-1 text-2xl font-semibold text-ink">{patient.display}</h1>
-        <Tooltip label="Modifier le patient" shortcut="alt+e">
-          <Button variant="secondary" onClick={() => setEdit(patient)}>
-            <Pencil className="size-4" /> Modifier
-          </Button>
-        </Tooltip>
       </div>
 
       <div className="flex flex-col gap-6 lg:flex-row">
@@ -94,9 +112,11 @@ export function PatientDetail() {
                     <div className="flex items-center gap-1.5">
                       <ClickToCopy text={t.telephone} className="font-mono text-ink text-right" />
                       {t.is_whatsapp && (
-                        <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded font-bold shrink-0 border border-emerald-200" title="Compatible WhatsApp">
-                          <WhatsAppIcon className="size-3 text-emerald-600" />
-                          <span>WhatsApp</span>
+                        <span
+                          className="inline-flex items-center shrink-0"
+                          title="Compatible WhatsApp"
+                        >
+                          <WhatsAppIcon className="size-3.5 text-emerald-600" />
                         </span>
                       )}
                     </div>
@@ -131,6 +151,7 @@ export function PatientDetail() {
               <TabsTrigger value="plans">Plans &amp; actes</TabsTrigger>
               <TabsTrigger value="documents">Documents</TabsTrigger>
               <TabsTrigger value="reglements">Règlements</TabsTrigger>
+              <TabsTrigger value="rappels">Rappels</TabsTrigger>
               <TabsTrigger value="historique">Historique</TabsTrigger>
             </TabsList>
             <TabsContent value="plans">
@@ -142,6 +163,9 @@ export function PatientDetail() {
             <TabsContent value="reglements">
               <ReglementsTab patientId={id} />
             </TabsContent>
+            <TabsContent value="rappels">
+              <RappelsTab patientId={id} />
+            </TabsContent>
             <TabsContent value="historique">
               <HistoriqueTab patientId={id} />
             </TabsContent>
@@ -150,6 +174,39 @@ export function PatientDetail() {
       </div>
 
       <PatientFormDialog target={edit} onClose={() => setEdit(null)} />
+      <RappelFormDialog
+        target={rappelTarget}
+        onClose={() => setRappelTarget(null)}
+        defaultPatientId={id}
+      />
+
+      {/* Boutons flottants d'action (Modifier + Planifier un rappel).
+          Les classes `fixed` vont sur le conteneur du groupe (pas sur les Buttons
+          ni sur les Tooltip wrappers) : sinon un bouton fixed sort du span
+          `relative` de son Tooltip et l'infobulle se positionne mal.
+          Tooltips en `side="left"` pour ne pas déborder du bord droit. */}
+      <div className="fixed bottom-6 right-6 z-30 flex flex-col items-center gap-3">
+        <Tooltip label="Modifier le patient" shortcut="alt+e" side="left">
+          <Button
+            variant="secondary"
+            size="icon"
+            className="size-12 rounded-full border border-line bg-white shadow-lg"
+            onClick={() => setEdit(patient)}
+          >
+            <Pencil className="size-5" />
+          </Button>
+        </Tooltip>
+        <Tooltip label="Planifier un rappel" shortcut="alt+p" side="left">
+          <Button
+            variant="default"
+            size="icon"
+            className="size-12 rounded-full shadow-lg"
+            onClick={() => setRappelTarget('new')}
+          >
+            <Bell className="size-5" />
+          </Button>
+        </Tooltip>
+      </div>
     </div>
   );
 }

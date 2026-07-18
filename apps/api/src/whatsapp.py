@@ -29,7 +29,10 @@ def log_whatsapp(event: str, **fields) -> None:
         # Filtrer par précaution tout champ pouvant contenir un token ou secret
         safe_fields = {}
         for k, v in fields.items():
-            if any(secret_kw in k.lower() for secret_kw in ("token", "auth", "secret", "key")):
+            if any(
+                secret_kw in k.lower()
+                for secret_kw in ("token", "auth", "secret", "key")
+            ):
                 continue
             safe_fields[k] = v
         details = " ".join(
@@ -43,6 +46,7 @@ def log_whatsapp(event: str, **fields) -> None:
 
 class WhatsAppError(RuntimeError):
     """Classe d'erreur dédiée pour les échecs WhatsApp."""
+
     pass
 
 
@@ -61,9 +65,7 @@ class WhatsAppClient:
         self._phone_number_id = phone_number_id
         self._access_token = access_token
         self._base_url = BASE_URL
-        self._headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
+        self._headers = {"Authorization": f"Bearer {access_token}"}
 
     def upload_media(self, path: Path) -> str:
         """Upload un fichier sur l'endpoint média de Meta et renvoie le media_id."""
@@ -71,7 +73,9 @@ class WhatsAppClient:
             raise FileNotFoundError(f"Fichier introuvable pour upload : {path}")
 
         url = f"{self._base_url}/{self._phone_number_id}/media"
-        content_type = "application/pdf" if path.suffix.lower() == ".pdf" else "image/jpeg"
+        content_type = (
+            "application/pdf" if path.suffix.lower() == ".pdf" else "image/jpeg"
+        )
 
         log_whatsapp(
             "UPLOAD_MEDIA_REQUEST",
@@ -82,16 +86,15 @@ class WhatsAppClient:
 
         try:
             with path.open("rb") as fh:
-                files = {
-                    "file": (path.name, fh, content_type)
-                }
-                data = {
-                    "messaging_product": "whatsapp",
-                    "type": content_type
-                }
-                resp = requests.post(url, headers=self._headers, files=files, data=data, timeout=30)
+                files = {"file": (path.name, fh, content_type)}
+                data = {"messaging_product": "whatsapp", "type": content_type}
+                resp = requests.post(
+                    url, headers=self._headers, files=files, data=data, timeout=30
+                )
 
-            log_whatsapp("UPLOAD_MEDIA_RESPONSE", http_status=resp.status_code, body=resp.text)
+            log_whatsapp(
+                "UPLOAD_MEDIA_RESPONSE", http_status=resp.status_code, body=resp.text
+            )
 
             if resp.status_code >= 400:
                 raise WhatsAppError(f"HTTP {resp.status_code} - {resp.text}")
@@ -115,7 +118,7 @@ class WhatsAppClient:
         filename: str,
         template: str,
         lang: str,
-        variables: list[str]
+        variables: list[str],
     ) -> SendResult:
         """Envoie un document via un modèle WhatsApp Meta approuvé."""
         url = f"{self._base_url}/{self._phone_number_id}/messages"
@@ -131,28 +134,20 @@ class WhatsAppClient:
             "type": "template",
             "template": {
                 "name": template,
-                "language": {
-                    "code": lang
-                },
+                "language": {"code": lang},
                 "components": [
                     {
                         "type": "header",
                         "parameters": [
                             {
                                 "type": "document",
-                                "document": {
-                                    "id": media_id,
-                                    "filename": filename
-                                }
+                                "document": {"id": media_id, "filename": filename},
                             }
-                        ]
+                        ],
                     },
-                    {
-                        "type": "body",
-                        "parameters": body_params
-                    }
-                ]
-            }
+                    {"type": "body", "parameters": body_params},
+                ],
+            },
         }
 
         log_whatsapp(
@@ -168,7 +163,9 @@ class WhatsAppClient:
 
         try:
             resp = requests.post(url, headers=self._headers, json=payload, timeout=30)
-            log_whatsapp("SEND_MESSAGE_RESPONSE", http_status=resp.status_code, body=resp.text)
+            log_whatsapp(
+                "SEND_MESSAGE_RESPONSE", http_status=resp.status_code, body=resp.text
+            )
 
             if resp.status_code >= 400:
                 raise WhatsAppError(f"HTTP {resp.status_code} - {resp.text}")
@@ -186,7 +183,9 @@ class WhatsAppClient:
 
         except Exception as exc:
             if not isinstance(exc, WhatsAppError):
-                raise WhatsAppError(f"Erreur lors de l'envoi du message : {exc}") from exc
+                raise WhatsAppError(
+                    f"Erreur lors de l'envoi du message : {exc}"
+                ) from exc
             raise
 
     def get_status(self, message_id: str) -> str:
@@ -197,7 +196,9 @@ class WhatsAppClient:
 
         try:
             resp = requests.get(url, headers=self._headers, timeout=30)
-            log_whatsapp("GET_STATUS_RESPONSE", http_status=resp.status_code, body=resp.text)
+            log_whatsapp(
+                "GET_STATUS_RESPONSE", http_status=resp.status_code, body=resp.text
+            )
 
             if resp.status_code == 404:
                 return "unknown"
@@ -211,5 +212,7 @@ class WhatsAppClient:
 
         except Exception as exc:
             if not isinstance(exc, WhatsAppError):
-                raise WhatsAppError(f"Erreur lors de la récupération du statut : {exc}") from exc
+                raise WhatsAppError(
+                    f"Erreur lors de la récupération du statut : {exc}"
+                ) from exc
             raise

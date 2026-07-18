@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 class SchemaTooNewError(RuntimeError):
@@ -373,6 +373,31 @@ CREATE TABLE IF NOT EXISTS patient_phones (
 );
 
 CREATE INDEX IF NOT EXISTS idx_patient_phones_patient ON patient_phones(patient_id);
+
+-- v17 : rappels datés (alertes internes et messages patients WhatsApp planifiés).
+-- Table additive ; aucune donnée existante touchée. `type` : alerte_interne |
+-- message_patient. `etat` : planifie | du | a_envoyer | envoye | traite | annule.
+-- `lu` (INTEGER 0/1) : flag de lecture UI (distinct de `etat`, cf. design D1).
+-- `patient_id` / `document_id` nullable : rattachement optionnel. `notified_at` /
+-- `sent_at` : horodatages de transitions (best-effort, NULL avant la transition).
+CREATE TABLE IF NOT EXISTS rappels (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    type         TEXT NOT NULL,                          -- alerte_interne | message_patient
+    patient_id   INTEGER REFERENCES patients(id) ON DELETE SET NULL,
+    document_id  INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+    titre        TEXT NOT NULL,
+    message      TEXT,                                   -- texte libre destiné au patient (message_patient)
+    echeance     TEXT NOT NULL,                          -- ISO datetime ou date
+    etat         TEXT NOT NULL DEFAULT 'planifie',       -- planifie | du | a_envoyer | envoye | traite | annule
+    lu           INTEGER NOT NULL DEFAULT 0,             -- 0 = non lu, 1 = lu (flag UI)
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    notified_at  TEXT,                                   -- horodatage de la mise en file/notification
+    sent_at      TEXT                                    -- horodatage de l'envoi WhatsApp confirmé
+);
+
+CREATE INDEX IF NOT EXISTS idx_rappels_patient ON rappels(patient_id);
+CREATE INDEX IF NOT EXISTS idx_rappels_etat ON rappels(etat, echeance);
+CREATE INDEX IF NOT EXISTS idx_rappels_echeance ON rappels(echeance);
 """
 
 
@@ -568,6 +593,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # v16 : messages WhatsApp personnalisés par catégorie de document
     if not _column_exists(conn, "categories", "whatsapp_message"):
         conn.execute("ALTER TABLE categories ADD COLUMN whatsapp_message TEXT")
+
+    # v17 : table des rappels datés (alertes internes + messages patients WhatsApp).
+    # La table est entièrement créée par _SCHEMA (CREATE TABLE IF NOT EXISTS).
+    # Le bump SCHEMA_VERSION 16 -> 17 déclenche le snapshot pré-migration dans
+    # connect() pour toute base ouverte en v16.
+    # Aucune colonne/table existante modifiée (migration purement additive).
 
 
 def _set_version(conn: sqlite3.Connection) -> None:
