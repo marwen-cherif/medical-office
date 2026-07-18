@@ -6,18 +6,24 @@
 #
 # console=True : le sidecar DOIT pouvoir ecrire le handshake sur stdout (en mode
 # windowed, Python n'a pas de stdout valide). La coquille Tauri demarre le sidecar
-# SANS fenetre console (CREATE_NO_WINDOW), donc aucune console noire n'apparait.
+# SANS fenetre console (CREATE_NO_WINDOW via tauri-plugin-shell), donc aucune
+# console noire n'apparait. IMPORTANT : ne pas utiliser crm-server.exe pour le
+# service de fond des rappels (il flasherait une console) — le worker de fond
+# dedie est `crm-tray.exe` (console=False, cf. crm-tray.spec).
 from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
 hiddenimports = [
     'win32com.client', 'pythoncom', 'fitz', 'docx', 'requests',
-    'win32print', 'win32ui', 'win32gui', 'win32con',  # impression directe (crm/printing.py)
+    'win32print', 'win32ui', 'win32gui', 'win32con', 'win32api',  # impression + notifications toast
     'crm._build_info',                # genere par build (numero de build) ; absent = avertissement
     'et_xmlfile',                     # dependance d'openpyxl (import/export actes .xlsx)
     'uvicorn.logging', 'uvicorn.loops.auto', 'uvicorn.protocols.http.auto',
     'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan.on',
+    # Rappels automatiques : service de fond headless + planificateur Windows
+    'crm.rappels', 'crm.service', 'crm.scheduler',
+    'crm.routers.rappels',
 ]
 # FastAPI/uvicorn/pydantic + moteur : on collecte tout pour ne rien oublier
 # (starlette, anyio, pydantic_core, etc. sont tires transitvement). openpyxl est

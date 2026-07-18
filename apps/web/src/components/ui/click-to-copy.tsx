@@ -42,11 +42,15 @@ export function ClickToCopy({ text, children, multiline, className, ...props }: 
       <span className={cn(multiline ? 'whitespace-pre-wrap break-words flex-1' : 'truncate')}>
         {children || text}
       </span>
-      <span className={cn(
-        'inline-flex size-4 shrink-0 items-center justify-center text-muted transition-all duration-200',
-        multiline && 'mt-0.5',
-        copied ? 'opacity-100' : 'opacity-0 group-hover/copy:opacity-100 group-focus-visible/copy:opacity-100'
-      )}>
+      <span
+        className={cn(
+          'inline-flex size-4 shrink-0 items-center justify-center text-muted transition-all duration-200',
+          multiline && 'mt-0.5',
+          copied
+            ? 'opacity-100'
+            : 'opacity-0 group-hover/copy:opacity-100 group-focus-visible/copy:opacity-100'
+        )}
+      >
         {copied ? (
           <Check className="size-3.5 text-green animate-in zoom-in-50 duration-200" />
         ) : (

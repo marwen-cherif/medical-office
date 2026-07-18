@@ -842,32 +842,14 @@ def refresh_mail_status(
 
 
 def normalize_phone_number(phone: str, default_country: str = "+216") -> str:
-    """Normalise un numéro de téléphone au format international E.164."""
-    if not phone:
-        raise ValueError("Le numéro de téléphone est vide.")
-    
-    cleaned = "".join(c for c in phone if c.isdigit() or c == "+")
-    
-    if cleaned.startswith("00"):
-        cleaned = "+" + cleaned[2:]
-        
-    if cleaned.startswith("+"):
-        digits_only = cleaned[1:]
-        if not digits_only.isdigit() or len(digits_only) < 7 or len(digits_only) > 15:
-            raise ValueError(f"Le numéro international '{phone}' n'est pas au format E.164 plausible.")
-        return cleaned
-    
-    if cleaned.startswith("0") and not cleaned.startswith("+"):
-        cleaned = cleaned[1:]
-        
-    prefix = default_country if default_country.startswith("+") else ("+" + default_country)
-    result = prefix + cleaned
-    
-    digits_only = result[1:]
-    if not digits_only.isdigit() or len(digits_only) < 7 or len(digits_only) > 15:
-        raise ValueError(f"Le numéro normalisé '{result}' n'est pas au format E.164 plausible.")
-        
-    return result
+    """Normalise un numéro de téléphone au format international E.164.
+
+    Délègue à `crm.phones.normalize_phone` (source unique de vérité partagée avec
+    `crm.rappels`). Conservé pour la compat ascendante des appelants existants.
+    """
+    from .phones import normalize_phone
+
+    return normalize_phone(phone, default_country)
 
 
 def send_document_whatsapp(
@@ -888,7 +870,9 @@ def send_document_whatsapp(
     default_country = settings.get("default_country") or "+216"
 
     if not phone_id or not token:
-        raise ValueError("Configuration WhatsApp incomplète (Phone Number ID ou Token manquant).")
+        raise ValueError(
+            "Configuration WhatsApp incomplète (Phone Number ID ou Token manquant)."
+        )
 
     phone_to_use = target_phone or patient.telephone
     if not phone_to_use:
@@ -915,9 +899,9 @@ def send_document_whatsapp(
             to=normalized_phone,
             template=template_name,
         )
-        
+
         media_id = client.upload_media(path)
-        
+
         result = client.send_document(
             to_e164=normalized_phone,
             media_id=media_id,
@@ -926,7 +910,7 @@ def send_document_whatsapp(
             lang="fr",
             variables=variables,
         )
-        
+
         document.statut = "envoye"
         document.date_envoi = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         document.whatsapp_message_id = result.message_id
@@ -942,9 +926,9 @@ def send_document_whatsapp(
             message_id=result.message_id,
             status=result.status,
         )
-        
+
         repo.update_document(conn, document)
-        
+
     except WhatsAppError as exc:
         document.statut = "erreur_envoi"
         document.whatsapp_status = "erreur"
@@ -989,14 +973,15 @@ def refresh_whatsapp_status(
     token = settings.get("whatsapp_access_token")
 
     if not phone_id or not token:
-        raise ValueError("Configuration WhatsApp incomplète (Phone Number ID ou Token manquant).")
+        raise ValueError(
+            "Configuration WhatsApp incomplète (Phone Number ID ou Token manquant)."
+        )
 
     client = WhatsAppClient(phone_id, token)
     status = client.get_status(msg_id)
 
     document.whatsapp_status = status
     document.whatsapp_date_refresh = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
+
     repo.update_document(conn, document)
     return status
-

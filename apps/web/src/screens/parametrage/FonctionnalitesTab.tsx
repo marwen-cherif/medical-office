@@ -53,9 +53,7 @@ export function FonctionnalitesTab() {
         </CardHeader>
         <CardContent className="space-y-6">
           {isLoading && <p className="text-sm text-muted">Chargement…</p>}
-          {settings.isError && (
-            <p className="text-sm text-red">{humanizeError(settings.error)}</p>
-          )}
+          {settings.isError && <p className="text-sm text-red">{humanizeError(settings.error)}</p>}
 
           <div className="space-y-4">
             <div className="flex items-start space-x-3 p-4 rounded-lg border bg-muted/20">
@@ -69,7 +67,9 @@ export function FonctionnalitesTab() {
                   API Meta WhatsApp Cloud
                 </Label>
                 <p className="text-sm text-muted-foreground leading-relaxed mt-1">
-                  {"Permet d'envoyer des documents (notes d'honoraires, devis...) automatiquement aux patients par WhatsApp en utilisant l'API officielle de Meta."}
+                  {
+                    "Permet d'envoyer des documents (notes d'honoraires, devis...) automatiquement aux patients par WhatsApp en utilisant l'API officielle de Meta."
+                  }
                 </p>
               </div>
             </div>
@@ -85,7 +85,9 @@ export function FonctionnalitesTab() {
                   {"Emailing et Modèles d'email"}
                 </Label>
                 <p className="text-sm text-muted-foreground leading-relaxed mt-1">
-                  {"Permet d'envoyer des documents par email via Mailjet et de gérer des modèles d'email personnalisés."}
+                  {
+                    "Permet d'envoyer des documents par email via Mailjet et de gérer des modèles d'email personnalisés."
+                  }
                 </p>
               </div>
             </div>

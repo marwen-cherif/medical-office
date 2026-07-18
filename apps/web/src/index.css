@@ -119,7 +119,9 @@ body {
   font-size: 0.75rem !important; /* text-xs */
   color: var(--color-ink) !important;
   box-shadow: var(--shadow-sm) !important;
-  transition: border-color 0.2s, box-shadow 0.2s !important;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s !important;
 }
 
 .phone-input-wrapper .react-international-phone-input:focus {
@@ -150,4 +152,3 @@ body {
 .phone-input-wrapper .react-international-phone-country-selector-dropdown__list-item--active {
   background-color: var(--color-bg) !important;
 }
-

@@ -119,12 +119,24 @@ export function PrestataireDetail() {
 
 // --- Carte identité ----------------------------------------------------------
 
-function Row({ label, value, multiline }: { label: string; value: string | null | undefined; multiline?: boolean }) {
+function Row({
+  label,
+  value,
+  multiline,
+}: {
+  label: string;
+  value: string | null | undefined;
+  multiline?: boolean;
+}) {
   return (
     <div className={`flex gap-3 py-1.5 text-sm ${multiline ? 'items-start' : 'items-center'}`}>
       <span className="w-28 shrink-0 text-muted">{label}</span>
       {value ? (
-        <ClickToCopy text={value} multiline={multiline} className="min-w-0 flex-1 break-words text-ink" />
+        <ClickToCopy
+          text={value}
+          multiline={multiline}
+          className="min-w-0 flex-1 break-words text-ink"
+        />
       ) : (
         <span className="min-w-0 flex-1 text-ink">—</span>
       )}

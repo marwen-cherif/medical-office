@@ -108,3 +108,69 @@ export type JobDetail = S['JobDetailOut'];
 export type Dashboard = S['DashboardOut'];
 export type Kpis = S['KpisOut'];
 export type DocTypeCount = S['DocTypeCount'];
+
+// --- Rappels -----------------------------------------------------------------
+// Types définis manuellement (schéma non encore régénéré).
+export type RappelType = 'alerte_interne' | 'message_patient';
+export type RappelEtat = 'planifie' | 'du' | 'a_envoyer' | 'envoye' | 'traite' | 'annule';
+
+export interface Rappel {
+  id: number;
+  type: RappelType;
+  titre: string;
+  echeance: string;
+  etat: RappelEtat;
+  lu: boolean;
+  patient_id?: number | null;
+  document_id?: number | null;
+  message?: string | null;
+  created_at?: string | null;
+  notified_at?: string | null;
+  sent_at?: string | null;
+  /** "NOM Prénom" si rattaché à un patient (fourni par la liste). */
+  patient_display?: string | null;
+}
+
+export interface RappelIn {
+  type: RappelType;
+  titre: string;
+  echeance: string;
+  patient_id?: number | null;
+  document_id?: number | null;
+  message?: string | null;
+}
+
+export interface RappelList {
+  items: Rappel[];
+  total: number;
+}
+
+export interface RappelCountActifs {
+  count: number;
+}
+
+export interface RappelProcessDus {
+  processed: number;
+}
+
+export interface WhatsAppLinkOut {
+  url: string;
+  phone_id?: number | null;
+}
+
+export interface RappelsSettingsOut {
+  notifs_enabled: boolean;
+  scheduler_interval: number;
+  default_country: string;
+  task_present: boolean;
+  task_enabled: boolean;
+  task_status?: string | null;
+  task_last_run?: string | null;
+  task_next_run?: string | null;
+}
+
+export interface RappelsSettingsIn {
+  notifs_enabled: boolean;
+  scheduler_interval: number;
+  default_country: string;
+}

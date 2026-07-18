@@ -66,7 +66,8 @@ export function ModelesTab() {
   const updateCategory = useUpdateCategory();
   const waSettings = useWhatsAppSettings();
 
-  const fallbackMessage = waSettings.data?.fallback_message || "Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>.";
+  const fallbackMessage =
+    waSettings.data?.fallback_message || 'Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>.';
 
   const grouped = useMemo(() => {
     const map = new Map<string, Template[]>();
@@ -214,7 +215,13 @@ export function ModelesTab() {
                     setEditCategoryWhatsApp(fullCat.whatsapp_message ?? '');
                   } else {
                     // Fallback de sécurité
-                    setEditCategoryTarget({ nom: cat, couleur: '', icone: '', sort_order: 0, whatsapp_message: '' });
+                    setEditCategoryTarget({
+                      nom: cat,
+                      couleur: '',
+                      icone: '',
+                      sort_order: 0,
+                      whatsapp_message: '',
+                    });
                     setEditCategoryColor('');
                     setEditCategoryIcon('');
                     setEditCategoryOrder(0);
@@ -431,7 +438,8 @@ export function ModelesTab() {
             <SheetHeader>
               <SheetTitle>Modifier la catégorie</SheetTitle>
               <SheetDescription>
-                Personnalisez la couleur et le message WhatsApp pour la catégorie <span className="font-semibold">{editCategoryTarget?.nom}</span>.
+                Personnalisez la couleur et le message WhatsApp pour la catégorie{' '}
+                <span className="font-semibold">{editCategoryTarget?.nom}</span>.
               </SheetDescription>
             </SheetHeader>
             <SheetBody className="space-y-4">
@@ -442,7 +450,11 @@ export function ModelesTab() {
                     <Input
                       type="color"
                       className="size-10 p-1 cursor-pointer"
-                      value={editCategoryColor.startsWith('#') && editCategoryColor.length === 7 ? editCategoryColor : '#94a3b8'}
+                      value={
+                        editCategoryColor.startsWith('#') && editCategoryColor.length === 7
+                          ? editCategoryColor
+                          : '#94a3b8'
+                      }
                       onChange={(e) => setEditCategoryColor(e.target.value)}
                     />
                     <Input

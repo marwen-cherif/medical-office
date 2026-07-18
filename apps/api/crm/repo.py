@@ -201,7 +201,9 @@ def _resolve_primary_telephone(phones: list[PatientPhone]) -> Optional[str]:
     return phones[0].telephone
 
 
-def list_patient_phones(conn: sqlite3.Connection, patient_id: int) -> list[PatientPhone]:
+def list_patient_phones(
+    conn: sqlite3.Connection, patient_id: int
+) -> list[PatientPhone]:
     rows = conn.execute(
         """SELECT id, patient_id, telephone, relation, is_whatsapp
            FROM patient_phones
@@ -470,7 +472,9 @@ def _row_to_document(row: sqlite3.Row) -> Document:
             row["whatsapp_date_envoi"] if "whatsapp_date_envoi" in row.keys() else None
         ),
         whatsapp_date_refresh=(
-            row["whatsapp_date_refresh"] if "whatsapp_date_refresh" in row.keys() else None
+            row["whatsapp_date_refresh"]
+            if "whatsapp_date_refresh" in row.keys()
+            else None
         ),
     )
 
@@ -1399,7 +1403,13 @@ def upsert_category(conn: sqlite3.Connection, cat: Category) -> Category:
         conn.execute(
             "UPDATE categories SET couleur = COALESCE(?, couleur), "
             "icone = COALESCE(?, icone), sort_order = ?, whatsapp_message = ? WHERE nom = ?",
-            (cat.couleur, cat.icone, cat.sort_order or existing.sort_order, whatsapp_msg, nom),
+            (
+                cat.couleur,
+                cat.icone,
+                cat.sort_order or existing.sort_order,
+                whatsapp_msg,
+                nom,
+            ),
         )
     conn.commit()
     return get_category(conn, nom)  # type: ignore[return-value]
@@ -3456,3 +3466,327 @@ def solde_patient(
         du += float(rowp["du"] or 0)
         enc += float(rowp["enc"] or 0)
     return du, enc, max(0.0, du - enc)
+
+
+# =============================================================================
+# Rappels datés (alertes internes + messages patients WhatsApp planifiés)
+# v17 — table `rappels`, cf. crm/db.py et openspec/changes/rappels-automatiques
+# =============================================================================
+
+# États valides du cycle de vie d'un rappel.
+RAPPEL_ETATS = {"planifie", "du", "a_envoyer", "envoye", "traite", "annule"}
+# Types de rappels.
+RAPPEL_TYPES = {"alerte_interne", "message_patient"}
+# États « terminaux » : un rappel dans ces états n'est plus actionnable.
+RAPPEL_ETATS_TERMINAUX = {"envoye", "traite", "annule"}
+# Un rappel dans ces états ne doit PAS être re-notifié / re-mis en file.
+RAPPEL_ETATS_DEJA_TRAITES = {"du", "a_envoyer", "envoye", "traite", "annule"}
+
+
+@dataclass
+class Rappel:
+    """Rappel daté : alerte interne ou message patient WhatsApp planifié.
+
+    `type`      : 'alerte_interne' | 'message_patient'
+    `etat`      : 'planifie' → 'du'/'a_envoyer' → 'envoye'/'traite' → 'annule'
+    `lu`        : flag de lecture UI (distinct de `etat`) — True = vu dans la cloche
+    """
+
+    id: Optional[int]
+    type: str  # alerte_interne | message_patient
+    titre: str
+    echeance: str  # ISO datetime ou date
+    etat: str = "planifie"  # planifie | du | a_envoyer | envoye | traite | annule
+    lu: bool = False  # flag de lecture UI
+    patient_id: Optional[int] = None
+    document_id: Optional[int] = None
+    message: Optional[str] = None  # texte libre destiné au patient
+    created_at: Optional[str] = None
+    notified_at: Optional[str] = None  # horodatage de la mise en file
+    sent_at: Optional[str] = None  # horodatage de l'envoi WhatsApp confirmé
+
+
+def _row_to_rappel(row: sqlite3.Row) -> Rappel:
+    return Rappel(
+        id=row["id"],
+        type=row["type"],
+        titre=row["titre"],
+        echeance=row["echeance"],
+        etat=row["etat"],
+        lu=bool(row["lu"]),
+        patient_id=row["patient_id"],
+        document_id=row["document_id"],
+        message=row["message"],
+        created_at=row["created_at"],
+        notified_at=row["notified_at"],
+        sent_at=row["sent_at"],
+    )
+
+
+def create_rappel(conn: sqlite3.Connection, r: Rappel) -> Rappel:
+    """Insère un nouveau rappel. Renvoie l'objet avec `id` renseigné."""
+    cur = conn.execute(
+        """INSERT INTO rappels
+           (type, patient_id, document_id, titre, message, echeance, etat, lu, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'planifie', 0, ?)""",
+        (
+            r.type,
+            r.patient_id,
+            r.document_id,
+            r.titre.strip(),
+            r.message,
+            r.echeance,
+            _now(),
+        ),
+    )
+    conn.commit()
+    r.id = cur.lastrowid
+    r.etat = "planifie"
+    r.lu = False
+    return r
+
+
+def get_rappel(conn: sqlite3.Connection, rappel_id: int) -> Optional[Rappel]:
+    row = conn.execute("SELECT * FROM rappels WHERE id = ?", (rappel_id,)).fetchone()
+    return _row_to_rappel(row) if row else None
+
+
+def list_rappels(
+    conn: sqlite3.Connection,
+    etats: Optional[list[str]] = None,
+    patient_id: Optional[int] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> list[tuple[Rappel, Optional[str]]]:
+    """Liste les rappels avec filtres optionnels par état(s) et/ou patient.
+
+    Renvoie chaque rappel accompagné du nom affiché du patient (`patient_display`),
+    ou `None` si le rappel n'est rattaché à aucun patient. Le LEFT JOIN permet
+    de conserver les rappels orphelins (patient_id NULL ou supprimé).
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if etats:
+        placeholders = ",".join("?" * len(etats))
+        clauses.append(f"r.etat IN ({placeholders})")
+        params.extend(etats)
+
+    if patient_id is not None:
+        clauses.append("r.patient_id = ?")
+        params.append(patient_id)
+
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    query = (
+        "SELECT r.*, pt.nom AS p_nom, pt.prenom AS p_prenom "
+        "FROM rappels r LEFT JOIN patients pt ON pt.id = r.patient_id"
+        f"{where} ORDER BY r.echeance ASC"
+    )
+
+    if limit is not None:
+        query += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+
+    rows = conn.execute(query, params).fetchall()
+    out: list[tuple[Rappel, Optional[str]]] = []
+    for row in rows:
+        rappel = _row_to_rappel(row)
+        nom = row["p_nom"]
+        prenom = row["p_prenom"]
+        display = f"{nom.upper()} {prenom}".strip() if nom else None
+        out.append((rappel, display))
+    return out
+
+
+def count_rappels(
+    conn: sqlite3.Connection,
+    etats: Optional[list[str]] = None,
+    patient_id: Optional[int] = None,
+) -> int:
+    """Compte les rappels avec filtres optionnels."""
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if etats:
+        placeholders = ",".join("?" * len(etats))
+        clauses.append(f"etat IN ({placeholders})")
+        params.extend(etats)
+
+    if patient_id is not None:
+        clauses.append("patient_id = ?")
+        params.append(patient_id)
+
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    row = conn.execute(f"SELECT COUNT(*) AS n FROM rappels{where}", params).fetchone()
+    return int(row["n"])
+
+
+def count_rappels_actifs(conn: sqlite3.Connection) -> int:
+    """Nombre de rappels actifs non lus pour le badge cloche.
+
+    Actifs = `etat IN ('du', 'a_envoyer')` et `lu = 0`.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM rappels WHERE etat IN ('du', 'a_envoyer') AND lu = 0"
+    ).fetchone()
+    return int(row["n"])
+
+
+def list_rappels_dus(conn: sqlite3.Connection) -> list[Rappel]:
+    """Rappels en état 'planifie' dont l'échéance est dépassée.
+
+    Ce sont les rappels que le service de fond doit traiter (transition atomique
+    planifie → du/a_envoyer). Un rappel déjà dans un autre état est ignoré
+    (idempotence garantie par le filtre sur 'planifie').
+
+    La comparaison utilise l'heure LOCALE du système (`datetime('now', 'localtime')`)
+    car `echeance` est saisie par l'utilisateur dans son fuseau (date locale
+    `YYYY-MM-DD` à minuit). Comparer à `datetime('now')` (UTC) ferait se déclencher
+    un rappel « aujourd'hui » jusqu'à 24h trop tôt selon le fuseau.
+    """
+    rows = conn.execute(
+        "SELECT * FROM rappels "
+        "WHERE etat = 'planifie' AND echeance <= datetime('now', 'localtime') "
+        "ORDER BY echeance ASC"
+    ).fetchall()
+    return [_row_to_rappel(r) for r in rows]
+
+
+def update_rappel(conn: sqlite3.Connection, r: Rappel) -> Rappel:
+    """Met à jour les champs éditables d'un rappel (si état le permet).
+
+    Les champs non éditables après envoi/traitement sont titre, message,
+    echeance, patient_id, document_id. L'appelant doit vérifier l'état
+    avant d'appeler cette fonction.
+    """
+    conn.execute(
+        """UPDATE rappels SET
+             titre = ?, message = ?, echeance = ?,
+             patient_id = ?, document_id = ?
+           WHERE id = ?""",
+        (
+            r.titre.strip(),
+            r.message,
+            r.echeance,
+            r.patient_id,
+            r.document_id,
+            r.id,
+        ),
+    )
+    conn.commit()
+    return get_rappel(conn, r.id)
+
+
+def _transition_rappel(
+    conn: sqlite3.Connection,
+    rappel_id: int,
+    etat_cible: str,
+    extra_cols: Optional[dict] = None,
+) -> Optional[Rappel]:
+    """Transition d'état atomique vers `etat_cible`, avec colonnes optionnelles.
+
+    Met à jour `etat` (et toute colonne supplémentaire dans `extra_cols`) en une
+    seule requête. Renvoie le rappel mis à jour, ou None s'il n'existe pas.
+    """
+    sets = ["etat = ?"]
+    params: list[Any] = [etat_cible]
+    for col, val in (extra_cols or {}).items():
+        sets.append(f"{col} = ?")
+        params.append(val)
+    params.append(rappel_id)
+    conn.execute(f"UPDATE rappels SET {', '.join(sets)} WHERE id = ?", params)
+    conn.commit()
+    return get_rappel(conn, rappel_id)
+
+
+def marquer_rappel_notifie(
+    conn: sqlite3.Connection, rappel_id: int, type_rappel: str
+) -> Optional[Rappel]:
+    """Transition planifie → du (alerte) ou a_envoyer (message patient).
+
+    Idempotent : si le rappel n'est pas dans l'état 'planifie', la mise à jour
+    n'a aucun effet (condition WHERE implicite via UPDATE sur la valeur retournée).
+    Utilisé par le service de fond.
+    """
+    etat_cible = "a_envoyer" if type_rappel == "message_patient" else "du"
+    now = _now()
+    conn.execute(
+        "UPDATE rappels SET etat = ?, notified_at = ? "
+        "WHERE id = ? AND etat = 'planifie'",
+        (etat_cible, now, rappel_id),
+    )
+    conn.commit()
+    return get_rappel(conn, rappel_id)
+
+
+def marquer_rappel_lu(conn: sqlite3.Connection, rappel_id: int) -> Optional[Rappel]:
+    """Marque un rappel comme lu (flag `lu = 1`).
+
+    Pour message_patient : le rappel sort du badge/panneau cloche mais reste
+    dans l'état `a_envoyer` (encore envoyable depuis la liste complète).
+    Pour alerte_interne (état `du`) : passe directement à `traite`.
+    """
+    r = get_rappel(conn, rappel_id)
+    if r is None:
+        return None
+    if r.type == "alerte_interne":
+        return _transition_rappel(conn, rappel_id, "traite", {"lu": 1})
+    # message_patient : reste a_envoyer mais marqué lu
+    conn.execute("UPDATE rappels SET lu = 1 WHERE id = ?", (rappel_id,))
+    conn.commit()
+    return get_rappel(conn, rappel_id)
+
+
+def marquer_rappel_envoye(conn: sqlite3.Connection, rappel_id: int) -> Optional[Rappel]:
+    """Marque un rappel comme envoyé (après confirmation de l'envoi WhatsApp).
+
+    Refusé (renvoie le rappel inchangé) si le rappel est déjà dans un état
+    terminal (`envoye`/`traite`/`annule`) : on ne ressuscite pas un rappel
+    déjà clos. La transition n'est autorisée que depuis un état actif
+    (`planifie`/`du`/`a_envoyer`).
+    """
+    r = get_rappel(conn, rappel_id)
+    if r is None:
+        return None
+    if r.etat in RAPPEL_ETATS_TERMINAUX:
+        return r  # déjà terminal, on ne rebascule pas
+    return _transition_rappel(conn, rappel_id, "envoye", {"sent_at": _now()})
+
+
+def marquer_rappel_traite(conn: sqlite3.Connection, rappel_id: int) -> Optional[Rappel]:
+    """Marque un rappel comme traité manuellement."""
+    return _transition_rappel(conn, rappel_id, "traite")
+
+
+def annuler_rappel(conn: sqlite3.Connection, rappel_id: int) -> Optional[Rappel]:
+    """Annule un rappel planifié. Empêche toute mise en file ou notification future.
+
+    Seuls les rappels à l'état 'planifie' peuvent être annulés par cette voie.
+    Les rappels déjà dus/envoyés doivent passer par marquer_rappel_traite.
+    """
+    r = get_rappel(conn, rappel_id)
+    if r is None:
+        return None
+    if r.etat in RAPPEL_ETATS_TERMINAUX:
+        return r  # déjà terminal, rien à faire
+    return _transition_rappel(conn, rappel_id, "annule")
+
+
+def list_whatsapp_phones(
+    conn: sqlite3.Connection, patient_id: int
+) -> list[PatientPhone]:
+    """Numéros WhatsApp (is_whatsapp=1) d'un patient, triés par id."""
+    rows = conn.execute(
+        "SELECT * FROM patient_phones WHERE patient_id = ? AND is_whatsapp = 1 ORDER BY id ASC",
+        (patient_id,),
+    ).fetchall()
+    return [
+        PatientPhone(
+            id=r["id"],
+            patient_id=r["patient_id"],
+            telephone=r["telephone"],
+            relation=r["relation"],
+            is_whatsapp=True,
+        )
+        for r in rows
+    ]

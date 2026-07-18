@@ -1,7 +1,7 @@
 {
   "name": "cabinet-crm-ui",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.4.4",
   "type": "module",
   "description": "Frontend React (Vite + Tailwind v4 + shadcn) du Cabinet CRM — adossé au sidecar FastAPI.",
   "scripts": {

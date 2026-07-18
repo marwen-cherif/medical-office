@@ -290,13 +290,7 @@ export function useSendWhatsApp() {
 export function useRefreshWhatsAppStatus() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({
-      id,
-      onEvent,
-    }: {
-      id: number;
-      onEvent?: (e: JobEvent) => void;
-    }) => {
+    mutationFn: async ({ id, onEvent }: { id: number; onEvent?: (e: JobEvent) => void }) => {
       const accepted = unwrap(
         await client.POST('/api/documents/{document_id}/refresh-whatsapp-status', {
           params: { path: { document_id: id } },

@@ -64,9 +64,7 @@ export function WhatsAppTab() {
         </CardHeader>
         <CardContent className="space-y-4">
           {isLoading && <p className="text-sm text-muted">Chargement…</p>}
-          {settings.isError && (
-            <p className="text-sm text-red">{humanizeError(settings.error)}</p>
-          )}
+          {settings.isError && <p className="text-sm text-red">{humanizeError(settings.error)}</p>}
 
           <div className="space-y-2">
             <Label htmlFor="wa-phone-id">Phone Number ID</Label>
@@ -140,8 +138,7 @@ export function WhatsAppTab() {
 
             <div className="text-sm font-semibold mt-3">Corps du message (Body)</div>
             <div className="rounded bg-background border p-3 text-sm font-mono leading-relaxed">
-              Bonjour{' '}
-              <span className="bg-sky-100 text-sky-700 px-1 rounded">{'{{1}}'}</span>{' '}
+              Bonjour <span className="bg-sky-100 text-sky-700 px-1 rounded">{'{{1}}'}</span>{' '}
               <span className="bg-sky-100 text-sky-700 px-1 rounded">{'{{2}}'}</span>,
               <br />
               veuillez trouver ci-joint votre{' '}
@@ -152,22 +149,29 @@ export function WhatsAppTab() {
 
             <div className="space-y-1.5 text-sm text-muted mt-2">
               <div>
-                <span className="bg-sky-100 text-sky-700 px-1 rounded font-mono text-xs">{'{{1}}'}</span>{' '}
+                <span className="bg-sky-100 text-sky-700 px-1 rounded font-mono text-xs">
+                  {'{{1}}'}
+                </span>{' '}
                 = Prénom du patient
               </div>
               <div>
-                <span className="bg-sky-100 text-sky-700 px-1 rounded font-mono text-xs">{'{{2}}'}</span>{' '}
+                <span className="bg-sky-100 text-sky-700 px-1 rounded font-mono text-xs">
+                  {'{{2}}'}
+                </span>{' '}
                 = Nom du patient
               </div>
               <div>
-                <span className="bg-emerald-100 text-emerald-700 px-1 rounded font-mono text-xs">{'{{3}}'}</span>{' '}
+                <span className="bg-emerald-100 text-emerald-700 px-1 rounded font-mono text-xs">
+                  {'{{3}}'}
+                </span>{' '}
                 = Type de document (note d'honoraires, devis…)
               </div>
             </div>
           </div>
 
           <p className="text-xs text-muted">
-            Catégorie : Utility · Langue : Français (fr) · Un seul modèle suffit pour tous les types de documents.
+            Catégorie : Utility · Langue : Français (fr) · Un seul modèle suffit pour tous les types
+            de documents.
           </p>
         </CardContent>
       </Card>

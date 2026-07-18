@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "turbo dev",
-    "build": "turbo build",
+    "build": "node scripts/generate-build-info.js && turbo build && node scripts/sign-installer.js",
     "test": "turbo test",
     "test:coverage": "turbo test:coverage",
     "lint": "turbo lint",

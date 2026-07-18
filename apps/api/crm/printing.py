@@ -325,6 +325,7 @@ def print_test_page(
     except OSError:
         title_font = body_font = ImageFont.load_default()
     from src.config import load_config
+
     try:
         cfg = load_config()
         cabinet_name = cfg.mailjet.from_name

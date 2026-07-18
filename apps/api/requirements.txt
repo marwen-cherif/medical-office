@@ -2,6 +2,7 @@ python-docx>=1.1
 pymupdf>=1.24
 pywin32>=306
 pillow>=10        # impression directe des documents (rendu image -> imprimante)
+                  #  + icone tray du worker de fond (crm/tray.py)
 requests>=2.31
 openpyxl>=3.1     # import/export du referentiel d'actes en .xlsx (crm/import_actes.py)
 pyinstaller>=6.0
@@ -13,6 +14,10 @@ pyinstaller>=6.0
 fastapi>=0.110
 uvicorn>=0.29
 python-multipart>=0.0.9   # upload des factures fournisseurs (UploadFile/Form)
+
+# Worker de fond des rappels (crm-tray.exe) : icone tray + boucle scheduler
+# interne, windowed (console=False). cf. crm/tray.py.
+pystray>=0.19
 
 # Dev, linting, formatting and testing tools
 ruff>=0.4.0

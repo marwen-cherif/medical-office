@@ -6,6 +6,7 @@ node_modules/
 # Rust / Tauri
 apps/web/src-tauri/target/
 apps/web/src-tauri/binaries/crm-server-*
+apps/web/src-tauri/binaries/crm-tray-*
 
 # Python
 __pycache__/
@@ -44,3 +45,6 @@ apps/api/templates/*.docx
 
 # Keep files
 !apps/api/output/.gitkeep
+
+# Certificates (Generated local PFX signatures)
+*.pfx

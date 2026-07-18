@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "build": "%USERPROFILE%\\AppData\\Local\\Python\\bin\\python.exe -m PyInstaller --noconfirm --clean crm-server.spec && node scripts/copy-sidecar.js",
+    "build": "%USERPROFILE%\\AppData\\Local\\Python\\bin\\python.exe -m PyInstaller --noconfirm --clean crm-server.spec && %USERPROFILE%\\AppData\\Local\\Python\\bin\\python.exe -m PyInstaller --noconfirm --clean crm-tray.spec && node scripts/copy-sidecar.js",
     "dev": "%USERPROFILE%\\AppData\\Local\\Python\\bin\\python.exe crm_server.py --port 8765 --token devtoken --reload",
     "test": "%USERPROFILE%\\AppData\\Local\\Python\\bin\\python.exe -m pytest",
     "test:coverage": "%USERPROFILE%\\AppData\\Local\\Python\\bin\\python.exe -m pytest --cov=crm --cov=src --cov-report=term-missing --cov-report=html",

@@ -73,7 +73,7 @@ def test_get_template(mock_app_dir):
 
 def test_create_template(mock_app_dir):
     d = templates_dir()
-    
+
     # Test creation of a blank docx template
     # Mocking docx Document to avoid python-docx dependency issues in some envs
     with patch("docx.Document") as mock_doc:
@@ -90,7 +90,7 @@ def test_create_template(mock_app_dir):
     # Test copy from another template
     source = mock_app_dir / "source.docx"
     source.write_text("my source content")
-    
+
     t_copy = create_template("Fiche Copie", copy_from=source)
     assert t_copy.name == "fiche_copie"
     assert t_copy.path.read_text() == "my source content"
@@ -116,7 +116,7 @@ def test_rename_template(mock_app_dir):
     # Try renaming when target already exists
     t_other = Template(name="other", path=d / "other.docx")
     t_other.path.write_text("other content")
-    
+
     with pytest.raises(FileExistsError):
         rename_template(t_new, "other")
 

@@ -73,7 +73,10 @@ export function DocumentsTab({
     } else {
       const targetPhone = phones[0]?.telephone || patient.telephone;
       if (targetPhone) {
-        withToast(sendWhatsApp.mutateAsync({ id: d.id, telephone: targetPhone }), 'Document envoyé par WhatsApp.');
+        withToast(
+          sendWhatsApp.mutateAsync({ id: d.id, telephone: targetPhone }),
+          'Document envoyé par WhatsApp.'
+        );
       } else {
         toast.error("Le patient n'a pas de numéro de téléphone.");
       }
@@ -133,18 +136,20 @@ export function DocumentsTab({
             icon: Printer,
             onClick: () => withToast(print.mutateAsync({ id: d.id }), "Envoyé à l'imprimante."),
           },
-          (canSend && (features.data?.emailing_enabled ?? true)) && {
-            key: 'send',
-            label: 'Envoyer par email',
-            icon: Send,
-            onClick: () => withToast(send.mutateAsync({ id: d.id, body: {} }), 'Email envoyé.'),
-          },
-          (canSendWhatsApp && features.data?.whatsapp_api_enabled) && {
-            key: 'send-whatsapp',
-            label: 'Envoyer par WhatsApp (Meta)',
-            icon: MessageSquare,
-            onClick: () => handleSendWhatsAppClick(d),
-          },
+          canSend &&
+            (features.data?.emailing_enabled ?? true) && {
+              key: 'send',
+              label: 'Envoyer par email',
+              icon: Send,
+              onClick: () => withToast(send.mutateAsync({ id: d.id, body: {} }), 'Email envoyé.'),
+            },
+          canSendWhatsApp &&
+            features.data?.whatsapp_api_enabled && {
+              key: 'send-whatsapp',
+              label: 'Envoyer par WhatsApp (Meta)',
+              icon: MessageSquare,
+              onClick: () => handleSendWhatsAppClick(d),
+            },
           canSendWhatsApp && {
             key: 'open-wa-me',
             label: 'Ouvrir dans WhatsApp (wa.me)',
@@ -163,9 +168,12 @@ export function DocumentsTab({
 
                 const defaultCountry = waSettings.data?.default_country || '+216';
                 const docCatName = d.categorie || '';
-                const categoryObj = categories.data?.find(c => c.nom === docCatName);
-                const rawTemplate = categoryObj?.whatsapp_message || waSettings.data?.fallback_message || "Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>.";
-                
+                const categoryObj = categories.data?.find((c) => c.nom === docCatName);
+                const rawTemplate =
+                  categoryObj?.whatsapp_message ||
+                  waSettings.data?.fallback_message ||
+                  'Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>.';
+
                 const docLabel = humanize(d.type).toLowerCase();
                 const text = rawTemplate
                   .replace(/<PRENOM>/g, patient.prenom || '')
@@ -188,7 +196,8 @@ export function DocumentsTab({
             key: 'refresh-whatsapp',
             label: 'Rafraîchir statut WhatsApp',
             icon: RefreshCw,
-            onClick: () => withToast(refreshWhatsApp.mutateAsync({ id: d.id }), 'Statut WhatsApp mis à jour.'),
+            onClick: () =>
+              withToast(refreshWhatsApp.mutateAsync({ id: d.id }), 'Statut WhatsApp mis à jour.'),
           },
           (isDraft || isError) && {
             key: 'delete',
@@ -245,31 +254,63 @@ export function DocumentsTab({
                 key={d.id}
                 className="flex items-start gap-3 border-t border-line py-2 first:border-t-0"
               >
-                {d.output_format === 'pdf' ? (
+                {d.has_file ? (
+                  <Tooltip label="Copier le fichier">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        withToast(
+                          copyToClipboard.mutateAsync(d.id),
+                          'Fichier copié dans le presse-papiers.'
+                        )
+                      }
+                      className="mt-0.5 shrink-0 cursor-pointer rounded text-muted hover:text-navy transition-colors"
+                    >
+                      {d.output_format === 'pdf' ? (
+                        <FileText className="size-5" />
+                      ) : (
+                        <FileImage className="size-5" />
+                      )}
+                    </button>
+                  </Tooltip>
+                ) : d.output_format === 'pdf' ? (
                   <FileText className="mt-0.5 size-5 shrink-0 text-muted" />
                 ) : (
                   <FileImage className="mt-0.5 size-5 shrink-0 text-muted" />
                 )}
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium text-ink">
-                    {humanize(d.type)}
-                    {d.montant != null ? ` — ${fmtDevise(d.montant)}` : ''}
-                  </div>
+                  {d.has_file ? (
+                    <Tooltip label="Ouvrir le fichier">
+                      <button
+                        type="button"
+                        onClick={() => withToast(open.mutateAsync(d.id), 'Fichier ouvert.')}
+                        className="font-medium text-ink hover:underline cursor-pointer text-left"
+                      >
+                        {humanize(d.type)}
+                        {d.montant != null ? ` — ${fmtDevise(d.montant)}` : ''}
+                      </button>
+                    </Tooltip>
+                  ) : (
+                    <div className="font-medium text-ink">
+                      {humanize(d.type)}
+                      {d.montant != null ? ` — ${fmtDevise(d.montant)}` : ''}
+                    </div>
+                  )}
                   <div className="text-xs text-muted">
                     {(() => {
-                      const mailInfo = (d.mailjet_status || d.mailjet_opened_at || d.mailjet_clicked_at)
-                        ? `Email : ${d.mailjet_status || 'envoyé'}${d.mailjet_opened_at ? ' · ouvert' : ''}${d.mailjet_clicked_at ? ' · cliqué' : ''}`
-                        : '';
-                      const waStatusText = d.whatsapp_status === 'read'
-                        ? 'lu'
-                        : d.whatsapp_status === 'delivered'
-                        ? 'remis'
-                        : d.whatsapp_status === 'sent'
-                        ? 'envoyé'
-                        : d.whatsapp_status || 'envoyé';
-                      const waInfo = d.whatsapp_message_id
-                        ? `WhatsApp : ${waStatusText}`
-                        : '';
+                      const mailInfo =
+                        d.mailjet_status || d.mailjet_opened_at || d.mailjet_clicked_at
+                          ? `Email : ${d.mailjet_status || 'envoyé'}${d.mailjet_opened_at ? ' · ouvert' : ''}${d.mailjet_clicked_at ? ' · cliqué' : ''}`
+                          : '';
+                      const waStatusText =
+                        d.whatsapp_status === 'read'
+                          ? 'lu'
+                          : d.whatsapp_status === 'delivered'
+                            ? 'remis'
+                            : d.whatsapp_status === 'sent'
+                              ? 'envoyé'
+                              : d.whatsapp_status || 'envoyé';
+                      const waInfo = d.whatsapp_message_id ? `WhatsApp : ${waStatusText}` : '';
                       const deliveryInfo = [mailInfo, waInfo].filter(Boolean).join(' | ');
                       if (deliveryInfo) return `Livraison : ${deliveryInfo}`;
                       return isoToFr(d.date_generation) || 'Brouillon';
@@ -333,9 +374,12 @@ export function DocumentsTab({
 
             const defaultCountry = waSettings.data?.default_country || '+216';
             const docCatName = waMeSelectDoc.categorie || '';
-            const categoryObj = categories.data?.find(c => c.nom === docCatName);
-            const rawTemplate = categoryObj?.whatsapp_message || waSettings.data?.fallback_message || "Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>.";
-            
+            const categoryObj = categories.data?.find((c) => c.nom === docCatName);
+            const rawTemplate =
+              categoryObj?.whatsapp_message ||
+              waSettings.data?.fallback_message ||
+              'Bonjour <PRENOM> <NOM>, voici votre <DOCUMENT>.';
+
             const docLabel = humanize(waMeSelectDoc.type).toLowerCase();
             const text = rawTemplate
               .replace(/<PRENOM>/g, patient.prenom || '')
