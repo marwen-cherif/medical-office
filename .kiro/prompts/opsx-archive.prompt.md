@@ -1,6 +1,6 @@
-# OPSX: Archive
-
-Archive a completed change in the experimental workflow
+---
+description: Archive a completed change in the experimental workflow
+---
 
 Archive a completed change in the experimental workflow.
 
